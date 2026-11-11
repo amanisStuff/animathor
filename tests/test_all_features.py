@@ -590,6 +590,58 @@ class TestCurveEdit(unittest.TestCase):
         self.assertNotEqual(out_segs[seg_i], orig_segs[seg_i])
 
 
+class TestStrokeComponentsRedraw(unittest.TestCase):
+    def _make_component_stroke(self, raw_points, max_points, algorithm="fit"):
+        beziers = app.stroke_to_beziers(
+            raw_points, simplify_epsilon=2.5, tension=0.0,
+            max_points=max_points, algorithm=algorithm,
+        )
+        st = app.new_stroke(beziers, algorithm=algorithm)
+        st["components"] = [{
+            "raw_points": [tuple(p) for p in raw_points],
+            "draw_max_points": int(max_points),
+            "algorithm": algorithm,
+            "segs": list(beziers),
+        }]
+        return st
+
+    def test_components_preserved_through_merge(self):
+        s1 = self._make_component_stroke([(0, 0), (20, 10), (40, 0)], max_points=2, algorithm="fit")
+        s2 = self._make_component_stroke([(40, 0), (60, -10), (80, 0)], max_points=3, algorithm="single")
+        merged = app.merge_connected_strokes([s1, s2])
+        self.assertEqual(len(merged), 1)
+        comps = merged[0].get("components", [])
+        self.assertEqual(len(comps), 2)
+        self.assertEqual(comps[0]["draw_max_points"], 2)
+        self.assertEqual(comps[0]["algorithm"], "fit")
+        self.assertEqual(comps[1]["draw_max_points"], 3)
+        self.assertEqual(comps[1]["algorithm"], "single")
+        self.assertGreater(len(comps[0].get("raw_points", [])), 0)
+        self.assertGreater(len(comps[1].get("raw_points", [])), 0)
+
+    def test_redraw_stroke_component_uses_saved_settings(self):
+        # create component traced with "single" (1 segment) even if global would differ
+        raw = [(0, 0), (30, 40), (60, 40), (100, 0)]
+        s = self._make_component_stroke(raw, max_points=4, algorithm="single")
+        self.assertEqual(len(app.segs_of(s)), 1)
+        self.assertEqual(s["components"][0]["algorithm"], "single")
+        # redraw with different drawn shape but component should keep saved algorithm/settings
+        new_raw = [(0, 0), (20, 10), (80, 10), (100, 0)]
+        out = app.redraw_stroke_component(s, 0, new_raw)
+        self.assertEqual(len(app.segs_of(out)), 1)  # single algorithm -> 1 segment
+        self.assertEqual(app._stroke_components(out)[0]["algorithm"], "single")
+        self.assertEqual(app._stroke_components(out)[0]["draw_max_points"], 4)
+
+    def test_hit_test_component_in_merged_stroke(self):
+        s1 = self._make_component_stroke([(0, 0), (20, 0), (40, 0)], max_points=2, algorithm="fit")
+        s2 = self._make_component_stroke([(40, 0), (60, 0), (80, 0)], max_points=2, algorithm="fit")
+        merged = app.merge_connected_strokes([s1, s2])[0]
+        # near first component
+        self.assertEqual(app.hit_test_component(merged, (20.0, 1.0), threshold=10.0), 0)
+        # near second component
+        self.assertEqual(app.hit_test_component(merged, (60.0, 1.0), threshold=10.0), 1)
+
+
 class TestMultiSelectUI(unittest.TestCase):
     def setUp(self):
         os.environ.setdefault("SDL_VIDEODRIVER", "dummy")

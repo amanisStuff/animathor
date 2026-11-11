@@ -410,13 +410,80 @@ def redraw_curve_segment(stroke, seg_index, drawn_points):
     new_seg[0] = p0
     new_seg[3] = p3
     segs[seg_index] = tuple(new_seg)
-    out = dict(stroke) if isinstance(stroke, dict) else new_stroke(segs)
-    out["segs"] = segs
-    if isinstance(stroke, dict):
-        # preserve metadata
-        for k in ("stroke_color", "stroke_width", "fill_color", "corner_anchors", "algorithm", "hidden_segs"):
-            if k in stroke and k not in ("segs",):
-                out[k] = stroke[k]
+    out = _copy_stroke(stroke) if isinstance(stroke, dict) else new_stroke(segs)
+    if isinstance(out, dict):
+        out["segs"] = segs
+    return out
+
+
+def _component_ranges(stroke):
+    comps = _stroke_components(stroke)
+    ranges = []
+    start = 0
+    for c in comps:
+        segs = c.get("segs") or []
+        count = len(segs)
+        ranges.append((start, start + count))
+        start += count
+    return ranges
+
+
+def hit_test_component(stroke, pos, threshold=10.0):
+    segs = segs_of(stroke)
+    ranges = _component_ranges(stroke)
+    best = None
+    best_d = threshold
+    for ci, (s0, s1) in enumerate(ranges):
+        for i in range(s0, min(s1, len(segs))):
+            pt, d = _nearest_point_on_cubic(pos, segs[i])
+            if d <= best_d:
+                best_d = d
+                best = ci
+    # fallback if no components/ranges matched
+    if best is None and segs:
+        si = hit_test_segment(stroke, pos, threshold=threshold)
+        if si is not None:
+            return 0
+    return best
+
+
+def redraw_stroke_component(stroke, comp_index, drawn_points):
+    """Redraw an original stroke component with its saved settings and same segment count."""
+    if not isinstance(stroke, dict):
+        return stroke
+    comps = _stroke_components(stroke)
+    if not (0 <= comp_index < len(comps)):
+        return stroke
+    comp = comps[comp_index]
+    raw_points = list(drawn_points) if drawn_points else list(comp.get("raw_points") or [])
+    if len(raw_points) < 2:
+        return stroke
+    max_pts = int(comp.get("draw_max_points", 4))
+    algorithm = comp.get("algorithm", stroke.get("algorithm", "fit"))
+    new_segs = stroke_to_beziers(
+        raw_points, simplify_epsilon=2.5, tension=0.0,
+        max_points=max_pts, algorithm=algorithm,
+    )
+    if not new_segs:
+        return stroke
+    # Rebuild full stroke segs by replacing this component's range
+    ranges = _component_ranges(stroke)
+    if comp_index >= len(ranges):
+        return stroke
+    s0, s1 = ranges[comp_index]
+    all_segs = list(segs_of(stroke))
+    # if lengths differ, adjust (keep as close as possible)
+    all_segs[s0:s1] = list(new_segs)
+    out = _copy_stroke(stroke)
+    out["segs"] = all_segs
+    comps2 = _stroke_components(out)
+    if 0 <= comp_index < len(comps2):
+        comps2[comp_index] = dict(comps2[comp_index])
+        comps2[comp_index]["segs"] = list(new_segs)
+        comps2[comp_index]["raw_points"] = [tuple(p) for p in raw_points]
+    out["components"] = comps2
+    # clear hidden segs for simplicity after structural change
+    out["hidden_segs"] = set()
     return out
 
 
@@ -638,13 +705,29 @@ def reverse_stroke(stroke):
     for p0, c1, c2, p3 in reversed(segs):
         rev.append((p3, c2, c1, p0))
     if isinstance(stroke, dict):
-        out = dict(stroke)
+        out = _copy_stroke(stroke)
         out["segs"] = rev
         n = len(segs)
         out["corner_anchors"] = {
             (n - 1 - i, "p3" if name == "p0" else "p0")
             for (i, name) in _corners(stroke)
         }
+        # reverse components to match segment order
+        comps = out.get("components") or []
+        if comps:
+            rev_comps = []
+            for c in reversed(comps):
+                rc = dict(c)
+                csegs = c.get("segs") or []
+                if csegs:
+                    rc["segs"] = [(p3, c2, c1, p0) for (p0, c1, c2, p3) in reversed(csegs)]
+                else:
+                    rc["segs"] = []  # will be inconsistent, but fallback
+                rev_comps.append(rc)
+            out["components"] = rev_comps
+        # hidden segs mapped
+        hidden = set(out.get("hidden_segs", set()))
+        out["hidden_segs"] = {n - 1 - i for i in hidden}
         return out
     return rev
 
@@ -659,6 +742,20 @@ def _with_segs(stroke, segs):
         out["segs"] = segs
         return out
     return segs
+
+
+def _copy_stroke(stroke):
+    if not isinstance(stroke, dict):
+        return list(stroke)
+    out = dict(stroke)
+    out["segs"] = list(segs_of(stroke))
+    if "corner_anchors" in out:
+        out["corner_anchors"] = set(out.get("corner_anchors", set()))
+    if "hidden_segs" in out:
+        out["hidden_segs"] = set(out.get("hidden_segs", set()))
+    if "components" in out:
+        out["components"] = [dict(c) for c in (out.get("components") or [])]
+    return out
 
 
 def _close_path_if_needed(stroke, eps=6.0):
@@ -683,6 +780,20 @@ def _close_path_if_needed(stroke, eps=6.0):
     return _set_corners(out, corners)
 
 
+def _stroke_components(stroke):
+    if isinstance(stroke, dict) and stroke.get("components"):
+        return [dict(c) for c in (stroke.get("components") or [])]
+    # fallback: treat whole stroke as one component
+    if isinstance(stroke, dict):
+        return [{
+            "raw_points": list(stroke.get("raw_points", [])) if stroke.get("raw_points") else [],
+            "draw_max_points": int(stroke.get("draw_max_points", 4)),
+            "algorithm": stroke.get("algorithm", "fit"),
+            "segs": list(segs_of(stroke)),
+        }]
+    return [{"raw_points": [], "draw_max_points": 4, "algorithm": "fit", "segs": list(segs_of(stroke))}]
+
+
 def merge_connected_strokes(strokes, eps=6.0):
     paths = [s for s in strokes if segs_of(s)]
     changed = True
@@ -702,30 +813,34 @@ def merge_connected_strokes(strokes, eps=6.0):
                     continue
                 b_start, b_end = b_segs[0][0], b_segs[-1][3]
                 merged = None
+                merged_comps = None
                 if _pts_close(a_end, b_start, eps):
-                    # A followed by B; join at a_end
+                    # A followed by B
                     b2 = list(b_segs)
                     b2[0] = (a_end, b2[0][1], b2[0][2], b2[0][3])
                     na = len(a_segs)
                     corners = _corners(a) | _shift_corners(_corners(b), na) | {(na - 1, "p3"), (na, "p0")}
                     merged = _set_corners(_with_segs(a, list(a_segs) + b2), corners)
+                    merged_comps = _stroke_components(a) + _stroke_components(b)
                 elif _pts_close(a_end, b_end, eps):
-                    # A followed by reversed B; join at a_end
+                    # A followed by reversed B
                     rb = reverse_stroke(b)
                     rb_segs = list(segs_of(rb))
                     rb_segs[0] = (a_end, rb_segs[0][1], rb_segs[0][2], rb_segs[0][3])
                     na = len(a_segs)
                     corners = _corners(a) | _shift_corners(_corners(rb), na) | {(na - 1, "p3"), (na, "p0")}
                     merged = _set_corners(_with_segs(a, list(a_segs) + rb_segs), corners)
+                    merged_comps = _stroke_components(a) + _stroke_components(rb)
                 elif _pts_close(a_start, b_end, eps):
-                    # B followed by A; join at b_end
+                    # B followed by A
                     a2 = list(a_segs)
                     a2[0] = (b_end, a2[0][1], a2[0][2], a2[0][3])
                     nb = len(b_segs)
                     corners = _corners(b) | _shift_corners(_corners(a), nb) | {(nb - 1, "p3"), (nb, "p0")}
                     merged = _set_corners(_with_segs(b, list(b_segs) + a2), corners)
+                    merged_comps = _stroke_components(b) + _stroke_components(a)
                 elif _pts_close(a_start, b_start, eps):
-                    # Reversed B followed by A; join at rb end
+                    # Reversed B followed by A
                     rb = reverse_stroke(b)
                     rb_segs = list(segs_of(rb))
                     a2 = list(a_segs)
@@ -733,7 +848,12 @@ def merge_connected_strokes(strokes, eps=6.0):
                     nb = len(rb_segs)
                     corners = _corners(rb) | _shift_corners(_corners(a), nb) | {(nb - 1, "p3"), (nb, "p0")}
                     merged = _set_corners(_with_segs(rb, rb_segs + a2), corners)
+                    merged_comps = _stroke_components(rb) + _stroke_components(a)
                 if merged is not None:
+                    if isinstance(merged, dict) and merged_comps is not None:
+                        merged["components"] = merged_comps
+                        # hidden segs offsets across merges are complex; reset for safety
+                        merged["hidden_segs"] = set()
                     paths[i] = _close_path_if_needed(merged, eps=eps)
                     paths.pop(j)
                     changed = True
@@ -839,19 +959,23 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
     # Draw selection overlays (nodes for single selection, combined bbox for transform)
     if edit_mode and sel_set:
         selected_in_range = [i for i in sel_set if 0 <= i < len(strokes)]
-        # Highlight selected curve segment in curve edit mode
+        # Highlight selected stroke/component in curve edit mode
         if selection_submode == "curve" and selected_curve is not None:
-            si, seg_i = selected_curve
+            si, comp_i = selected_curve
             if si in selected_in_range and 0 <= si < len(strokes):
                 segs = segs_of(strokes[si])
-                if 0 <= seg_i < len(segs):
-                    p0, c1, c2, p3 = segs[seg_i]
-                    ctx.new_path()
-                    ctx.move_to(p0[0], p0[1])
-                    ctx.curve_to(c1[0], c1[1], c2[0], c2[1], p3[0], p3[1])
-                    ctx.set_source_rgba(1.0, 0.45, 0.1, 0.9)
-                    ctx.set_line_width(max(4.0, strokes[si].get("stroke_width", 3.0) + 2.0) if isinstance(strokes[si], dict) else 5.0)
-                    ctx.stroke()
+                ranges = _component_ranges(strokes[si])
+                if 0 <= comp_i < len(ranges):
+                    s0, s1 = ranges[comp_i]
+                    for seg_i in range(s0, min(s1, len(segs))):
+                        p0, c1, c2, p3 = segs[seg_i]
+                        ctx.new_path()
+                        ctx.move_to(p0[0], p0[1])
+                        ctx.curve_to(c1[0], c1[1], c2[0], c2[1], p3[0], p3[1])
+                        ctx.set_source_rgba(1.0, 0.45, 0.1, 0.9)
+                        w = strokes[si].get("stroke_width", 3.0) if isinstance(strokes[si], dict) else 3.0
+                        ctx.set_line_width(max(4.0, w + 2.0))
+                        ctx.stroke()
         if selection_submode == "nodes" and len(selected_in_range) == 1:
             idx = selected_in_range[0]
             segs = segs_of(strokes[idx])
@@ -1163,21 +1287,32 @@ def draw_panel(screen, fonts, mouse_pos, state):
         y += 38
 
         sel_stroke = state.get("selected_obj")
-        # Curve-edit controls (single selection in curve mode)
+        # Curve/stroke-edit controls (single selection in curve mode)
         state.setdefault("curve_hide_rect", pygame.Rect(0,0,0,0))
         state.setdefault("curve_redraw_rect", pygame.Rect(0,0,0,0))
         if submode == "curve" and sel_count == 1 and sel_stroke is not None:
             sc = state.get("selected_curve")
             if sc and sc[0] in sel_strokes:
-                seg_i = sc[1]
-                segs = segs_of(sel_stroke)
+                comp_i = sc[1]
+                comps = _stroke_components(sel_stroke)
+                ranges = _component_ranges(sel_stroke)
                 hidden = set(sel_stroke.get("hidden_segs", set()) or set()) if isinstance(sel_stroke, dict) else set()
-                screen.blit(font_small.render(f"Selected curve: {seg_i + 1}/{len(segs)}", True, MUTED_COLOR), (x, y)); y += 22
+                if 0 <= comp_i < len(ranges):
+                    s0, s1 = ranges[comp_i]
+                    comp_hidden = all(i in hidden for i in range(s0, s1)) if s1 > s0 else False
+                else:
+                    comp_hidden = False
+                label_what = "stroke" if len(comps) > 1 else "curve"
+                screen.blit(font_small.render(f"Selected {label_what}: {comp_i + 1}/{max(1,len(comps))}", True, MUTED_COLOR), (x, y)); y += 22
+                if 0 <= comp_i < len(comps):
+                    ci = comps[comp_i]
+                    info = f"Settings: {ci.get('algorithm','fit')}, pts {ci.get('draw_max_points',4)}"
+                    screen.blit(font_small.render(info, True, MUTED_COLOR), (x, y)); y += 18
                 hide_rect = pygame.Rect(x, y, (PANEL_W - 48) // 2, 30)
                 redraw_rect = pygame.Rect(hide_rect.right + 8, y, (PANEL_W - 48) - hide_rect.w, 30)
                 state["curve_hide_rect"] = hide_rect
                 state["curve_redraw_rect"] = redraw_rect
-                for r, label in ((hide_rect, "Show curve" if seg_i in hidden else "Hide curve"), (redraw_rect, "Redraw curve")):
+                for r, label in ((hide_rect, "Show" if comp_hidden else "Hide"), (redraw_rect, "Redraw")):
                     bg = BUTTON_HOVER if r.collidepoint(mouse_pos) else BUTTON_BG
                     pygame.draw.rect(screen, bg, r, border_radius=6)
                     pygame.draw.rect(screen, BUTTON_BORDER, r, 1, border_radius=6)
@@ -1185,7 +1320,7 @@ def draw_panel(screen, fonts, mouse_pos, state):
                     screen.blit(t, t.get_rect(center=r.center))
                 y += 38
             else:
-                screen.blit(font_small.render("Click a curve segment to edit", True, MUTED_COLOR), (x, y)); y += 24
+                screen.blit(font_small.render("Click a stroke to edit", True, MUTED_COLOR), (x, y)); y += 24
                 state["curve_hide_rect"] = pygame.Rect(0,0,0,0)
                 state["curve_redraw_rect"] = pygame.Rect(0,0,0,0)
         else:
@@ -1496,14 +1631,16 @@ def main():
         primary = sel_list[0] if len(sel_list) == 1 else (sel_list[0] if sel_list else None)
         sel_obj = strokes[primary] if primary is not None else None
         if selected_curve is not None:
-            si, seg_i = selected_curve
-            if si not in selected_strokes or not (0 <= si < len(strokes)) or not (0 <= seg_i < len(segs_of(strokes[si]))):
+            si, comp_i = selected_curve
+            comps = _stroke_components(strokes[si]) if 0 <= si < len(strokes) else []
+            if si not in selected_strokes or not (0 <= si < len(strokes)) or not (0 <= comp_i < len(comps)):
                 selected_curve = None
                 redrawing_curve = None
         if redrawing_curve is not None:
             rsi = redrawing_curve.get("stroke_idx")
-            rseg = redrawing_curve.get("seg_idx")
-            if rsi not in selected_strokes or not (0 <= rsi < len(strokes)) or not (0 <= rseg < len(segs_of(strokes[rsi]))):
+            rcomp = redrawing_curve.get("comp_idx", redrawing_curve.get("seg_idx"))
+            comps = _stroke_components(strokes[rsi]) if 0 <= rsi < len(strokes) else []
+            if rsi not in selected_strokes or not (0 <= rsi < len(strokes)) or not (0 <= rcomp < len(comps)):
                 redrawing_curve = None
         state_selected_curve = selected_curve
         state_redrawing_curve = redrawing_curve
@@ -1607,22 +1744,29 @@ def main():
                         selected_point = None; selected_curve = None; transform_drag = None; drag_last = None; redrawing_curve = None
                     elif tool_mode == "selection" and selection_submode == "curve" and state.get("curve_hide_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
                         if selected_curve and selected_curve[0] in selected_strokes:
-                            si, seg_i = selected_curve
+                            si, comp_i = selected_curve
                             if 0 <= si < len(strokes) and isinstance(strokes[si], dict):
-                                hidden = set(strokes[si].get("hidden_segs", set()) or set())
-                                if seg_i in hidden:
-                                    hidden.discard(seg_i)
-                                else:
-                                    hidden.add(seg_i)
-                                strokes[si]["hidden_segs"] = hidden
+                                ranges = _component_ranges(strokes[si])
+                                if 0 <= comp_i < len(ranges):
+                                    s0, s1 = ranges[comp_i]
+                                    hidden = set(strokes[si].get("hidden_segs", set()) or set())
+                                    comp_hidden = all(i in hidden for i in range(s0, s1)) if s1 > s0 else False
+                                    if comp_hidden:
+                                        for i in range(s0, s1): hidden.discard(i)
+                                    else:
+                                        for i in range(s0, s1): hidden.add(i)
+                                    strokes[si]["hidden_segs"] = hidden
                     elif tool_mode == "selection" and selection_submode == "curve" and state.get("curve_redraw_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
                         if selected_curve and selected_curve[0] in selected_strokes:
-                            si, seg_i = selected_curve
+                            si, comp_i = selected_curve
                             if 0 <= si < len(strokes) and isinstance(strokes[si], dict):
-                                hidden = set(strokes[si].get("hidden_segs", set()) or set())
-                                hidden.add(seg_i)
-                                strokes[si]["hidden_segs"] = hidden
-                            redrawing_curve = {"stroke_idx": si, "seg_idx": seg_i, "points": []}
+                                ranges = _component_ranges(strokes[si])
+                                if 0 <= comp_i < len(ranges):
+                                    s0, s1 = ranges[comp_i]
+                                    hidden = set(strokes[si].get("hidden_segs", set()) or set())
+                                    for i in range(s0, s1): hidden.add(i)
+                                    strokes[si]["hidden_segs"] = hidden
+                            redrawing_curve = {"stroke_idx": si, "comp_idx": comp_i, "points": []}
                             selected_point = None; transform_drag = None; drag_last = None
                     elif tool_mode == "selection" and selected_strokes:
                         # Modern color picker interactions (apply to all selected strokes)
@@ -1724,16 +1868,17 @@ def main():
                             if len(selected_strokes) == 1:
                                 si = next(iter(selected_strokes))
                                 if 0 <= si < len(strokes):
-                                    seg_i = hit_test_segment(strokes[si], cpos)
-                                    if seg_i is not None:
-                                        selected_curve = (si, seg_i)
-                                    # keep stroke selected; allow changing selection via normal hit below if missed
-                            # fall through to allow selecting a different stroke
-                            if selected_curve is None or hit_test_segment(strokes[selected_curve[0]], cpos) is None:
-                                hit = hit_test_stroke(cpos, strokes)
-                                if hit is not None and (len(selected_strokes) != 1 or hit != next(iter(selected_strokes))):
-                                    selected_strokes = {hit}
-                                    selected_curve = None
+                                    comp_i = hit_test_component(strokes[si], cpos)
+                                    if comp_i is not None:
+                                        selected_curve = (si, comp_i)
+                            # allow selecting a different stroke
+                            hit = hit_test_stroke(cpos, strokes)
+                            if hit is not None and (len(selected_strokes) != 1 or hit != next(iter(selected_strokes))):
+                                selected_strokes = {hit}
+                                comp_i = hit_test_component(strokes[hit], cpos) if 0 <= hit < len(strokes) else None
+                                selected_curve = (hit, comp_i) if comp_i is not None else None
+                            elif hit is None and not (pygame.key.get_mods() & pygame.KMOD_SHIFT):
+                                selected_strokes.clear(); selected_curve = None
                             if len(selected_strokes) != 1 or (selected_curve and selected_curve[0] not in selected_strokes):
                                 selected_curve = None
                         elif selection_submode == "transform":
@@ -1944,21 +2089,19 @@ def main():
             elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
                 if redrawing_curve is not None:
                     si = redrawing_curve.get("stroke_idx")
-                    seg_i = redrawing_curve.get("seg_idx")
+                    comp_i = redrawing_curve.get("comp_idx", redrawing_curve.get("seg_idx"))
                     pts = redrawing_curve.get("points", [])
-                    if si is not None and seg_i is not None and 0 <= si < len(strokes) and len(pts) >= 2:
-                        strokes[si] = redraw_curve_segment(strokes[si], seg_i, pts)
-                        # ensure redrawn curve is visible
+                    if si is not None and comp_i is not None and 0 <= si < len(strokes):
+                        if len(pts) >= 2:
+                            strokes[si] = redraw_stroke_component(strokes[si], comp_i, pts)
+                        # ensure component visible (redraw_stroke_component clears hidden, but handle cancel case)
                         if isinstance(strokes[si], dict):
-                            hidden = set(strokes[si].get("hidden_segs", set()) or set())
-                            hidden.discard(seg_i)
-                            strokes[si]["hidden_segs"] = hidden
-                    elif si is not None and seg_i is not None and 0 <= si < len(strokes):
-                        # cancelled/no draw: keep it visible
-                        if isinstance(strokes[si], dict):
-                            hidden = set(strokes[si].get("hidden_segs", set()) or set())
-                            hidden.discard(seg_i)
-                            strokes[si]["hidden_segs"] = hidden
+                            ranges = _component_ranges(strokes[si])
+                            if 0 <= comp_i < len(ranges):
+                                s0, s1 = ranges[comp_i]
+                                hidden = set(strokes[si].get("hidden_segs", set()) or set())
+                                for i in range(s0, s1): hidden.discard(i)
+                                strokes[si]["hidden_segs"] = hidden
                     redrawing_curve = None
                 elif drawing and tool_mode == "draw":
                     drawing = False
@@ -1972,15 +2115,24 @@ def main():
                     elif current_points and current_points[-1] != cpos:
                         current_points.append(cpos)
                     if len(current_points) >= 2:
+                        raw = list(current_points)
                         beziers = stroke_to_beziers(
                             current_points, simplify_epsilon=2.5, tension=0.0,
                             max_points=max_points_per_curve, algorithm=trace_algorithm,
                         )
                         if beziers:
-                            st = _close_path_if_needed(new_stroke(beziers, algorithm=trace_algorithm))
+                            st = new_stroke(beziers, algorithm=trace_algorithm)
+                            comp = {
+                                "raw_points": [tuple(p) for p in raw],
+                                "draw_max_points": int(max_points_per_curve),
+                                "algorithm": trace_algorithm,
+                                "segs": list(beziers),
+                            }
+                            st["components"] = [comp]
+                            st = _close_path_if_needed(st)
                             strokes.append(st)
                             strokes = merge_connected_strokes(strokes)
-                            selected_strokes.clear(); selected_point = None
+                            selected_strokes.clear(); selected_point = None; selected_curve = None; redrawing_curve = None
                     current_points = []
                 drag_last = None; selected_point = None; transform_drag = None
                 picker_drag_sv = False; picker_drag_hue = False; picker_drag_alpha = False
