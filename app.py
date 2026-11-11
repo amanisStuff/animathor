@@ -2341,10 +2341,15 @@ def main():
                     shift_held = bool(pygame.key.get_mods() & pygame.KMOD_SHIFT)
                     end_snap = draw_snap_point(cpos, strokes, SNAP_RADIUS, shift_held, extra_points=extras)
                     sample_pos = end_snap if end_snap is not None else cpos
-                    if not current_points or math.hypot(sample_pos[0]-current_points[-1][0], sample_pos[1]-current_points[-1][1]) >= 2.0:
-                        current_points.append(sample_pos)
-                    elif end_snap is not None and current_points[-1] != end_snap:
-                        current_points[-1] = end_snap
+                    keys = pygame.key.get_pressed()
+                    straight_line = bool(keys[pygame.K_v]) if keys else False
+                    if straight_line and current_points:
+                        current_points = [current_points[0], sample_pos]
+                    else:
+                        if not current_points or math.hypot(sample_pos[0]-current_points[-1][0], sample_pos[1]-current_points[-1][1]) >= 2.0:
+                            current_points.append(sample_pos)
+                        elif end_snap is not None and current_points[-1] != end_snap:
+                            current_points[-1] = end_snap
                 elif tool_mode == "selection" and transform_drag is not None and selected_strokes and pygame.mouse.get_pressed()[0]:
                     cpos = clamp_to_canvas(event.pos)
                     td = transform_drag
@@ -2435,18 +2440,32 @@ def main():
                     cpos = clamp_to_canvas(event.pos)
                     extras = [current_points[0]] if current_points else None
                     shift_held = bool(pygame.key.get_mods() & pygame.KMOD_SHIFT)
+                    keys = pygame.key.get_pressed()
+                    straight_line = bool(keys[pygame.K_v]) if keys else False
                     end_snap = draw_snap_point(cpos, strokes, SNAP_RADIUS, shift_held, extra_points=extras)
-                    if end_snap is not None:
-                        if current_points: current_points[-1] = end_snap
-                        else: current_points = [end_snap]
-                    elif current_points and current_points[-1] != cpos:
-                        current_points.append(cpos)
+                    sample_pos = end_snap if end_snap is not None else cpos
+                    if straight_line and current_points:
+                        current_points = [current_points[0], sample_pos]
+                    else:
+                        if end_snap is not None:
+                            if current_points: current_points[-1] = end_snap
+                            else: current_points = [end_snap]
+                        elif current_points and current_points[-1] != cpos:
+                            current_points.append(cpos)
                     if len(current_points) >= 2:
                         raw = list(current_points)
-                        beziers = stroke_to_beziers(
-                            current_points, simplify_epsilon=2.5, tension=0.0,
-                            max_points=max_points_per_curve, algorithm=trace_algorithm,
-                        )
+                        if straight_line:
+                            p0 = tuple(current_points[0])
+                            p3 = tuple(current_points[-1])
+                            c1 = (p0[0] + (p3[0] - p0[0]) / 3.0, p0[1] + (p3[1] - p0[1]) / 3.0)
+                            c2 = (p0[0] + 2.0 * (p3[0] - p0[0]) / 3.0, p0[1] + 2.0 * (p3[1] - p0[1]) / 3.0)
+                            beziers = [(p0, c1, c2, p3)]
+                            raw = [p0, p3]
+                        else:
+                            beziers = stroke_to_beziers(
+                                current_points, simplify_epsilon=2.5, tension=0.0,
+                                max_points=max_points_per_curve, algorithm=trace_algorithm,
+                            )
                         if beziers:
                             st = new_stroke(beziers, algorithm=trace_algorithm)
                             comp = {
