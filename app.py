@@ -268,8 +268,26 @@ def nearest_snap_point(pos, strokes, radius, extra_points=None):
     best_d = math.hypot(pos[0] - best[0], pos[1] - best[1]) if best is not None else radius
     curve_pt = nearest_point_on_strokes(pos, strokes, best_d)
     if curve_pt is not None:
+        # Prefer endpoint for connection when the curve snap is essentially at an endpoint
+        if best is not None and math.hypot(best[0] - curve_pt[0], best[1] - curve_pt[1]) <= 8.0:
+            return best
         return curve_pt
     return best
+
+
+def snap_kind(pos, strokes, radius, extra_points=None):
+    """Classify nearest snap target: 'connect' for endpoint, 'assist' for curve/edge."""
+    pt = nearest_snap_point(pos, strokes, radius, extra_points=extra_points)
+    if pt is None:
+        return None
+    ep = nearest_endpoint(pos, strokes, radius, extra_points=extra_points)
+    if ep is not None and math.hypot(ep[0] - pt[0], ep[1] - pt[1]) <= 1e-6:
+        return "connect"
+    if extra_points:
+        for p in extra_points:
+            if p is not None and math.hypot(p[0] - pt[0], p[1] - pt[1]) <= 1e-6:
+                return "connect"
+    return "assist"
 
 
 def draw_snap_point(pos, strokes, radius, shift_held, extra_points=None):
@@ -277,6 +295,17 @@ def draw_snap_point(pos, strokes, radius, shift_held, extra_points=None):
     if shift_held:
         return nearest_snap_point(pos, strokes, radius, extra_points=extra_points)
     return nearest_endpoint(pos, strokes, radius, extra_points=extra_points)
+
+
+def draw_snap_info(pos, strokes, radius, shift_held, extra_points=None):
+    pt = draw_snap_point(pos, strokes, radius, shift_held, extra_points=extra_points)
+    if pt is None:
+        return None, None
+    if shift_held:
+        kind = snap_kind(pos, strokes, radius, extra_points=extra_points) or "connect"
+    else:
+        kind = "connect"
+    return pt, kind
 
 
 def _dist_point_seg(p, a, b):
@@ -763,7 +792,7 @@ def combined_bbox(strokes, indices):
     return (min(xs), min(ys), max(xs), max(ys))
 
 
-def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, selected_index=None, selected_indices=None, edit_mode=False, selection_submode="transform", selected_curve=None):
+def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, selected_index=None, selected_indices=None, edit_mode=False, selection_submode="transform", selected_curve=None, snap_kind="connect"):
     # Backward compat: selected_index (single) or selected_indices (collection)
     if selected_indices is None and selected_index is not None:
         selected_indices = selected_index
@@ -901,12 +930,25 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
 
     if snap_point is not None:
         x, y = snap_point
-        ctx.set_source_rgba(0.2, 0.6, 1.0, 0.25)
-        ctx.arc(x, y, 11.0, 0, 2 * math.pi); ctx.fill()
-        ctx.set_source_rgb(0.15, 0.45, 0.95)
-        ctx.set_line_width(2.0)
-        ctx.arc(x, y, 11.0, 0, 2 * math.pi); ctx.stroke()
-        ctx.arc(x, y, 2.5, 0, 2 * math.pi); ctx.fill()
+        if snap_kind == "assist":
+            r = 10.0
+            ctx.new_path()
+            ctx.move_to(x, y - r); ctx.line_to(x + r, y); ctx.line_to(x, y + r); ctx.line_to(x - r, y); ctx.close_path()
+            ctx.set_source_rgba(0.2, 0.6, 1.0, 0.22)
+            ctx.fill_preserve()
+            ctx.set_source_rgb(0.15, 0.45, 0.95)
+            ctx.set_line_width(2.0)
+            ctx.stroke()
+            ctx.new_path()
+            ctx.move_to(x, y - 2.5); ctx.line_to(x + 2.5, y); ctx.line_to(x, y + 2.5); ctx.line_to(x - 2.5, y); ctx.close_path()
+            ctx.fill()
+        else:
+            ctx.set_source_rgba(0.2, 0.6, 1.0, 0.25)
+            ctx.arc(x, y, 11.0, 0, 2 * math.pi); ctx.fill()
+            ctx.set_source_rgb(0.15, 0.45, 0.95)
+            ctx.set_line_width(2.0)
+            ctx.arc(x, y, 11.0, 0, 2 * math.pi); ctx.stroke()
+            ctx.arc(x, y, 2.5, 0, 2 * math.pi); ctx.fill()
 
     cairo_surface.flush()
 
@@ -1434,14 +1476,16 @@ def main():
     while running:
         mouse_pos = pygame.mouse.get_pos()
         hover_snap = None
+        hover_snap_kind = "connect"
         if tool_mode == "draw" and in_canvas(mouse_pos):
             cpos = to_canvas(mouse_pos)
             extras = [current_points[0]] if (drawing and current_points) else None
             if drawing and tool_mode == "draw":
                 shift_held = bool(pygame.key.get_mods() & pygame.KMOD_SHIFT)
-                hover_snap = draw_snap_point(cpos, strokes, SNAP_RADIUS, shift_held, extra_points=extras)
+                hover_snap, hover_snap_kind = draw_snap_info(cpos, strokes, SNAP_RADIUS, shift_held, extra_points=extras)
             else:
                 hover_snap = nearest_endpoint(cpos, strokes, SNAP_RADIUS, extra_points=extras)
+                hover_snap_kind = "connect" if hover_snap is not None else "connect"
 
         stroke_swatch_rects = list(swatch_rects_cache["stroke"])
         fill_swatch_rects = list(swatch_rects_cache["fill"])
@@ -1932,6 +1976,7 @@ def main():
             cairo_surface, strokes, active, snap_point=hover_snap,
             selected_indices=selected_strokes, edit_mode=(tool_mode == "selection"),
             selection_submode=selection_submode, selected_curve=selected_curve,
+            snap_kind=hover_snap_kind,
         )
         frame = surface_to_pygame(cairo_surface)
         screen.fill((230, 233, 238))

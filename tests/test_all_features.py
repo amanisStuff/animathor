@@ -535,6 +535,19 @@ class TestSnappingToCurve(unittest.TestCase):
         self.assertAlmostEqual(pt_no_shift[0], 0.0, places=3)
         self.assertAlmostEqual(pt_no_shift[1], 0.0, places=3)
 
+    def test_draw_snap_info_kinds(self):
+        st = app.new_stroke([((0.0, 0.0), (0.0, 50.0), (100.0, 50.0), (100.0, 0.0))])
+        # Near curve middle with shift -> assist (diamond)
+        pt, kind = app.draw_snap_info((50.0, 35.0), [st], radius=30.0, shift_held=True)
+        self.assertIsNotNone(pt)
+        self.assertEqual(kind, "assist")
+        # Near endpoint -> connect (circle)
+        pt2, kind2 = app.draw_snap_info((3.0, 2.0), [st], radius=10.0, shift_held=True)
+        self.assertIsNotNone(pt2)
+        self.assertEqual(kind2, "connect")
+        pt3, kind3 = app.draw_snap_info((3.0, 2.0), [st], radius=10.0, shift_held=False)
+        self.assertEqual(kind3, "connect")
+
 
 class TestCurveEdit(unittest.TestCase):
     def _make_stroke(self):
