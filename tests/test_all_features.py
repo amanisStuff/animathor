@@ -536,6 +536,47 @@ class TestSnappingToCurve(unittest.TestCase):
         self.assertAlmostEqual(pt_no_shift[1], 0.0, places=3)
 
 
+class TestCurveEdit(unittest.TestCase):
+    def _make_stroke(self):
+        # two segments
+        return app.new_stroke([
+            ((0.0, 0.0), (20.0, 0.0), (40.0, 0.0), (60.0, 0.0)),
+            ((60.0, 0.0), (80.0, 10.0), (100.0, 10.0), (120.0, 0.0)),
+        ])
+
+    def test_hit_test_segment(self):
+        st = self._make_stroke()
+        # near middle of first segment
+        self.assertEqual(app.hit_test_segment(st, (30.0, 1.0), threshold=10.0), 0)
+        # near second segment
+        self.assertEqual(app.hit_test_segment(st, (90.0, 8.0), threshold=12.0), 1)
+        self.assertIsNone(app.hit_test_segment(st, (200.0, 200.0), threshold=5.0))
+
+    def test_hide_curve_segment_render(self):
+        st = self._make_stroke()
+        st["hidden_segs"] = {1}
+        surf = app.make_cairo_surface(200, 100)
+        # should not crash and should draw remaining visible segment
+        app.draw_scene(surf, [st], selected_indices={0}, edit_mode=True, selection_submode="curve", selected_curve=(0, 0))
+        self.assertIn(1, st["hidden_segs"])
+
+    def test_redraw_curve_segment_preserves_count_and_endpoints(self):
+        st = self._make_stroke()
+        orig_segs = list(app.segs_of(st))
+        self.assertEqual(len(orig_segs), 2)
+        seg_i = 1
+        p0, p3 = orig_segs[seg_i][0], orig_segs[seg_i][3]
+        # redraw middle curve with different shape but same segment slot
+        drawn = [(p0[0], p0[1]), (75.0, 40.0), (95.0, 40.0), (p3[0], p3[1])]
+        out = app.redraw_curve_segment(st, seg_i, drawn)
+        out_segs = app.segs_of(out)
+        self.assertEqual(len(out_segs), 2)  # same number of segments/curves
+        self.assertEqual(out_segs[seg_i][0], p0)
+        self.assertEqual(out_segs[seg_i][3], p3)
+        # shape changed (control points differ)
+        self.assertNotEqual(out_segs[seg_i], orig_segs[seg_i])
+
+
 class TestMultiSelectUI(unittest.TestCase):
     def setUp(self):
         os.environ.setdefault("SDL_VIDEODRIVER", "dummy")

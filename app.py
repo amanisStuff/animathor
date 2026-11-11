@@ -10,7 +10,7 @@ except Exception:
 
 import pygame
 
-from bezier import stroke_to_beziers
+from bezier import stroke_to_beziers, fit_single_cubic_bezier
 
 LEFT_BAR_W = 56
 CANVAS_W, HEIGHT = 980, 700
@@ -72,6 +72,7 @@ def new_stroke(segs, stroke_color=(0.1, 0.1, 0.15), stroke_width=3.0, fill_color
         # Internal joins inside one drawn stroke remain smooth (symmetric handles).
         "corner_anchors": set(corner_anchors or ()),
         "algorithm": algorithm or "fit",
+        "hidden_segs": set(),
     }
 
 
@@ -346,6 +347,48 @@ def hit_test_stroke(pos, strokes, threshold=8.0):
                 if _dist_point_seg(pos, a, b) <= threshold:
                     return i
     return None
+
+
+def hit_test_segment(stroke, pos, threshold=10.0):
+    """Return segment index nearest to pos, or None."""
+    segs = segs_of(stroke)
+    best = None
+    best_d = threshold
+    for i, seg in enumerate(segs):
+        pt, d = _nearest_point_on_cubic(pos, seg)
+        if d <= best_d:
+            best_d = d
+            best = i
+    return best
+
+
+def redraw_curve_segment(stroke, seg_index, drawn_points):
+    """Replace one curve segment by refitting drawn points to a single cubic.
+    Keeps the original segment endpoints to preserve connectivity and point count."""
+    segs = list(segs_of(stroke))
+    if not (0 <= seg_index < len(segs)) or len(drawn_points) < 2:
+        return stroke
+    orig = segs[seg_index]
+    p0, p3 = orig[0], orig[3]
+    pts = list(drawn_points)
+    # ensure fit respects original segment endpoints
+    pts[0] = p0
+    pts[-1] = p3
+    fitted = fit_single_cubic_bezier(pts)
+    if not fitted:
+        return stroke
+    new_seg = list(fitted[0])
+    new_seg[0] = p0
+    new_seg[3] = p3
+    segs[seg_index] = tuple(new_seg)
+    out = dict(stroke) if isinstance(stroke, dict) else new_stroke(segs)
+    out["segs"] = segs
+    if isinstance(stroke, dict):
+        # preserve metadata
+        for k in ("stroke_color", "stroke_width", "fill_color", "corner_anchors", "algorithm", "hidden_segs"):
+            if k in stroke and k not in ("segs",):
+                out[k] = stroke[k]
+    return out
 
 
 def hit_test_point(stroke, pos, radius=8.0):
@@ -677,13 +720,24 @@ def draw_stroke_path(ctx, stroke):
     segs = segs_of(stroke)
     if not segs:
         return False
+    hidden = set()
+    if isinstance(stroke, dict):
+        hidden = set(stroke.get("hidden_segs", set()) or set())
+    visible = [i for i in range(len(segs)) if i not in hidden]
+    if not visible:
+        return False
     ctx.new_path()
-    p0 = segs[0][0]
-    ctx.move_to(p0[0], p0[1])
-    for _, c1, c2, p3 in segs:
+    drew = False
+    for i in range(len(segs)):
+        if i in hidden:
+            continue
+        p0, c1, c2, p3 = segs[i]
+        if not drew or not _pts_close(segs[i][0], segs[i - 1][3], 1e-3):
+            ctx.move_to(p0[0], p0[1])
         ctx.curve_to(c1[0], c1[1], c2[0], c2[1], p3[0], p3[1])
-    # if closed, close path for nicer fill
-    if _pts_close(segs[0][0], segs[-1][3], 6.0):
+        drew = True
+    # if closed and fully visible, close path for nicer fill
+    if len(visible) == len(segs) and _pts_close(segs[0][0], segs[-1][3], 6.0):
         ctx.close_path()
     return True
 
@@ -709,7 +763,7 @@ def combined_bbox(strokes, indices):
     return (min(xs), min(ys), max(xs), max(ys))
 
 
-def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, selected_index=None, selected_indices=None, edit_mode=False, selection_submode="transform"):
+def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, selected_index=None, selected_indices=None, edit_mode=False, selection_submode="transform", selected_curve=None):
     # Backward compat: selected_index (single) or selected_indices (collection)
     if selected_indices is None and selected_index is not None:
         selected_indices = selected_index
@@ -756,6 +810,19 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
     # Draw selection overlays (nodes for single selection, combined bbox for transform)
     if edit_mode and sel_set:
         selected_in_range = [i for i in sel_set if 0 <= i < len(strokes)]
+        # Highlight selected curve segment in curve edit mode
+        if selection_submode == "curve" and selected_curve is not None:
+            si, seg_i = selected_curve
+            if si in selected_in_range and 0 <= si < len(strokes):
+                segs = segs_of(strokes[si])
+                if 0 <= seg_i < len(segs):
+                    p0, c1, c2, p3 = segs[seg_i]
+                    ctx.new_path()
+                    ctx.move_to(p0[0], p0[1])
+                    ctx.curve_to(c1[0], c1[1], c2[0], c2[1], p3[0], p3[1])
+                    ctx.set_source_rgba(1.0, 0.45, 0.1, 0.9)
+                    ctx.set_line_width(max(4.0, strokes[si].get("stroke_width", 3.0) + 2.0) if isinstance(strokes[si], dict) else 5.0)
+                    ctx.stroke()
         if selection_submode == "nodes" and len(selected_in_range) == 1:
             idx = selected_in_range[0]
             segs = segs_of(strokes[idx])
@@ -1036,21 +1103,51 @@ def draw_panel(screen, fonts, mouse_pos, state):
         # Selection mode: transform operations and modern color selection
         sel_strokes = state.get("selected_strokes", set())
         sel_count = len(sel_strokes)
-        # Submode toggle: Transform (bbox) vs Edit Nodes
+        # Submode toggle: Transform / Edit Nodes / Curve
         submode = state.get("selection_submode", "transform")
         toggle = pygame.Rect(x, y, PANEL_W - 40, 30)
         state["nodes_toggle_rect"] = toggle
         pygame.draw.rect(screen, BUTTON_BG, toggle, border_radius=6)
         pygame.draw.rect(screen, BUTTON_BORDER, toggle, 1, border_radius=6)
-        half = toggle.w // 2
-        for i, (label, key) in enumerate((("Transform", "transform"), ("Edit Nodes", "nodes"))):
-            r = pygame.Rect(toggle.x + i * half, toggle.y, half, toggle.h)
+        modes = (("Transform", "transform"), ("Nodes", "nodes"), ("Curve", "curve"))
+        part = toggle.w // len(modes)
+        for i, (label, key) in enumerate(modes):
+            r = pygame.Rect(toggle.x + i * part, toggle.y, part if i < len(modes)-1 else toggle.w - i*part, toggle.h)
             active = (submode == key)
             if active:
                 pygame.draw.rect(screen, TOOL_ACTIVE, r.inflate(-4, -4), border_radius=5)
             t = font_small.render(label, True, ACCENT if active else TEXT_COLOR)
             screen.blit(t, t.get_rect(center=r.center))
         y += 38
+
+        # Curve-edit controls (single selection in curve mode)
+        state.setdefault("curve_hide_rect", pygame.Rect(0,0,0,0))
+        state.setdefault("curve_redraw_rect", pygame.Rect(0,0,0,0))
+        if submode == "curve" and sel_count == 1 and stroke is not None:
+            sc = state.get("selected_curve")
+            if sc and sc[0] in sel_strokes:
+                seg_i = sc[1]
+                segs = segs_of(stroke)
+                hidden = set(stroke.get("hidden_segs", set()) or set()) if isinstance(stroke, dict) else set()
+                screen.blit(font_small.render(f"Selected curve: {seg_i + 1}/{len(segs)}", True, MUTED_COLOR), (x, y)); y += 22
+                hide_rect = pygame.Rect(x, y, (PANEL_W - 48) // 2, 30)
+                redraw_rect = pygame.Rect(hide_rect.right + 8, y, (PANEL_W - 48) - hide_rect.w, 30)
+                state["curve_hide_rect"] = hide_rect
+                state["curve_redraw_rect"] = redraw_rect
+                for r, label in ((hide_rect, "Show curve" if seg_i in hidden else "Hide curve"), (redraw_rect, "Redraw curve")):
+                    bg = BUTTON_HOVER if r.collidepoint(mouse_pos) else BUTTON_BG
+                    pygame.draw.rect(screen, bg, r, border_radius=6)
+                    pygame.draw.rect(screen, BUTTON_BORDER, r, 1, border_radius=6)
+                    t = font_small.render(label, True, TEXT_COLOR)
+                    screen.blit(t, t.get_rect(center=r.center))
+                y += 38
+            else:
+                screen.blit(font_small.render("Click a curve segment to edit", True, MUTED_COLOR), (x, y)); y += 24
+                state["curve_hide_rect"] = pygame.Rect(0,0,0,0)
+                state["curve_redraw_rect"] = pygame.Rect(0,0,0,0)
+        else:
+            state["curve_hide_rect"] = pygame.Rect(0,0,0,0)
+            state["curve_redraw_rect"] = pygame.Rect(0,0,0,0)
 
         if sel_count == 0:
             info = font_small.render("Select a stroke", True, MUTED_COLOR)
@@ -1215,26 +1312,48 @@ def draw_panel(screen, fonts, mouse_pos, state):
         sel_label = "-" if sel_count == 0 else (str(next(iter(sel_strokes)) + 1) if sel_count == 1 else f"{sel_count}")
         stats = font_small.render(f"Strokes: {state['stroke_count']} | Selected: {sel_label}", True, MUTED_COLOR)
         screen.blit(stats, (x, y)); y += 20
-        if state.get("selection_submode", "transform") == "transform":
+        submode = state.get("selection_submode", "transform")
+        if state.get("redrawing_curve"):
+            help_lines = [
+                "Draw to redraw selected curve.",
+                "Release mouse to apply.",
+                "Same segment count preserved.",
+            ]
+        elif sel_count == 0:
             help_lines = [
                 "Click stroke to select.",
                 "Shift+click: multi-select.",
+                "N: cycle Transform/Nodes/Curve.",
+                "Shortcuts: Ctrl+Z, C, Esc",
+            ]
+        elif sel_count > 1:
+            help_lines = [
+                f"{sel_count} shapes selected.",
+                "Shift+click: toggle selection.",
+                "Drag/handles: move or transform.",
+                "N: cycle Transform/Nodes/Curve.",
+                "Delete: remove selected.",
+            ]
+        elif submode == "transform":
+            help_lines = [
                 "Drag inside box to move.",
                 "Drag handles to scale/rotate.",
-                "N: toggle Transform/Edit Nodes.",
+                "N: cycle Transform/Nodes/Curve.",
                 "Delete: remove selected.",
-                "Shortcuts: Ctrl+Z, C, Esc",
+            ]
+        elif submode == "nodes":
+            help_lines = [
+                "Drag anchors/handles to edit.",
+                "Smooth joins mirror handles.",
+                "N: cycle Transform/Nodes/Curve.",
+                "Delete: remove selected.",
             ]
         else:
             help_lines = [
-                "Click stroke to select.",
-                "Shift+click: multi-select.",
-                "Drag anchors/handles to edit.",
-                "Smooth joins mirror handles.",
-                "Merged/closed joins are corners.",
-                "N: toggle Transform/Edit Nodes.",
-                "Delete: remove selected.",
-                "Shortcuts: Ctrl+Z, C, Esc",
+                "Click a curve segment to select.",
+                "Hide/Show or Redraw selected curve.",
+                "Redraw keeps same point count.",
+                "N: cycle Transform/Nodes/Curve.",
             ]
 
     for line in help_lines:
@@ -1270,8 +1389,10 @@ def main():
     tool_mode = "draw"
     selected_strokes = set()
     selected_point = None
+    selected_curve = None  # (stroke_idx, seg_idx) in curve edit mode
+    redrawing_curve = None  # {"stroke_idx", "seg_idx", "points"} while redrawing
     drag_last = None
-    selection_submode = "transform"  # "transform" (bbox) or "nodes" (point editing)
+    selection_submode = "transform"  # "transform", "nodes", or "curve"
     transform_drag = None  # {"handle": name, "start_mouse": (x,y), "start_strokes": {i: copy}, "center": (cx,cy), "start_bbox": bbox}
     max_points_per_curve = 4
     boost_points = False
@@ -1329,6 +1450,18 @@ def main():
         sel_list = sorted(selected_strokes)
         primary = sel_list[0] if len(sel_list) == 1 else (sel_list[0] if sel_list else None)
         sel_obj = strokes[primary] if primary is not None else None
+        if selected_curve is not None:
+            si, seg_i = selected_curve
+            if si not in selected_strokes or not (0 <= si < len(strokes)) or not (0 <= seg_i < len(segs_of(strokes[si]))):
+                selected_curve = None
+                redrawing_curve = None
+        if redrawing_curve is not None:
+            rsi = redrawing_curve.get("stroke_idx")
+            rseg = redrawing_curve.get("seg_idx")
+            if rsi not in selected_strokes or not (0 <= rsi < len(strokes)) or not (0 <= rseg < len(segs_of(strokes[rsi]))):
+                redrawing_curve = None
+        state_selected_curve = selected_curve
+        state_redrawing_curve = redrawing_curve
         state = {
             "tool_mode": tool_mode, "max_points": max_points_per_curve, "boost_points": boost_points,
             "NORMAL_MAX_POINTS": NORMAL_MAX_POINTS, "BOOST_MAX_POINTS": BOOST_MAX_POINTS,
@@ -1344,6 +1477,8 @@ def main():
             "nodes_toggle_rect": nodes_toggle_rect_cache,
             "trace_algorithm": trace_algorithm,
             "trace_algo_rects": trace_algo_rects_cache,
+            "selected_curve": state_selected_curve,
+            "redrawing_curve": state_redrawing_curve,
         }
 
         for event in pygame.event.get():
@@ -1378,8 +1513,9 @@ def main():
                                 strokes.pop(i)
                         selected_strokes.clear(); selected_point = None; transform_drag = None
                 elif event.key == pygame.K_n and tool_mode == "selection":
-                    selection_submode = "nodes" if selection_submode == "transform" else "transform"
-                    selected_point = None; transform_drag = None; drag_last = None
+                    modes = ["transform", "nodes", "curve"]
+                    selection_submode = modes[(modes.index(selection_submode) + 1) % len(modes)] if selection_submode in modes else "transform"
+                    selected_point = None; selected_curve = None; transform_drag = None; drag_last = None; redrawing_curve = None
                 elif event.key in (pygame.K_LEFTBRACKET, pygame.K_MINUS, pygame.K_KP_MINUS):
                     max_points_per_curve = max(2, max_points_per_curve - 1); slider.value = max_points_per_curve
                 elif event.key in (pygame.K_RIGHTBRACKET, pygame.K_EQUALS, pygame.K_PLUS, pygame.K_KP_PLUS):
@@ -1416,8 +1552,28 @@ def main():
                                 break
                     elif tool_mode == "selection" and state.get("nodes_toggle_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
                         r = state["nodes_toggle_rect"]
-                        selection_submode = "nodes" if event.pos[0] >= r.centerx else "transform"
-                        selected_point = None; transform_drag = None; drag_last = None
+                        rel = (event.pos[0] - r.x) / max(1, r.w)
+                        if rel < 1/3:
+                            selection_submode = "transform"
+                        elif rel < 2/3:
+                            selection_submode = "nodes"
+                        else:
+                            selection_submode = "curve"
+                        selected_point = None; selected_curve = None; transform_drag = None; drag_last = None; redrawing_curve = None
+                    elif tool_mode == "selection" and selection_submode == "curve" and state.get("curve_hide_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
+                        if selected_curve and selected_curve[0] in selected_strokes:
+                            si, seg_i = selected_curve
+                            if 0 <= si < len(strokes) and isinstance(strokes[si], dict):
+                                hidden = set(strokes[si].get("hidden_segs", set()) or set())
+                                if seg_i in hidden:
+                                    hidden.discard(seg_i)
+                                else:
+                                    hidden.add(seg_i)
+                                strokes[si]["hidden_segs"] = hidden
+                    elif tool_mode == "selection" and selection_submode == "curve" and state.get("curve_redraw_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
+                        if selected_curve and selected_curve[0] in selected_strokes:
+                            redrawing_curve = {"stroke_idx": selected_curve[0], "seg_idx": selected_curve[1], "points": []}
+                            selected_point = None; transform_drag = None; drag_last = None
                     elif tool_mode == "selection" and selected_strokes:
                         # Modern color picker interactions (apply to all selected strokes)
                         sel_list = sorted(selected_strokes)
@@ -1505,13 +1661,32 @@ def main():
                         shift_held = bool(pygame.key.get_mods() & pygame.KMOD_SHIFT)
                         start_pos = draw_snap_point(cpos, strokes, SNAP_RADIUS, shift_held) or cpos
                         current_points = [start_pos]
+                    elif redrawing_curve is not None:
+                        # Redraw selected curve: capture replacement stroke
+                        redrawing_curve["points"] = [cpos]
                     else:
                         # Selection mode
                         selected_point = None
                         transform_drag = None
                         mods = pygame.key.get_mods()
                         shift = bool(mods & pygame.KMOD_SHIFT)
-                        if selection_submode == "transform":
+                        if selection_submode == "curve":
+                            if len(selected_strokes) == 1:
+                                si = next(iter(selected_strokes))
+                                if 0 <= si < len(strokes):
+                                    seg_i = hit_test_segment(strokes[si], cpos)
+                                    if seg_i is not None:
+                                        selected_curve = (si, seg_i)
+                                    # keep stroke selected; allow changing selection via normal hit below if missed
+                            # fall through to allow selecting a different stroke
+                            if selected_curve is None or hit_test_segment(strokes[selected_curve[0]], cpos) is None:
+                                hit = hit_test_stroke(cpos, strokes)
+                                if hit is not None and (len(selected_strokes) != 1 or hit != next(iter(selected_strokes))):
+                                    selected_strokes = {hit}
+                                    selected_curve = None
+                            if len(selected_strokes) != 1 or (selected_curve and selected_curve[0] not in selected_strokes):
+                                selected_curve = None
+                        elif selection_submode == "transform":
                             handled = False
                             if selected_strokes:
                                 bb = combined_bbox(strokes, selected_strokes)
@@ -1650,6 +1825,12 @@ def main():
                                     strokes[si]["stroke_color"] = set_color_alpha(strokes[si].get("stroke_color", (0.1,0.1,0.15,1.0)), new_alpha)
                                 elif strokes[si].get("fill_color") is not None:
                                     strokes[si]["fill_color"] = set_color_alpha(strokes[si].get("fill_color"), new_alpha)
+                elif redrawing_curve is not None and pygame.mouse.get_pressed()[0]:
+                    cpos = clamp_to_canvas(event.pos)
+                    pts = redrawing_curve.get("points", [])
+                    if not pts or math.hypot(cpos[0]-pts[-1][0], cpos[1]-pts[-1][1]) >= 2.0:
+                        pts.append(cpos)
+                    redrawing_curve["points"] = pts
                 elif drawing and tool_mode == "draw":
                     cpos = clamp_to_canvas(event.pos)
                     extras = [current_points[0]] if current_points else None
@@ -1711,7 +1892,14 @@ def main():
                 # (translation handled above when drag_last is set)
 
             elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
-                if drawing and tool_mode == "draw":
+                if redrawing_curve is not None:
+                    si = redrawing_curve.get("stroke_idx")
+                    seg_i = redrawing_curve.get("seg_idx")
+                    pts = redrawing_curve.get("points", [])
+                    if si is not None and seg_i is not None and 0 <= si < len(strokes) and len(pts) >= 2:
+                        strokes[si] = redraw_curve_segment(strokes[si], seg_i, pts)
+                    redrawing_curve = None
+                elif drawing and tool_mode == "draw":
                     drawing = False
                     cpos = clamp_to_canvas(event.pos)
                     extras = [current_points[0]] if current_points else None
@@ -1739,8 +1927,12 @@ def main():
                 max_points_per_curve = slider.value
 
         # Draw scene (Cairo) and blit at canvas offset
-        active = current_points if (drawing and tool_mode == "draw") else None
-        draw_scene(cairo_surface, strokes, active, snap_point=hover_snap, selected_indices=selected_strokes, edit_mode=(tool_mode == "selection"), selection_submode=selection_submode)
+        active = current_points if (drawing and tool_mode == "draw") else (redrawing_curve.get("points") if redrawing_curve else None)
+        draw_scene(
+            cairo_surface, strokes, active, snap_point=hover_snap,
+            selected_indices=selected_strokes, edit_mode=(tool_mode == "selection"),
+            selection_submode=selection_submode, selected_curve=selected_curve,
+        )
         frame = surface_to_pygame(cairo_surface)
         screen.fill((230, 233, 238))
         screen.blit(frame, (CANVAS_X, 0))
