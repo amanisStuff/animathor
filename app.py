@@ -1659,15 +1659,21 @@ def main():
         mouse_pos = pygame.mouse.get_pos()
         hover_snap = None
         hover_snap_kind = "connect"
-        if tool_mode == "draw" and in_canvas(mouse_pos):
+        if in_canvas(mouse_pos) and (tool_mode == "draw" or redrawing_curve is not None):
             cpos = to_canvas(mouse_pos)
-            extras = [current_points[0]] if (drawing and current_points) else None
-            if drawing and tool_mode == "draw":
+            if redrawing_curve is not None:
+                rpts = redrawing_curve.get("points", [])
+                extras = [rpts[0]] if rpts else None
                 shift_held = bool(pygame.key.get_mods() & pygame.KMOD_SHIFT)
                 hover_snap, hover_snap_kind = draw_snap_info(cpos, strokes, SNAP_RADIUS, shift_held, extra_points=extras)
-            else:
-                hover_snap = nearest_endpoint(cpos, strokes, SNAP_RADIUS, extra_points=extras)
-                hover_snap_kind = "connect" if hover_snap is not None else "connect"
+            elif tool_mode == "draw":
+                extras = [current_points[0]] if (drawing and current_points) else None
+                if drawing:
+                    shift_held = bool(pygame.key.get_mods() & pygame.KMOD_SHIFT)
+                    hover_snap, hover_snap_kind = draw_snap_info(cpos, strokes, SNAP_RADIUS, shift_held, extra_points=extras)
+                else:
+                    hover_snap = nearest_endpoint(cpos, strokes, SNAP_RADIUS, extra_points=extras)
+                    hover_snap_kind = "connect" if hover_snap is not None else "connect"
 
         stroke_swatch_rects = list(swatch_rects_cache["stroke"])
         fill_swatch_rects = list(swatch_rects_cache["fill"])
@@ -1725,11 +1731,19 @@ def main():
 
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
-                    running = False
-                elif event.key in (pygame.K_LSHIFT, pygame.K_RSHIFT) and drawing and tool_mode == "draw" and current_points:
-                    snap = nearest_snap_point(current_points[0], strokes, SNAP_RADIUS)
-                    if snap is not None:
-                        current_points[0] = snap
+                    if redrawing_curve is not None:
+                        redrawing_curve = None
+                    else:
+                        running = False
+                elif event.key in (pygame.K_LSHIFT, pygame.K_RSHIFT):
+                    if drawing and tool_mode == "draw" and current_points:
+                        snap = nearest_snap_point(current_points[0], strokes, SNAP_RADIUS)
+                        if snap is not None:
+                            current_points[0] = snap
+                    elif redrawing_curve is not None and redrawing_curve.get("started") and redrawing_curve.get("points"):
+                        snap = nearest_snap_point(redrawing_curve["points"][0], strokes, SNAP_RADIUS)
+                        if snap is not None:
+                            redrawing_curve["points"][0] = snap
                 elif event.key == pygame.K_c:
                     strokes.clear(); selected_strokes.clear(); selected_point = None; transform_drag = None
                 elif event.key == pygame.K_z and (pygame.key.get_mods() & pygame.KMOD_CTRL):
@@ -1752,10 +1766,15 @@ def main():
                     limit = BOOST_MAX_POINTS if boost_points else NORMAL_MAX_POINTS
                     max_points_per_curve = min(limit, max_points_per_curve + 1); slider.value = max_points_per_curve
             elif event.type == pygame.KEYUP:
-                if event.key in (pygame.K_LSHIFT, pygame.K_RSHIFT) and drawing and tool_mode == "draw" and current_points:
-                    snap = nearest_snap_point(current_points[-1], strokes, SNAP_RADIUS)
-                    if snap is not None:
-                        current_points[-1] = snap
+                if event.key in (pygame.K_LSHIFT, pygame.K_RSHIFT):
+                    if drawing and tool_mode == "draw" and current_points:
+                        snap = nearest_snap_point(current_points[-1], strokes, SNAP_RADIUS)
+                        if snap is not None:
+                            current_points[-1] = snap
+                    elif redrawing_curve is not None and redrawing_curve.get("started") and redrawing_curve.get("points"):
+                        snap = nearest_snap_point(redrawing_curve["points"][-1], strokes, SNAP_RADIUS)
+                        if snap is not None:
+                            redrawing_curve["points"][-1] = snap
 
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 if btn_draw.hit(event.pos):
@@ -1897,8 +1916,10 @@ def main():
                         start_pos = draw_snap_point(cpos, strokes, SNAP_RADIUS, shift_held) or cpos
                         current_points = [start_pos]
                     elif redrawing_curve is not None:
-                        # Redraw selected stroke/component: start capture on canvas click-drag
-                        redrawing_curve["points"] = [cpos]
+                        # Redraw selected stroke/component: focused draw with snap features
+                        shift_held = bool(pygame.key.get_mods() & pygame.KMOD_SHIFT)
+                        start_pos = draw_snap_point(cpos, strokes, SNAP_RADIUS, shift_held) or cpos
+                        redrawing_curve["points"] = [start_pos]
                         redrawing_curve["started"] = True
                     else:
                         # Selection mode
@@ -2065,8 +2086,14 @@ def main():
                 elif redrawing_curve is not None and redrawing_curve.get("started") and pygame.mouse.get_pressed()[0]:
                     cpos = clamp_to_canvas(event.pos)
                     pts = redrawing_curve.get("points", [])
-                    if not pts or math.hypot(cpos[0]-pts[-1][0], cpos[1]-pts[-1][1]) >= 2.0:
-                        pts.append(cpos)
+                    extras = [pts[0]] if pts else None
+                    shift_held = bool(pygame.key.get_mods() & pygame.KMOD_SHIFT)
+                    end_snap = draw_snap_point(cpos, strokes, SNAP_RADIUS, shift_held, extra_points=extras)
+                    sample_pos = end_snap if end_snap is not None else cpos
+                    if not pts or math.hypot(sample_pos[0]-pts[-1][0], sample_pos[1]-pts[-1][1]) >= 2.0:
+                        pts.append(sample_pos)
+                    elif end_snap is not None and pts[-1] != end_snap:
+                        pts[-1] = end_snap
                     redrawing_curve["points"] = pts
                 elif drawing and tool_mode == "draw":
                     cpos = clamp_to_canvas(event.pos)
@@ -2134,6 +2161,15 @@ def main():
                         si = redrawing_curve.get("stroke_idx")
                         comp_i = redrawing_curve.get("comp_idx", redrawing_curve.get("seg_idx"))
                         pts = redrawing_curve.get("points", [])
+                        if pts:
+                            cpos = clamp_to_canvas(event.pos)
+                            extras = [pts[0]] if pts else None
+                            shift_held = bool(pygame.key.get_mods() & pygame.KMOD_SHIFT)
+                            end_snap = draw_snap_point(cpos, strokes, SNAP_RADIUS, shift_held, extra_points=extras)
+                            if end_snap is not None:
+                                pts[-1] = end_snap
+                            elif pts[-1] != cpos:
+                                pts.append(cpos)
                         if si is not None and comp_i is not None and 0 <= si < len(strokes) and len(pts) >= 2:
                             strokes[si] = redraw_stroke_component(strokes[si], comp_i, pts)
                         redrawing_curve = None
