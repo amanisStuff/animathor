@@ -1602,6 +1602,8 @@ def main():
                     "nofill": pygame.Rect(0,0,0,0), "alpha": pygame.Rect(0,0,0,0)}
     trace_algo_rects_cache = {}
     nodes_toggle_rect_cache = pygame.Rect(0, 0, 0, 0)
+    curve_hide_rect_cache = pygame.Rect(0, 0, 0, 0)
+    curve_redraw_rect_cache = pygame.Rect(0, 0, 0, 0)
     swatch_rects_cache = {
         "stroke": [pygame.Rect(0, 0, 0, 0) for _ in STROKE_SWATCHES],
         "fill": [pygame.Rect(0, 0, 0, 0) for _ in STROKE_SWATCHES],  # presets sized to STROKE_SWATCHES in picker
@@ -1661,6 +1663,8 @@ def main():
             "trace_algo_rects": trace_algo_rects_cache,
             "selected_curve": state_selected_curve,
             "redrawing_curve": state_redrawing_curve,
+            "curve_hide_rect": curve_hide_rect_cache,
+            "curve_redraw_rect": curve_redraw_rect_cache,
         }
 
         for event in pygame.event.get():
@@ -2167,6 +2171,8 @@ def main():
         picker_rects["alpha"] = state.get("alpha_rect", picker_rects["alpha"])
         trace_algo_rects_cache = state.get("trace_algo_rects", trace_algo_rects_cache)
         nodes_toggle_rect_cache = state.get("nodes_toggle_rect", nodes_toggle_rect_cache)
+        curve_hide_rect_cache = state.get("curve_hide_rect", curve_hide_rect_cache)
+        curve_redraw_rect_cache = state.get("curve_redraw_rect", curve_redraw_rect_cache)
         swatch_rects_cache["stroke"] = list(state.get("stroke_swatch_rects", swatch_rects_cache["stroke"]))
         swatch_rects_cache["fill"] = list(state.get("fill_swatch_rects", swatch_rects_cache["fill"]))
 
