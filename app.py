@@ -368,13 +368,60 @@ def nearest_point_on_strokes(pos, strokes, radius):
     return best
 
 
-def hit_test_stroke(pos, strokes, threshold=8.0):
+def _stroke_polyline(stroke, samples=12):
+    pts = []
+    segs = segs_of(stroke)
+    if not segs:
+        return pts
+    pts.append(segs[0][0])
+    for p0, c1, c2, p3 in segs:
+        for i in range(1, samples + 1):
+            t = i / samples
+            pts.append(_cubic_point(p0, c1, c2, p3, t))
+    return pts
+
+
+def _point_in_poly(pos, poly):
+    # ray casting
+    x, y = pos
+    inside = False
+    n = len(poly)
+    if n < 3:
+        return False
+    j = n - 1
+    for i in range(n):
+        xi, yi = poly[i]
+        xj, yj = poly[j]
+        intersect = ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / ((yj - yi) or 1e-12) + xi)
+        if intersect:
+            inside = not inside
+        j = i
+    return inside
+
+
+def hit_test_stroke(pos, strokes, threshold=10.0):
+    """Hit test strokes by curve proximity and filled interior (topmost first)."""
     for i in range(len(strokes) - 1, -1, -1):
-        segs = segs_of(strokes[i])
-        for p0, c1, c2, p3 in segs:
-            for a, b in ((p0, p3), (p0, c1), (c1, c2), (c2, p3)):
-                if _dist_point_seg(pos, a, b) <= threshold:
-                    return i
+        stroke = strokes[i]
+        segs = segs_of(stroke)
+        if not segs:
+            continue
+        # quick bbox reject (expanded by threshold)
+        bb = stroke_bbox(stroke)
+        if bb:
+            x1, y1, x2, y2 = bb
+            if not (x1 - threshold <= pos[0] <= x2 + threshold and y1 - threshold <= pos[1] <= y2 + threshold):
+                continue
+        # distance to actual curve
+        for seg in segs:
+            _, d = _nearest_point_on_cubic(pos, seg)
+            if d <= threshold:
+                return i
+        # filled/closed interior
+        if isinstance(stroke, dict) and stroke.get("fill_color") is not None and _is_closed_segs(segs, 6.0):
+            poly = _stroke_polyline(stroke, samples=10)
+            if _point_in_poly(pos, poly):
+                return i
     return None
 
 
