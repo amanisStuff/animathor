@@ -616,6 +616,20 @@ def point_in_bbox(bbox, pos):
     return x1 <= pos[0] <= x2 and y1 <= pos[1] <= y2
 
 
+def rects_intersect(a, b):
+    if a is None or b is None:
+        return False
+    ax1, ay1, ax2, ay2 = a
+    bx1, by1, bx2, by2 = b
+    return not (ax2 < bx1 or bx2 < ax1 or ay2 < by1 or by2 < ay1)
+
+
+def normalize_rect(p1, p2):
+    x1, y1 = p1
+    x2, y2 = p2
+    return (min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2))
+
+
 def _anchor_handle_slots(seg_list, seg_index, anchor_name, closed):
     """Slots [(seg_index, 'c1'|'c2')] for handles attached to an anchor."""
     n = len(seg_list)
@@ -1611,11 +1625,12 @@ def main():
     tool_mode = "draw"
     selected_strokes = set()
     selected_point = None
-    selected_curve = None  # (stroke_idx, seg_idx) in curve edit mode
-    redrawing_curve = None  # {"stroke_idx", "seg_idx", "points"} while redrawing
+    selected_curve = None  # (stroke_idx, comp_idx) in curve edit mode
+    redrawing_curve = None  # {"stroke_idx", "comp_idx", "points", "started", "fixed_start", "fixed_end"}
     drag_last = None
     selection_submode = "transform"  # "transform", "nodes", or "curve"
     transform_drag = None  # {"handle": name, "start_mouse": (x,y), "start_strokes": {i: copy}, "center": (cx,cy), "start_bbox": bbox}
+    marquee_select = None  # {"start": (x,y), "current": (x,y), "add": bool}
     max_points_per_curve = 4
     boost_points = False
     NORMAL_MAX_POINTS = 5
@@ -1967,7 +1982,7 @@ def main():
                                 selected_strokes = {hit}
                                 comp_i = hit_test_component(strokes[hit], cpos) if 0 <= hit < len(strokes) else None
                                 selected_curve = (hit, comp_i) if comp_i is not None else None
-                            elif hit is None and not (pygame.key.get_mods() & pygame.KMOD_SHIFT):
+                            elif hit is None and not shift:
                                 selected_strokes.clear(); selected_curve = None
                             if len(selected_strokes) != 1 or (selected_curve and selected_curve[0] not in selected_strokes):
                                 selected_curve = None
@@ -2013,8 +2028,8 @@ def main():
                                     else:
                                         drag_last = None
                                 else:
-                                    if not shift:
-                                        selected_strokes.clear()
+                                    # start marquee selection on empty area
+                                    marquee_select = {"start": cpos, "current": cpos, "add": shift}
                                     drag_last = None
                         else:
                             # Nodes mode: point editing only for single selection
@@ -2125,6 +2140,8 @@ def main():
                         if pts:
                             pts[-1] = sample_pos
                     redrawing_curve["points"] = pts
+                elif marquee_select is not None and tool_mode == "selection" and pygame.mouse.get_pressed()[0]:
+                    marquee_select["current"] = clamp_to_canvas(event.pos)
                 elif drawing and tool_mode == "draw":
                     cpos = clamp_to_canvas(event.pos)
                     extras = [current_points[0]] if current_points else None
@@ -2186,7 +2203,18 @@ def main():
                 # (translation handled above when drag_last is set)
 
             elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
-                if redrawing_curve is not None:
+                if marquee_select is not None and tool_mode == "selection":
+                    r = normalize_rect(marquee_select["start"], marquee_select.get("current", marquee_select["start"]))
+                    if abs(r[2]-r[0]) >= 3 or abs(r[3]-r[1]) >= 3:
+                        picked = {i for i, st in enumerate(strokes) if rects_intersect(r, stroke_bbox(st))}
+                        if marquee_select.get("add"):
+                            selected_strokes |= picked
+                        else:
+                            selected_strokes = picked
+                    elif not marquee_select.get("add"):
+                        selected_strokes.clear()
+                    marquee_select = None
+                elif redrawing_curve is not None:
                     if redrawing_curve.get("started"):
                         si = redrawing_curve.get("stroke_idx")
                         comp_i = redrawing_curve.get("comp_idx", redrawing_curve.get("seg_idx"))
@@ -2256,6 +2284,17 @@ def main():
         frame = surface_to_pygame(cairo_surface)
         screen.fill((230, 233, 238))
         screen.blit(frame, (CANVAS_X, 0))
+
+        # marquee selection overlay
+        if marquee_select is not None and tool_mode == "selection":
+            r = normalize_rect(marquee_select["start"], marquee_select.get("current", marquee_select["start"]))
+            rx1, ry1, rx2, ry2 = r
+            rect = pygame.Rect(int(rx1 + CANVAS_X), int(ry1), int(rx2 - rx1), int(ry2 - ry1))
+            if rect.w > 0 or rect.h > 0:
+                surf = pygame.Surface((max(1, rect.w), max(1, rect.h)), pygame.SRCALPHA)
+                surf.fill((60, 120, 220, 40))
+                screen.blit(surf, rect.topleft)
+                pygame.draw.rect(screen, (60, 120, 220), rect, 1)
 
         # Need swatch rects for this frame's layout - draw panel and capture by recomputing? we passed refs in state but draw_panel fills them during draw
         draw_left_toolbar(screen, mouse_pos, tool_mode, btn_draw, btn_select)
