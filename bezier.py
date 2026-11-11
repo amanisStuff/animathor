@@ -124,6 +124,24 @@ def _normalize_t(points):
     return [d / total for d in dists]
 
 
+def smooth_points(points, iterations=1):
+    """Smooth a polyline with endpoint-preserving neighbor averaging."""
+    pts = list(points)
+    if len(pts) < 3 or iterations <= 0:
+        return pts
+    for _ in range(iterations):
+        if len(pts) < 3:
+            break
+        new_pts = [pts[0]]
+        for i in range(1, len(pts) - 1):
+            x = (pts[i - 1][0] + pts[i][0] * 2 + pts[i + 1][0]) / 4.0
+            y = (pts[i - 1][1] + pts[i][1] * 2 + pts[i + 1][1]) / 4.0
+            new_pts.append((x, y))
+        new_pts.append(pts[-1])
+        pts = new_pts
+    return pts
+
+
 def fit_single_cubic_bezier(points):
     """Fit one cubic Bezier curve to stroke points.
 
@@ -177,13 +195,110 @@ def fit_single_cubic_bezier(points):
     return [(p0, c1, c2, p3)]
 
 
-def stroke_to_beziers(points, simplify_epsilon=2.0, tension=0.0, max_points=None, mode="poly"):
+def _indices_for_simplified(smoothed, simplified, eps=1e-9):
+    """Return indices in smoothed for each point in simplified (subsequence)."""
+    indices = []
+    j = 0
+    for i, p in enumerate(smoothed):
+        if j >= len(simplified):
+            break
+        q = simplified[j]
+        if abs(p[0] - q[0]) <= eps and abs(p[1] - q[1]) <= eps:
+            indices.append(i)
+            j += 1
+    # Fallback: if matching failed (e.g. due to float quirks), map by nearest in order
+    if len(indices) != len(simplified):
+        indices = []
+        start = 0
+        for q in simplified:
+            best_i = start
+            best_d = float("inf")
+            for i in range(start, len(smoothed)):
+                d = (smoothed[i][0] - q[0]) ** 2 + (smoothed[i][1] - q[1]) ** 2
+                if d < best_d:
+                    best_d = d
+                    best_i = i
+            indices.append(best_i)
+            start = best_i + 1
+    return indices
+
+
+def enforce_smooth_internal_joins(beziers):
+    """Make handles symmetric at internal joints between adjacent segments.
+
+    Least-squares fitting per segment can produce mismatched (non-mirrored)
+    handles at shared anchors. Internal joins in a traced stroke should be
+    smooth/symmetric, so we average opposing handle vectors around each joint.
+    """
+    if len(beziers) < 2:
+        return beziers
+    segs = [list(s) for s in beziers]
+    for k in range(len(segs) - 1):
+        # joint between seg k (p3) and seg k+1 (p0)
+        anchor = segs[k][3]
+        segs[k + 1][0] = anchor
+        c2 = segs[k][2]      # incoming handle
+        c1 = segs[k + 1][1]  # outgoing handle
+        # symmetric: c1 - anchor == anchor - c2
+        v_in = (anchor[0] - c2[0], anchor[1] - c2[1])
+        v_out = (c1[0] - anchor[0], c1[1] - anchor[1])
+        vx = (v_in[0] + v_out[0]) / 2.0
+        vy = (v_in[1] + v_out[1]) / 2.0
+        segs[k][2] = (anchor[0] - vx, anchor[1] - vy)
+        segs[k + 1][1] = (anchor[0] + vx, anchor[1] + vy)
+    return [tuple(s) for s in segs]
+
+
+def fit_polyline_to_beziers(smoothed, simplified):
+    """Fit cubic Bezier segments to smoothed stroke, one per simplified interval.
+
+    Endpoints of each segment are the simplified anchor points; control points
+    are least-squares fitted to the original/smoothed stroke samples in that
+    interval for a closer reproduction of the drawn stroke.
+    """
+    if len(simplified) < 2:
+        return []
+    if len(simplified) == 2:
+        # fit to all points between endpoints
+        return fit_single_cubic_bezier(smoothed if smoothed else simplified)
+
+    indices = _indices_for_simplified(smoothed, simplified)
+    beziers = []
+    for k in range(len(indices) - 1):
+        i0, i1 = indices[k], indices[k + 1]
+        if i1 < i0:
+            i0, i1 = i1, i0
+        seg_pts = smoothed[i0:i1 + 1]
+        if len(seg_pts) < 2:
+            seg_pts = [simplified[k], simplified[k + 1]]
+        # Ensure endpoints match anchors exactly
+        if seg_pts[0] != simplified[k]:
+            seg_pts = [simplified[k]] + list(seg_pts[1:])
+        if seg_pts[-1] != simplified[k + 1]:
+            seg_pts = list(seg_pts[:-1]) + [simplified[k + 1]]
+        fitted = fit_single_cubic_bezier(seg_pts)
+        if fitted:
+            beziers.append(fitted[0])
+        else:
+            # fallback straight segment
+            p0, p3 = simplified[k], simplified[k + 1]
+            c1 = _add(_mul(p0, 2 / 3), _mul(p3, 1 / 3))
+            c2 = _add(_mul(p0, 1 / 3), _mul(p3, 2 / 3))
+            beziers.append((p0, c1, c2, p3))
+    return enforce_smooth_internal_joins(beziers)
+
+
+def stroke_to_beziers(points, simplify_epsilon=2.0, tension=0.0, max_points=None, mode="poly", algorithm=None):
     """Convert a raw stroke to cubic Bezier curve(s).
 
-    mode:
-      - "poly": simplify stroke and fit a chain of cubic Bezier segments
-        (Catmull-Rom to Bezier). `max_points` limits simplified points.
+    algorithm (preferred):
+      - "fit": (default) simplify to anchor points and least-squares fit control
+        points per segment to best replicate the stroke. Respects max_points.
+      - "catmull-rom": simplify to anchor points and derive control points from
+        Catmull-Rom tangents (faster heuristic, may fit less closely).
       - "single": fit one cubic Bezier curve to the whole stroke.
+
+    mode is kept for backward compatibility ("single" -> single, "poly" -> fit).
     """
     if len(points) < 2:
         return []
@@ -195,10 +310,16 @@ def stroke_to_beziers(points, simplify_epsilon=2.0, tension=0.0, max_points=None
     if len(filtered) < 2:
         return []
 
-    if mode == "single":
-        return fit_single_cubic_bezier(filtered)
+    # Smooth input slightly to reduce jitter and produce smoother curves/edges
+    smoothed = smooth_points(filtered, iterations=2)
 
-    simplified = rdp(filtered, simplify_epsilon)
+    if algorithm is None:
+        algorithm = "single" if mode == "single" else "fit"
+
+    if algorithm == "single":
+        return fit_single_cubic_bezier(smoothed)
+
+    simplified = rdp(smoothed, simplify_epsilon)
 
     if max_points is not None:
         try:
@@ -210,10 +331,20 @@ def stroke_to_beziers(points, simplify_epsilon=2.0, tension=0.0, max_points=None
         # Increase simplification tolerance until within limit (or capped)
         for _ in range(12):
             eps *= 1.6
-            simplified = rdp(filtered, eps)
+            simplified = rdp(smoothed, eps)
             if len(simplified) <= max_points:
                 break
         if len(simplified) > max_points:
             simplified = _subsample(simplified, max_points)
 
-    return catmull_rom_to_beziers(simplified, tension=tension)
+    if len(simplified) < 2:
+        return []
+    if len(simplified) == 2:
+        # best replication for a single segment regardless of heuristic algorithm
+        return fit_single_cubic_bezier(smoothed)
+
+    if algorithm == "catmull-rom":
+        return catmull_rom_to_beziers(simplified, tension=tension)
+
+    # Default "fit": fit control points to the stroke for better replication
+    return fit_polyline_to_beziers(smoothed, simplified)

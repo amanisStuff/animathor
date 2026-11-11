@@ -5,9 +5,10 @@ A small vector drawing program that captures freehand mouse strokes and converts
 ## How it works
 
 1. **Capture**: While you drag the left mouse button, the app samples points along your stroke.
-2. **Simplify**: On release, the stroke is simplified with the Ramer–Douglas–Peucker algorithm to remove redundant points while preserving shape.
-3. **Fit to Bézier**: The simplified polyline is converted into a sequence of cubic Bézier segments (Catmull–Rom to Bézier conversion).
-4. **Render**: All fitted curves are drawn with Cairo (`cairo.Context.curve_to`). Control points/handles are shown lightly so you can see the resulting Bézier structure.
+2. **Snap & merge**: Hover near either endpoint of an existing (open) stroke to see a circle indicator. Starting or ending a stroke on that indicator snaps it to the endpoint; connected strokes are automatically **merged into a continuous path** (edges merged). You can also snap a stroke's end to its own start to close a shape; once a shape is closed, its endpoints are no longer offered as snap targets so no more lines can be added to it.
+3. **Simplify**: On release, the stroke is simplified with the Ramer–Douglas–Peucker algorithm to remove redundant points while preserving shape.
+4. **Fit to Bézier**: The simplified polyline is converted into a sequence of cubic Bézier segments (Catmull–Rom to Bézier conversion).
+5. **Render**: All fitted curves are drawn with Cairo (`cairo.Context.curve_to`). Control points/handles are shown lightly so you can see the resulting Bézier structure.
 
 ## Requirements
 
@@ -31,19 +32,29 @@ python app.py
 
 ## Controls
 
-- **Left mouse drag (canvas)**: draw a stroke
-- **Right-side GUI panel**:
-  - **Max points / curve** slider and `-` / `+` buttons to set the curve point limit (2–500)
-  - **Undo** and **Clear** buttons
-  - Live stroke count and backend info
-- **Keyboard shortcuts**:
-  - **`[` / `-`**: decrease max points per curve
-  - **`]` / `+`**: increase max points per curve
-  - **Ctrl+Z**: undo last stroke
-  - **C**: clear canvas
-  - **Esc**: quit
+- **Left toolbar**: simple icon tools to switch between **Draw** and **Edit** modes.
+- **Canvas**: middle area where you draw and edit (Cairo 2D rendering).
+- **Right panel**: context-sensitive controls for the active tool.
 
-The **max points per curve** setting limits how many simplified points from each stroke are used when fitting Bézier segments (lower = simpler curves, higher = more detail).
+### Draw mode
+- **Left mouse drag (canvas)**: draw a stroke
+- **Hover endpoints**: circle indicator shows snap targets; start/end can snap to open endpoints (and a stroke can snap its end to its own start to close)
+- **Connected strokes auto-merge** into continuous paths; once a shape is closed, no more lines can be added/snapped to it
+- **Panel**: **Points / curve** slider (**2–5** default, 4), **Boost limit** to allow above 5 (up to 100), Undo/Clear
+
+### Edit mode
+- **Click stroke**: select it (highlighted) and reveal editable Bézier anchors/handles (pen-tool-style)
+- **Drag anchors (circles)**: move curve endpoints/join points; handles attached to the anchor move with it, and joined segments stay connected
+- **Drag handles (squares)**: adjust curve shape. Handles mirror at **smooth/symmetric** joins inside a stroke; joins where two drawn strokes were **merged/closed** are **corners** with independent handles
+- **Drag path (not on a point)**: move the whole selected stroke
+- **Click empty canvas**: deselect
+- **Delete / Backspace**: remove selected stroke
+- **Panel**: **Fill** and **Stroke** options for the selected stroke (stroke color, stroke width, fill color/none), plus Undo/Clear
+- Drawing and snapping are disabled in Edit mode
+
+- **Keyboard shortcuts**: `[` / `-` and `]` / `+` adjust points per curve, **Ctrl+Z** undo, **C** clear, **Esc** quit
+
+The **points per curve** setting limits how many simplified points from each stroke are used when fitting Bézier segments (lower = simpler curves, higher = more detail).
 
 ## Files
 

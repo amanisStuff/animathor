@@ -12,12 +12,14 @@ import pygame
 
 from bezier import stroke_to_beziers
 
-CANVAS_W, HEIGHT = 1000, 700
+LEFT_BAR_W = 56
+CANVAS_W, HEIGHT = 980, 700
 PANEL_W = 280
-WIDTH = CANVAS_W + PANEL_W
+WIDTH = LEFT_BAR_W + CANVAS_W + PANEL_W
+CANVAS_X = LEFT_BAR_W
+PANEL_X = LEFT_BAR_W + CANVAS_W
+
 BG_COLOR = (1.0, 1.0, 1.0)
-STROKE_COLOR = (0.1, 0.1, 0.15)
-STROKE_WIDTH = 3.0
 ACTIVE_COLOR = (0.2, 0.4, 0.9)
 
 PANEL_BG = (245, 247, 250)
@@ -28,51 +30,799 @@ BUTTON_BG = (255, 255, 255)
 BUTTON_HOVER = (232, 238, 248)
 BUTTON_BORDER = (180, 190, 205)
 ACCENT = (60, 120, 220)
+TOOLBAR_BG = (236, 239, 244)
+TOOL_ACTIVE = (220, 232, 248)
+
+STROKE_SWATCHES = [
+    (0.1, 0.1, 0.15),
+    (0.9, 0.2, 0.2),
+    (0.15, 0.55, 0.2),
+    (0.15, 0.35, 0.9),
+    (0.95, 0.6, 0.1),
+]
+FILL_SWATCHES = [
+    None,
+    (0.85, 0.92, 1.0),
+    (1.0, 0.9, 0.85),
+    (0.88, 1.0, 0.88),
+    (0.97, 0.88, 1.0),
+    (1.0, 1.0, 1.0),
+]
 
 
 def make_cairo_surface(width, height):
-    # ARGB32 in cairo is native-endian; on little-endian it's BGRA in memory.
     surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, width, height)
     return surface
 
 
-def draw_scene(cairo_surface, strokes, active_stroke=None):
+TRACE_ALGORITHMS = [
+    ("fit", "Fit"),
+    ("catmull-rom", "C-R"),
+    ("single", "Single"),
+]
+
+
+def new_stroke(segs, stroke_color=(0.1, 0.1, 0.15), stroke_width=3.0, fill_color=None, corner_anchors=None, algorithm="fit"):
+    return {
+        "segs": segs,
+        "stroke_color": stroke_color,
+        "stroke_width": float(stroke_width),
+        "fill_color": fill_color,
+        # Anchors where two *strokes* were joined (merge/closure). These are corners.
+        # Internal joins inside one drawn stroke remain smooth (symmetric handles).
+        "corner_anchors": set(corner_anchors or ()),
+        "algorithm": algorithm or "fit",
+    }
+
+
+def segs_of(stroke):
+    return stroke["segs"] if isinstance(stroke, dict) else stroke
+
+
+def _corners(stroke):
+    if isinstance(stroke, dict):
+        return set(stroke.get("corner_anchors", ()))
+    return set()
+
+
+def _set_corners(stroke, corners):
+    if isinstance(stroke, dict):
+        out = dict(stroke)
+        out["corner_anchors"] = set(corners)
+        return out
+    return stroke
+
+
+def _shift_corners(corners, delta):
+    return {(i + delta, name) for (i, name) in corners}
+
+
+def clamp(v, lo, hi):
+    return max(lo, min(hi, v))
+
+
+def color_rgb(c, default=(0.1, 0.1, 0.15)):
+    if c is None:
+        c = default
+    return (float(c[0]), float(c[1]), float(c[2]))
+
+
+def color_alpha(c, default=1.0):
+    if c is None:
+        return default
+    if len(c) >= 4:
+        return float(c[3])
+    return default
+
+
+def color_rgba(c, default=(0.1, 0.1, 0.15, 1.0)):
+    if c is None:
+        return default
+    r, g, b = c[0], c[1], c[2]
+    a = c[3] if len(c) >= 4 else 1.0
+    return (float(r), float(g), float(b), float(a))
+
+
+def set_color_alpha(c, alpha):
+    rgb = color_rgb(c)
+    return (rgb[0], rgb[1], rgb[2], float(clamp(alpha, 0.0, 1.0)))
+
+
+def rgb_to_hsv(r, g, b, *_):
+    """r,g,b in 0..1 -> h in 0..360, s,v in 0..1"""
+    mx = max(r, g, b)
+    mn = min(r, g, b)
+    d = mx - mn
+    if d == 0:
+        h = 0.0
+    elif mx == r:
+        h = (60 * ((g - b) / d) + 360) % 360
+    elif mx == g:
+        h = (60 * ((b - r) / d) + 120) % 360
+    else:
+        h = (60 * ((r - g) / d) + 240) % 360
+    s = 0.0 if mx == 0 else d / mx
+    v = mx
+    return h, s, v
+
+
+def hsv_to_rgb(h, s, v):
+    """h in 0..360, s,v in 0..1 -> r,g,b in 0..1"""
+    h = h % 360
+    c = v * s
+    x = c * (1 - abs((h / 60.0) % 2 - 1))
+    m = v - c
+    if 0 <= h < 60:
+        rp, gp, bp = c, x, 0
+    elif 60 <= h < 120:
+        rp, gp, bp = x, c, 0
+    elif 120 <= h < 180:
+        rp, gp, bp = 0, c, x
+    elif 180 <= h < 240:
+        rp, gp, bp = 0, x, c
+    elif 240 <= h < 300:
+        rp, gp, bp = x, 0, c
+    else:
+        rp, gp, bp = c, 0, x
+    return (rp + m, gp + m, bp + m)
+
+
+def rgb_to_hex(rgb):
+    r, g, b = [int(clamp(x, 0, 1) * 255) for x in color_rgb(rgb)]
+    return f"#{r:02X}{g:02X}{b:02X}"
+
+
+def stroke_start(stroke):
+    segs = segs_of(stroke)
+    return segs[0][0]
+
+
+def stroke_end(stroke):
+    segs = segs_of(stroke)
+    return segs[-1][3]
+
+
+def _pt_key(pt, eps=6.0):
+    return (round(pt[0] / eps), round(pt[1] / eps))
+
+
+def _build_endpoint_graph(strokes, eps=6.0):
+    nodes = {}
+    for stroke in strokes:
+        segs = segs_of(stroke)
+        if not segs:
+            continue
+        a = stroke_start(stroke)
+        b = stroke_end(stroke)
+        ka = _pt_key(a, eps)
+        kb = _pt_key(b, eps)
+        if ka not in nodes:
+            nodes[ka] = {"pt": a, "degree": 0, "adj": set()}
+        if kb not in nodes:
+            nodes[kb] = {"pt": b, "degree": 0, "adj": set()}
+        nodes[ka]["pt"] = a
+        nodes[kb]["pt"] = b
+        nodes[ka]["degree"] += 1
+        nodes[kb]["degree"] += 1
+        if ka != kb:
+            nodes[ka]["adj"].add(kb)
+            nodes[kb]["adj"].add(ka)
+    return nodes
+
+
+def _open_node_keys(strokes, eps=6.0):
+    nodes = _build_endpoint_graph(strokes, eps=eps)
+    visited = set()
+    open_nodes = set()
+    for start in nodes:
+        if start in visited:
+            continue
+        stack = [start]
+        comp = []
+        visited.add(start)
+        while stack:
+            cur = stack.pop()
+            comp.append(cur)
+            for nb in nodes[cur]["adj"]:
+                if nb not in visited:
+                    visited.add(nb)
+                    stack.append(nb)
+        is_closed_component = all(nodes[n]["degree"] >= 2 for n in comp)
+        if not is_closed_component:
+            open_nodes.update(comp)
+    return open_nodes, nodes
+
+
+def stroke_endpoints(strokes, include_closed=False):
+    pts = []
+    if include_closed:
+        for stroke in strokes:
+            if segs_of(stroke):
+                pts.append(stroke_start(stroke))
+                pts.append(stroke_end(stroke))
+        return pts
+    open_nodes, nodes = _open_node_keys(strokes)
+    for k in open_nodes:
+        pts.append(nodes[k]["pt"])
+    return pts
+
+
+def nearest_endpoint(pos, strokes, radius, extra_points=None):
+    best = None
+    best_d = radius
+    candidates = stroke_endpoints(strokes)
+    if extra_points:
+        candidates.extend(extra_points)
+    for pt in candidates:
+        d = math.hypot(pos[0] - pt[0], pos[1] - pt[1])
+        if d <= best_d:
+            best_d = d
+            best = pt
+    return best
+
+
+def nearest_snap_point(pos, strokes, radius, extra_points=None):
+    """Nearest endpoint or point on any existing curve/edge within radius."""
+    best = nearest_endpoint(pos, strokes, radius, extra_points=extra_points)
+    best_d = math.hypot(pos[0] - best[0], pos[1] - best[1]) if best is not None else radius
+    curve_pt = nearest_point_on_strokes(pos, strokes, best_d)
+    if curve_pt is not None:
+        return curve_pt
+    return best
+
+
+def draw_snap_point(pos, strokes, radius, shift_held, extra_points=None):
+    """Snap target while drawing: curve/edge only when Shift is held, else endpoints."""
+    if shift_held:
+        return nearest_snap_point(pos, strokes, radius, extra_points=extra_points)
+    return nearest_endpoint(pos, strokes, radius, extra_points=extra_points)
+
+
+def _dist_point_seg(p, a, b):
+    px, py = p
+    ax, ay = a
+    bx, by = b
+    dx, dy = bx - ax, by - ay
+    if dx == 0 and dy == 0:
+        return math.hypot(px - ax, py - ay)
+    t = ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)
+    t = clamp(t, 0.0, 1.0)
+    proj = (ax + t * dx, ay + t * dy)
+    return math.hypot(px - proj[0], py - proj[1])
+
+
+def _cubic_point(p0, c1, c2, p3, t):
+    mt = 1.0 - t
+    x = (mt**3) * p0[0] + 3 * (mt**2) * t * c1[0] + 3 * mt * (t**2) * c2[0] + (t**3) * p3[0]
+    y = (mt**3) * p0[1] + 3 * (mt**2) * t * c1[1] + 3 * mt * (t**2) * c2[1] + (t**3) * p3[1]
+    return (x, y)
+
+
+def _nearest_point_on_cubic(pos, seg, samples=24):
+    best_pt = None
+    best_d = float("inf")
+    p0, c1, c2, p3 = seg
+    prev = p0
+    for i in range(1, samples + 1):
+        t = i / samples
+        pt = _cubic_point(p0, c1, c2, p3, t)
+        # closest point on linear approximation between prev and pt
+        px, py = pos
+        ax, ay = prev
+        bx, by = pt
+        dx, dy = bx - ax, by - ay
+        if dx == 0 and dy == 0:
+            proj = (ax, ay)
+        else:
+            u = ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)
+            u = clamp(u, 0.0, 1.0)
+            proj = (ax + u * dx, ay + u * dy)
+        d = math.hypot(px - proj[0], py - proj[1])
+        if d < best_d:
+            best_d = d
+            best_pt = proj
+        prev = pt
+    return best_pt, best_d
+
+
+def nearest_point_on_strokes(pos, strokes, radius):
+    best = None
+    best_d = radius
+    for stroke in strokes:
+        segs = segs_of(stroke)
+        for seg in segs:
+            pt, d = _nearest_point_on_cubic(pos, seg)
+            if d <= best_d and pt is not None:
+                best_d = d
+                best = pt
+    return best
+
+
+def hit_test_stroke(pos, strokes, threshold=8.0):
+    for i in range(len(strokes) - 1, -1, -1):
+        segs = segs_of(strokes[i])
+        for p0, c1, c2, p3 in segs:
+            for a, b in ((p0, p3), (p0, c1), (c1, c2), (c2, p3)):
+                if _dist_point_seg(pos, a, b) <= threshold:
+                    return i
+    return None
+
+
+def hit_test_point(stroke, pos, radius=8.0):
+    segs = segs_of(stroke)
+    best = None
+    best_d = radius
+    names = ("p0", "c1", "c2", "p3")
+    for i, seg in enumerate(segs):
+        for j, name in enumerate(names):
+            if name == "p0" and i > 0:
+                continue
+            pt = seg[j]
+            d = math.hypot(pos[0] - pt[0], pos[1] - pt[1])
+            if d <= best_d:
+                best_d = d
+                best = (i, name)
+    return best
+
+
+def _is_closed_segs(segs, eps=6.0):
+    if not segs:
+        return False
+    return _pts_close(segs[0][0], segs[-1][3], eps)
+
+
+def is_corner_anchor(stroke, seg_index, point_name):
+    """Return True if this anchor is a corner (join between two drawn strokes).
+
+    Rule:
+    - Points where two strokes were joined/closed are corners (independent handles).
+    - Remaining anchors (smooth joins inside a stroke) are symmetric (mirrored handles).
+    """
+    segs = segs_of(stroke)
+    if not segs:
+        return False
+    if point_name == "c1":
+        anchor_name = "p0"
+    elif point_name == "c2":
+        anchor_name = "p3"
+    else:
+        anchor_name = point_name
+    return (seg_index, anchor_name) in _corners(stroke)
+
+
+def translate_stroke(stroke, dx, dy):
+    segs = segs_of(stroke)
+    moved = []
+    for p0, c1, c2, p3 in segs:
+        moved.append((
+            (p0[0] + dx, p0[1] + dy),
+            (c1[0] + dx, c1[1] + dy),
+            (c2[0] + dx, c2[1] + dy),
+            (p3[0] + dx, p3[1] + dy),
+        ))
+    if isinstance(stroke, dict):
+        out = dict(stroke)
+        out["segs"] = moved
+        return out
+    return moved
+
+
+def _mirror_handle(anchor, handle):
+    return (2 * anchor[0] - handle[0], 2 * anchor[1] - handle[1])
+
+
+def apply_affine(pt, cx, cy, ca, sa, sx, sy):
+    """Apply scale (sx,sy) then rotate (ca,sa) around (cx,cy)."""
+    x, y = (pt[0] - cx) * sx, (pt[1] - cy) * sy
+    return (cx + x * ca - y * sa, cy + x * sa + y * ca)
+
+
+def stroke_bbox(stroke):
+    segs = segs_of(stroke)
+    if not segs:
+        return None
+    xs, ys = [], []
+    for p0, c1, c2, p3 in segs:
+        for pt in (p0, c1, c2, p3):
+            xs.append(pt[0]); ys.append(pt[1])
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+def transform_stroke(stroke, cx, cy, angle_rad, scale_x, scale_y=None):
+    """Scale and rotate stroke around (cx,cy)."""
+    if scale_y is None:
+        scale_y = scale_x
+    ca, sa = math.cos(angle_rad), math.sin(angle_rad)
+    segs = segs_of(stroke)
+    moved = []
+    for p0, c1, c2, p3 in segs:
+        moved.append((
+            apply_affine(p0, cx, cy, ca, sa, scale_x, scale_y),
+            apply_affine(c1, cx, cy, ca, sa, scale_x, scale_y),
+            apply_affine(c2, cx, cy, ca, sa, scale_x, scale_y),
+            apply_affine(p3, cx, cy, ca, sa, scale_x, scale_y),
+        ))
+    if isinstance(stroke, dict):
+        out = dict(stroke)
+        out["segs"] = moved
+        return out
+    return moved
+
+
+def bbox_handles(bbox, rot_offset=22):
+    """Return dict of handle_name -> (x,y) for bbox (x1,y1,x2,y2)."""
+    x1, y1, x2, y2 = bbox
+    mx, my = (x1 + x2) / 2, (y1 + y2) / 2
+    return {
+        "nw": (x1, y1), "n": (mx, y1), "ne": (x2, y1),
+        "e": (x2, my), "se": (x2, y2), "s": (mx, y2),
+        "sw": (x1, y2), "w": (x1, my),
+        "rot": (mx, y1 - rot_offset),
+    }
+
+
+def hit_test_bbox_handle(bbox, pos, radius=8.0):
+    if bbox is None:
+        return None
+    for name, pt in bbox_handles(bbox).items():
+        if math.hypot(pos[0] - pt[0], pos[1] - pt[1]) <= radius:
+            return name
+    return None
+
+
+def point_in_bbox(bbox, pos):
+    if bbox is None:
+        return False
+    x1, y1, x2, y2 = bbox
+    return x1 <= pos[0] <= x2 and y1 <= pos[1] <= y2
+
+
+def _anchor_handle_slots(seg_list, seg_index, anchor_name, closed):
+    """Slots [(seg_index, 'c1'|'c2')] for handles attached to an anchor."""
+    n = len(seg_list)
+    slots = []
+    if anchor_name == "p0":
+        slots.append((seg_index, "c1"))
+        if seg_index > 0:
+            slots.append((seg_index - 1, "c2"))
+        elif closed and n > 1:
+            slots.append((n - 1, "c2"))
+    elif anchor_name == "p3":
+        slots.append((seg_index, "c2"))
+        if seg_index < n - 1:
+            slots.append((seg_index + 1, "c1"))
+        elif closed and n > 1:
+            slots.append((0, "c1"))
+    return slots
+
+
+def set_stroke_point(stroke, seg_index, point_name, new_pos):
+    segs = segs_of(stroke)
+    idx_map = {"p0": 0, "c1": 1, "c2": 2, "p3": 3}
+    j = idx_map[point_name]
+    seg_list = [list(s) for s in segs]
+    old_pt = tuple(seg_list[seg_index][j])
+    new_pt = (float(new_pos[0]), float(new_pos[1]))
+    seg_list[seg_index][j] = new_pt
+
+    closed = _is_closed_segs(segs)
+    n = len(seg_list)
+
+    if point_name in ("p0", "p3"):
+        # Anchor moved: handles attached to this anchor follow it.
+        dx = new_pt[0] - old_pt[0]
+        dy = new_pt[1] - old_pt[1]
+        for si, hname in _anchor_handle_slots(seg_list, seg_index, point_name, closed):
+            hj = 1 if hname == "c1" else 2
+            h = seg_list[si][hj]
+            seg_list[si][hj] = (h[0] + dx, h[1] + dy)
+
+        # Keep adjacent segment anchors joined
+        if point_name == "p3" and seg_index + 1 < n:
+            seg_list[seg_index + 1][0] = new_pt
+        elif point_name == "p0" and seg_index > 0:
+            seg_list[seg_index - 1][3] = new_pt
+        elif point_name == "p0" and seg_index == 0 and closed and n > 1:
+            seg_list[-1][3] = new_pt
+        elif point_name == "p3" and seg_index == n - 1 and closed and n > 1:
+            seg_list[0][0] = new_pt
+
+        # Symmetric anchors keep their two handles mirrored across the anchor.
+        # Corner anchors (joins between drawn strokes) keep independent handles.
+        if not is_corner_anchor(stroke, seg_index, point_name):
+            slots = _anchor_handle_slots(seg_list, seg_index, point_name, closed)
+            if len(slots) >= 2:
+                (s1, h1), (s2, h2) = slots[0], slots[1]
+                j1 = 1 if h1 == "c1" else 2
+                j2 = 1 if h2 == "c1" else 2
+                seg_list[s2][j2] = _mirror_handle(new_pt, seg_list[s1][j1])
+
+    elif point_name in ("c1", "c2"):
+        # Handle moved. For symmetric anchors, mirror the opposite handle.
+        anchor_name = "p0" if point_name == "c1" else "p3"
+        anchor = tuple(seg_list[seg_index][0 if anchor_name == "p0" else 3])
+        anchor = (float(anchor[0]), float(anchor[1]))
+        if not is_corner_anchor(stroke, seg_index, anchor_name):
+            slots = _anchor_handle_slots(seg_list, seg_index, anchor_name, closed)
+            my = (seg_index, point_name)
+            for si, hname in slots:
+                if (si, hname) == my:
+                    continue
+                hj = 1 if hname == "c1" else 2
+                seg_list[si][hj] = _mirror_handle(anchor, new_pt)
+                break
+
+    new_segs = [tuple(s) for s in seg_list]
+    if isinstance(stroke, dict):
+        out = dict(stroke)
+        out["segs"] = new_segs
+        return out
+    return new_segs
+
+
+def reverse_stroke(stroke):
+    segs = segs_of(stroke)
+    rev = []
+    for p0, c1, c2, p3 in reversed(segs):
+        rev.append((p3, c2, c1, p0))
+    if isinstance(stroke, dict):
+        out = dict(stroke)
+        out["segs"] = rev
+        n = len(segs)
+        out["corner_anchors"] = {
+            (n - 1 - i, "p3" if name == "p0" else "p0")
+            for (i, name) in _corners(stroke)
+        }
+        return out
+    return rev
+
+
+def _pts_close(a, b, eps=6.0):
+    return math.hypot(a[0] - b[0], a[1] - b[1]) <= eps
+
+
+def _with_segs(stroke, segs):
+    if isinstance(stroke, dict):
+        out = dict(stroke)
+        out["segs"] = segs
+        return out
+    return segs
+
+
+def _close_path_if_needed(stroke, eps=6.0):
+    """If a path's endpoints are within eps, make them exactly identical.
+
+    Closing a path joins the two ends, so the closure anchor is marked as a corner.
+    """
+    segs = segs_of(stroke)
+    if not segs:
+        return stroke
+    start = segs[0][0]
+    end = segs[-1][3]
+    if not _pts_close(start, end, eps):
+        return stroke
+    segs2 = list(segs)
+    if start != end:
+        last = segs2[-1]
+        segs2[-1] = (last[0], last[1], last[2], (float(start[0]), float(start[1])))
+    out = _with_segs(stroke, segs2)
+    n = len(segs2)
+    corners = _corners(out) | {(0, "p0"), (n - 1, "p3")}
+    return _set_corners(out, corners)
+
+
+def merge_connected_strokes(strokes, eps=6.0):
+    paths = [s for s in strokes if segs_of(s)]
+    changed = True
+    while changed:
+        changed = False
+        n = len(paths)
+        for i in range(n):
+            a = paths[i]
+            a_segs = segs_of(a)
+            if not a_segs:
+                continue
+            a_start, a_end = a_segs[0][0], a_segs[-1][3]
+            for j in range(i + 1, n):
+                b = paths[j]
+                b_segs = segs_of(b)
+                if not b_segs:
+                    continue
+                b_start, b_end = b_segs[0][0], b_segs[-1][3]
+                merged = None
+                if _pts_close(a_end, b_start, eps):
+                    # A followed by B; join at a_end
+                    b2 = list(b_segs)
+                    b2[0] = (a_end, b2[0][1], b2[0][2], b2[0][3])
+                    na = len(a_segs)
+                    corners = _corners(a) | _shift_corners(_corners(b), na) | {(na - 1, "p3"), (na, "p0")}
+                    merged = _set_corners(_with_segs(a, list(a_segs) + b2), corners)
+                elif _pts_close(a_end, b_end, eps):
+                    # A followed by reversed B; join at a_end
+                    rb = reverse_stroke(b)
+                    rb_segs = list(segs_of(rb))
+                    rb_segs[0] = (a_end, rb_segs[0][1], rb_segs[0][2], rb_segs[0][3])
+                    na = len(a_segs)
+                    corners = _corners(a) | _shift_corners(_corners(rb), na) | {(na - 1, "p3"), (na, "p0")}
+                    merged = _set_corners(_with_segs(a, list(a_segs) + rb_segs), corners)
+                elif _pts_close(a_start, b_end, eps):
+                    # B followed by A; join at b_end
+                    a2 = list(a_segs)
+                    a2[0] = (b_end, a2[0][1], a2[0][2], a2[0][3])
+                    nb = len(b_segs)
+                    corners = _corners(b) | _shift_corners(_corners(a), nb) | {(nb - 1, "p3"), (nb, "p0")}
+                    merged = _set_corners(_with_segs(b, list(b_segs) + a2), corners)
+                elif _pts_close(a_start, b_start, eps):
+                    # Reversed B followed by A; join at rb end
+                    rb = reverse_stroke(b)
+                    rb_segs = list(segs_of(rb))
+                    a2 = list(a_segs)
+                    a2[0] = (rb_segs[-1][3], a2[0][1], a2[0][2], a2[0][3])
+                    nb = len(rb_segs)
+                    corners = _corners(rb) | _shift_corners(_corners(a), nb) | {(nb - 1, "p3"), (nb, "p0")}
+                    merged = _set_corners(_with_segs(rb, rb_segs + a2), corners)
+                if merged is not None:
+                    paths[i] = _close_path_if_needed(merged, eps=eps)
+                    paths.pop(j)
+                    changed = True
+                    break
+            if changed:
+                break
+    for i in range(len(paths)):
+        paths[i] = _close_path_if_needed(paths[i], eps=eps)
+    return paths
+
+
+def draw_stroke_path(ctx, stroke):
+    segs = segs_of(stroke)
+    if not segs:
+        return False
+    ctx.new_path()
+    p0 = segs[0][0]
+    ctx.move_to(p0[0], p0[1])
+    for _, c1, c2, p3 in segs:
+        ctx.curve_to(c1[0], c1[1], c2[0], c2[1], p3[0], p3[1])
+    # if closed, close path for nicer fill
+    if _pts_close(segs[0][0], segs[-1][3], 6.0):
+        ctx.close_path()
+    return True
+
+
+def _selection_set(selected_indices):
+    if selected_indices is None:
+        return set()
+    if isinstance(selected_indices, int):
+        return {selected_indices}
+    return set(selected_indices)
+
+
+def combined_bbox(strokes, indices):
+    xs, ys = [], []
+    for i in indices:
+        if 0 <= i < len(strokes):
+            bb = stroke_bbox(strokes[i])
+            if bb:
+                x1, y1, x2, y2 = bb
+                xs.extend([x1, x2]); ys.extend([y1, y2])
+    if not xs:
+        return None
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, selected_index=None, selected_indices=None, edit_mode=False, selection_submode="transform"):
+    # Backward compat: selected_index (single) or selected_indices (collection)
+    if selected_indices is None and selected_index is not None:
+        selected_indices = selected_index
+    sel_set = _selection_set(selected_indices)
+
     ctx = cairo.Context(cairo_surface)
-    # Background
+    try:
+        ctx.set_antialias(cairo.ANTIALIAS_BEST)
+    except Exception:
+        pass
     ctx.set_source_rgb(*BG_COLOR)
     ctx.paint()
-
     ctx.set_line_cap(cairo.LINE_CAP_ROUND)
     ctx.set_line_join(cairo.LINE_JOIN_ROUND)
 
-    # Finished strokes as fitted Bezier curves
-    for stroke in strokes:
-        if not stroke:
+    for idx, stroke in enumerate(strokes):
+        segs = segs_of(stroke)
+        if not segs:
             continue
-        ctx.new_path()
-        ctx.set_source_rgb(*STROKE_COLOR)
-        ctx.set_line_width(STROKE_WIDTH)
-        p0 = stroke[0][0]
-        ctx.move_to(p0[0], p0[1])
-        for _, c1, c2, p3 in stroke:
-            ctx.curve_to(c1[0], c1[1], c2[0], c2[1], p3[0], p3[1])
-        ctx.stroke()
+        stroke_color = stroke.get("stroke_color", (0.1, 0.1, 0.15)) if isinstance(stroke, dict) else (0.1, 0.1, 0.15)
+        stroke_width = stroke.get("stroke_width", 3.0) if isinstance(stroke, dict) else 3.0
+        fill_color = stroke.get("fill_color") if isinstance(stroke, dict) else None
+        is_selected_stroke = (idx in sel_set and edit_mode)
 
-        # Draw control handles lightly to show Bezier structure
-        ctx.set_source_rgba(0.9, 0.3, 0.2, 0.35)
-        ctx.set_line_width(1.0)
-        for p0, c1, c2, p3 in stroke:
-            ctx.move_to(p0[0], p0[1])
-            ctx.line_to(c1[0], c1[1])
-            ctx.move_to(p3[0], p3[1])
-            ctx.line_to(c2[0], c2[1])
-        ctx.stroke()
-        for p0, c1, c2, p3 in stroke:
-            for pt in (p0, c1, c2, p3):
-                ctx.arc(pt[0], pt[1], 2.0, 0, 2 * math.pi)
-                ctx.fill()
+        # Selection highlight behind the stroke so the actual stroke color stays visible
+        if is_selected_stroke and draw_stroke_path(ctx, stroke):
+            ctx.set_source_rgba(0.1, 0.45, 0.95, 0.35)
+            ctx.set_line_width(stroke_width + 4.0)
+            ctx.stroke()
 
-    # Active/raw stroke preview
+        if fill_color is not None:
+            if draw_stroke_path(ctx, stroke):
+                ctx.set_source_rgba(*color_rgba(fill_color, (0.0, 0.0, 0.0, 1.0)))
+                ctx.fill_preserve()
+                ctx.set_source_rgba(*color_rgba(stroke_color, (0.1, 0.1, 0.15, 1.0)))
+                ctx.set_line_width(stroke_width)
+                ctx.stroke()
+        else:
+            if draw_stroke_path(ctx, stroke):
+                ctx.set_source_rgba(*color_rgba(stroke_color, (0.1, 0.1, 0.15, 1.0)))
+                ctx.set_line_width(stroke_width)
+                ctx.stroke()
+
+    # Draw selection overlays (nodes for single selection, combined bbox for transform)
+    if edit_mode and sel_set:
+        selected_in_range = [i for i in sel_set if 0 <= i < len(strokes)]
+        if selection_submode == "nodes" and len(selected_in_range) == 1:
+            idx = selected_in_range[0]
+            segs = segs_of(strokes[idx])
+            ctx.set_source_rgba(0.4, 0.5, 0.6, 0.8)
+            ctx.set_line_width(1.0)
+            for si, (p0, c1, c2, p3) in enumerate(segs):
+                ctx.move_to(p0[0], p0[1]); ctx.line_to(c1[0], c1[1])
+                ctx.move_to(p3[0], p3[1]); ctx.line_to(c2[0], c2[1])
+            ctx.stroke()
+            for si, (p0, c1, c2, p3) in enumerate(segs):
+                if si == 0:
+                    for pt in (p0,):
+                        ctx.set_source_rgb(1, 1, 1); ctx.arc(pt[0], pt[1], 4.5, 0, 2*math.pi); ctx.fill()
+                        ctx.set_source_rgb(0.1, 0.45, 0.95); ctx.set_line_width(2.0); ctx.arc(pt[0], pt[1], 4.5, 0, 2*math.pi); ctx.stroke()
+                for pt in (p3,):
+                    ctx.set_source_rgb(1, 1, 1); ctx.arc(pt[0], pt[1], 4.5, 0, 2*math.pi); ctx.fill()
+                    ctx.set_source_rgb(0.1, 0.45, 0.95); ctx.set_line_width(2.0); ctx.arc(pt[0], pt[1], 4.5, 0, 2*math.pi); ctx.stroke()
+                for pt in (c1, c2):
+                    ctx.set_source_rgb(1, 1, 1); ctx.rectangle(pt[0]-3.5, pt[1]-3.5, 7, 7); ctx.fill_preserve()
+                    ctx.set_source_rgb(0.85, 0.35, 0.2); ctx.set_line_width(1.5); ctx.stroke()
+        elif selection_submode == "transform":
+            bbox = combined_bbox(strokes, selected_in_range)
+            if bbox:
+                x1, y1, x2, y2 = bbox
+                try:
+                    ctx.set_dash([6, 4])
+                except Exception:
+                    pass
+                ctx.set_source_rgb(0.1, 0.45, 0.95)
+                ctx.set_line_width(1.5)
+                ctx.rectangle(x1, y1, x2 - x1, y2 - y1)
+                ctx.stroke()
+                try:
+                    ctx.set_dash([])
+                except Exception:
+                    pass
+                handles = bbox_handles(bbox)
+                mx = (x1 + x2) / 2
+                ctx.set_source_rgb(0.1, 0.45, 0.95)
+                ctx.set_line_width(1.0)
+                ctx.move_to(mx, y1); ctx.line_to(handles["rot"][0], handles["rot"][1])
+                ctx.stroke()
+                for name, pt in handles.items():
+                    if name == "rot":
+                        ctx.set_source_rgb(1, 1, 1); ctx.arc(pt[0], pt[1], 5.0, 0, 2*math.pi); ctx.fill()
+                        ctx.set_source_rgb(0.1, 0.45, 0.95); ctx.set_line_width(1.5); ctx.arc(pt[0], pt[1], 5.0, 0, 2*math.pi); ctx.stroke()
+                    else:
+                        ctx.set_source_rgb(1, 1, 1); ctx.rectangle(pt[0]-4, pt[1]-4, 8, 8); ctx.fill_preserve()
+                        ctx.set_source_rgb(0.1, 0.45, 0.95); ctx.set_line_width(1.5); ctx.stroke()
+        elif selection_submode == "nodes" and len(selected_in_range) > 1:
+            # Multi-selection: show combined bbox (node editing requires single selection)
+            bbox = combined_bbox(strokes, selected_in_range)
+            if bbox:
+                x1, y1, x2, y2 = bbox
+                try:
+                    ctx.set_dash([4, 4])
+                except Exception:
+                    pass
+                ctx.set_source_rgb(0.1, 0.45, 0.95)
+                ctx.set_line_width(1.2)
+                ctx.rectangle(x1, y1, x2 - x1, y2 - y1)
+                ctx.stroke()
+                try:
+                    ctx.set_dash([])
+                except Exception:
+                    pass
+
     if active_stroke and len(active_stroke) >= 2:
         ctx.set_source_rgb(*ACTIVE_COLOR)
         ctx.set_line_width(2.0)
@@ -81,6 +831,15 @@ def draw_scene(cairo_surface, strokes, active_stroke=None):
         for x, y in active_stroke[1:]:
             ctx.line_to(x, y)
         ctx.stroke()
+
+    if snap_point is not None:
+        x, y = snap_point
+        ctx.set_source_rgba(0.2, 0.6, 1.0, 0.25)
+        ctx.arc(x, y, 11.0, 0, 2 * math.pi); ctx.fill()
+        ctx.set_source_rgb(0.15, 0.45, 0.95)
+        ctx.set_line_width(2.0)
+        ctx.arc(x, y, 11.0, 0, 2 * math.pi); ctx.stroke()
+        ctx.arc(x, y, 2.5, 0, 2 * math.pi); ctx.fill()
 
     cairo_surface.flush()
 
@@ -93,12 +852,7 @@ def surface_to_pygame(cairo_surface):
         data = buf.tobytes()
     except Exception:
         data = bytes(buf)
-    # Cairo ARGB32 is premultiplied BGRA on little-endian; good enough for display.
     return pygame.image.frombuffer(data, (width, height), "BGRA")
-
-
-def clamp(v, lo, hi):
-    return max(lo, min(hi, v))
 
 
 class Button:
@@ -106,12 +860,19 @@ class Button:
         self.rect = pygame.Rect(rect)
         self.label = label
 
-    def draw(self, screen, font, mouse_pos):
+    def draw(self, screen, font, mouse_pos, active=False):
         hover = self.rect.collidepoint(mouse_pos)
-        color = BUTTON_HOVER if hover else BUTTON_BG
+        if active:
+            color = TOOL_ACTIVE
+            border = ACCENT
+            tw = 2
+        else:
+            color = BUTTON_HOVER if hover else BUTTON_BG
+            border = BUTTON_BORDER
+            tw = 1
         pygame.draw.rect(screen, color, self.rect, border_radius=6)
-        pygame.draw.rect(screen, BUTTON_BORDER, self.rect, width=1, border_radius=6)
-        txt = font.render(self.label, True, TEXT_COLOR)
+        pygame.draw.rect(screen, border, self.rect, width=tw, border_radius=6)
+        txt = font.render(self.label, True, ACCENT if active else TEXT_COLOR)
         screen.blit(txt, txt.get_rect(center=self.rect.center))
 
     def hit(self, pos):
@@ -165,69 +926,335 @@ class Slider:
         pygame.draw.circle(screen, ACCENT, (hx, self.track.centery), self.handle_r, width=2)
 
 
-def draw_panel(screen, fonts, mouse_pos, max_points, stroke_count, buttons, slider):
+def draw_icon(screen, kind, rect, active):
+    cx, cy = rect.center
+    color = ACCENT if active else (70, 80, 95)
+    if kind == "draw":
+        # pencil
+        pygame.draw.line(screen, color, (cx - 8, cy + 8), (cx + 6, cy - 6), 3)
+        pygame.draw.line(screen, color, (cx + 6, cy - 6), (cx + 10, cy - 10), 3)
+        pygame.draw.polygon(screen, color, [(cx - 10, cy + 10), (cx - 4, cy + 9), (cx - 9, cy + 4)])
+    elif kind == "selection":
+        # cursor/arrow (same as former "edit")
+        pts = [(cx - 7, cy - 10), (cx - 7, cy + 8), (cx - 2, cy + 3), (cx + 2, cy + 10), (cx + 5, cy + 8), (cx + 1, cy + 1), (cx + 7, cy + 1)]
+        pygame.draw.polygon(screen, color, pts)
+
+
+def draw_left_toolbar(screen, mouse_pos, tool_mode, btn_draw, btn_select):
+    bar = pygame.Rect(0, 0, LEFT_BAR_W, HEIGHT)
+    pygame.draw.rect(screen, TOOLBAR_BG, bar)
+    pygame.draw.line(screen, PANEL_BORDER, (LEFT_BAR_W - 1, 0), (LEFT_BAR_W - 1, HEIGHT), 2)
+    for kind, btn in (("draw", btn_draw), ("selection", btn_select)):
+        active = (tool_mode == kind)
+        hover = btn.rect.collidepoint(mouse_pos)
+        bg = TOOL_ACTIVE if active else (BUTTON_HOVER if hover else (248, 250, 252))
+        border = ACCENT if active else BUTTON_BORDER
+        pygame.draw.rect(screen, bg, btn.rect, border_radius=8)
+        pygame.draw.rect(screen, border, btn.rect, width=2 if active else 1, border_radius=8)
+        draw_icon(screen, kind, btn.rect, active)
+
+
+def draw_swatch(screen, rect, color, selected, mouse_pos):
+    hover = rect.collidepoint(mouse_pos)
+    pygame.draw.rect(screen, (255, 255, 255), rect, border_radius=4)
+    inner = rect.inflate(-6, -6)
+    if color is None:
+        # "none" swatch
+        pygame.draw.rect(screen, (250, 250, 250), inner, border_radius=3)
+        pygame.draw.line(screen, (200, 60, 60), inner.topleft, inner.bottomright, 2)
+    else:
+        rgb = tuple(int(c * 255) for c in color_rgb(color))
+        pygame.draw.rect(screen, rgb, inner, border_radius=3)
+    border = ACCENT if selected else (ACCENT if hover else BUTTON_BORDER)
+    pygame.draw.rect(screen, border, rect, width=2 if selected else 1, border_radius=4)
+
+
+def draw_panel(screen, fonts, mouse_pos, state):
     font, font_small, font_title = fonts
-    panel_rect = pygame.Rect(CANVAS_W, 0, PANEL_W, HEIGHT)
+    panel_rect = pygame.Rect(PANEL_X, 0, PANEL_W, HEIGHT)
     pygame.draw.rect(screen, PANEL_BG, panel_rect)
-    pygame.draw.line(screen, PANEL_BORDER, (CANVAS_W, 0), (CANVAS_W, HEIGHT), 2)
+    pygame.draw.line(screen, PANEL_BORDER, (PANEL_X, 0), (PANEL_X, HEIGHT), 2)
 
-    x = CANVAS_W + 20
-    y = 20
-
-    title = font_title.render("Controls", True, TEXT_COLOR)
+    x = PANEL_X + 20
+    y = 18
+    title = font_title.render("Draw" if state["tool_mode"] == "draw" else "Selection", True, TEXT_COLOR)
     screen.blit(title, (x, y))
-    y += 42
+    y += 36
 
-    # Max points control
-    label = font.render("Max points / curve", True, TEXT_COLOR)
-    screen.blit(label, (x, y))
-    y += 26
-    val = font_title.render(str(max_points), True, ACCENT)
-    screen.blit(val, (x, y - 2))
-    hint = font_small.render("(2 - 500)", True, MUTED_COLOR)
-    screen.blit(hint, (x + val.get_width() + 10, y + 4))
-    y += 34
+    if state["tool_mode"] == "draw":
+        # Points control
+        label = font.render("Points / curve", True, TEXT_COLOR)
+        screen.blit(label, (x, y)); y += 24
+        limit = state["BOOST_MAX_POINTS"] if state["boost_points"] else state["NORMAL_MAX_POINTS"]
+        val = font_title.render(str(state["max_points"]), True, ACCENT)
+        screen.blit(val, (x, y - 2))
+        hint = font_small.render(f"(2 - {limit})", True, MUTED_COLOR)
+        screen.blit(hint, (x + val.get_width() + 10, y + 4)); y += 32
+        state["slider"].track.topleft = (x, y)
+        state["slider"].track.width = PANEL_W - 40
+        state["slider"].draw(screen); y += 24
+        b = state["buttons"]["boost"]
+        b.rect.topleft = (x, y)
+        b.label = "Boost: ON" if state["boost_points"] else "Boost limit"
+        b.draw(screen, font, mouse_pos, active=state["boost_points"]); y += 44
 
-    slider.track.topleft = (x, y)
-    slider.draw(screen)
-    y += 28
+        # Tracing algorithm (per new stroke)
+        screen.blit(font.render("Tracing", True, TEXT_COLOR), (x, y)); y += 22
+        algo = state.get("trace_algorithm", "fit")
+        rects = {}
+        bw = (PANEL_W - 40 - 8) // 3
+        for i, (key, label) in enumerate(TRACE_ALGORITHMS):
+            r = pygame.Rect(x + i * (bw + 4), y, bw, 28)
+            rects[key] = r
+            active = (algo == key)
+            bg = TOOL_ACTIVE if active else (BUTTON_HOVER if r.collidepoint(mouse_pos) else BUTTON_BG)
+            pygame.draw.rect(screen, bg, r, border_radius=6)
+            pygame.draw.rect(screen, ACCENT if active else BUTTON_BORDER, r, 2 if active else 1, border_radius=6)
+            t = font_small.render(label, True, ACCENT if active else TEXT_COLOR)
+            screen.blit(t, t.get_rect(center=r.center))
+        state["trace_algo_rects"] = rects
+        y += 36
 
-    for b in buttons["max"]:
-        b.rect.topleft = (x + (0 if b.label == "-" else 70), y)
-        b.draw(screen, font, mouse_pos)
-    y += 54
+        label2 = font.render("Actions", True, TEXT_COLOR)
+        screen.blit(label2, (x, y)); y += 28
+        for i, b in enumerate(state["buttons"]["actions"]):
+            b.rect.topleft = (x, y + i * 42)
+            b.draw(screen, font, mouse_pos)
+        y += len(state["buttons"]["actions"]) * 42 + 12
 
-    # Actions
-    label2 = font.render("Actions", True, TEXT_COLOR)
-    screen.blit(label2, (x, y))
-    y += 30
-    for i, b in enumerate(buttons["actions"]):
-        b.rect.topleft = (x, y + i * 44)
-        b.draw(screen, font, mouse_pos)
-    y += len(buttons["actions"]) * 44 + 18
+        stats = font_small.render(f"Strokes: {state['stroke_count']} | Backend: {CAIRO_BACKEND}", True, MUTED_COLOR)
+        screen.blit(stats, (x, y)); y += 24
+        help_lines = [
+            "Drag on canvas to draw.",
+            "Hover endpoints to snap.",
+            "Connected edges auto-merge.",
+            "Close shape: snap end to start.",
+            "Closed shapes can't be extended.",
+            "Shortcuts: Ctrl+Z, C, Esc",
+        ]
+    else:
+        # Selection mode: transform operations and modern color selection
+        sel_strokes = state.get("selected_strokes", set())
+        sel_count = len(sel_strokes)
+        # Submode toggle: Transform (bbox) vs Edit Nodes
+        submode = state.get("selection_submode", "transform")
+        toggle = pygame.Rect(x, y, PANEL_W - 40, 30)
+        state["nodes_toggle_rect"] = toggle
+        pygame.draw.rect(screen, BUTTON_BG, toggle, border_radius=6)
+        pygame.draw.rect(screen, BUTTON_BORDER, toggle, 1, border_radius=6)
+        half = toggle.w // 2
+        for i, (label, key) in enumerate((("Transform", "transform"), ("Edit Nodes", "nodes"))):
+            r = pygame.Rect(toggle.x + i * half, toggle.y, half, toggle.h)
+            active = (submode == key)
+            if active:
+                pygame.draw.rect(screen, TOOL_ACTIVE, r.inflate(-4, -4), border_radius=5)
+            t = font_small.render(label, True, ACCENT if active else TEXT_COLOR)
+            screen.blit(t, t.get_rect(center=r.center))
+        y += 38
 
-    # Stats and help
-    stats = font.render("Strokes: %d" % stroke_count, True, TEXT_COLOR)
-    screen.blit(stats, (x, y))
-    y += 28
-    stats2 = font_small.render("Cairo backend: %s" % CAIRO_BACKEND, True, MUTED_COLOR)
-    screen.blit(stats2, (x, y))
-    y += 30
+        if sel_count == 0:
+            info = font_small.render("Select a stroke", True, MUTED_COLOR)
+            screen.blit(info, (x, y)); y += 28
+        else:
+            stroke = state["selected_obj"]
+            if sel_count > 1:
+                screen.blit(font_small.render(f"Multiple selected ({sel_count})", True, MUTED_COLOR), (x, y)); y += 20
+            # Stroke width
+            screen.blit(font.render("Stroke width", True, TEXT_COLOR), (x, y)); y += 22
+            wv = font_title.render(str(int(round(stroke.get("stroke_width", 3)))), True, ACCENT)
+            screen.blit(wv, (x, y - 2)); y += 30
+            state["width_slider"].track.topleft = (x, y)
+            state["width_slider"].track.width = PANEL_W - 40
+            state["width_slider"].draw(screen); y += 20
+            algo_label = next((lbl for k, lbl in TRACE_ALGORITHMS if k == stroke.get("algorithm", "fit")), stroke.get("algorithm", "fit"))
+            if sel_count == 1:
+                screen.blit(font_small.render(f"Tracing: {algo_label}", True, MUTED_COLOR), (x, y)); y += 20
+            else:
+                y += 4
 
-    help_lines = [
-        "Draw: left-drag on canvas",
-        "Shortcuts: Ctrl+Z undo, C clear",
-        "Max pts: [ / ] or - / +",
-        "Esc: quit",
-        "",
-        "Each stroke is simplified and",
-        "fitted to cubic Bezier curves",
-        "rendered with Cairo 2D.",
-    ]
+            # --- Modern color picker ---
+            color_target = state.get("color_target", "stroke")
+            screen.blit(font.render("Color", True, TEXT_COLOR), (x, y)); y += 22
+            # target tabs
+            tab_w = (PANEL_W - 40 - 8) // 2
+            tab_stroke = pygame.Rect(x, y, tab_w, 26)
+            tab_fill = pygame.Rect(x + tab_w + 8, y, tab_w, 26)
+            state["tab_stroke_rect"] = tab_stroke
+            state["tab_fill_rect"] = tab_fill
+            for rect, label, key in ((tab_stroke, "Stroke", "stroke"), (tab_fill, "Fill", "fill")):
+                active = (color_target == key)
+                bg = TOOL_ACTIVE if active else (BUTTON_HOVER if rect.collidepoint(mouse_pos) else BUTTON_BG)
+                pygame.draw.rect(screen, bg, rect, border_radius=6)
+                pygame.draw.rect(screen, ACCENT if active else BUTTON_BORDER, rect, 2 if active else 1, border_radius=6)
+                t = font_small.render(label, True, ACCENT if active else TEXT_COLOR)
+                screen.blit(t, t.get_rect(center=rect.center))
+            y += 32
+
+            # current color for target
+            if color_target == "stroke":
+                cur_color = stroke.get("stroke_color", (0.1, 0.1, 0.15)) or (0.1, 0.1, 0.15)
+            else:
+                cur_color = stroke.get("fill_color", None)
+            display_color = cur_color if cur_color is not None else (1.0, 1.0, 1.0)
+            h, s, vcol = rgb_to_hsv(*display_color)
+            # keep picker state in sync if not dragging
+            if not state.get("picker_drag_sv") and not state.get("picker_drag_hue"):
+                state["picker_h"] = h
+                state["picker_s"] = s
+                state["picker_v"] = vcol
+            ph = state.get("picker_h", h)
+            ps = state.get("picker_s", s)
+            pv = state.get("picker_v", vcol)
+
+            # preview + hex + no-fill
+            preview = pygame.Rect(x, y, 34, 34)
+            pygame.draw.rect(screen, (255, 255, 255), preview, border_radius=6)
+            inner = preview.inflate(-6, -6)
+            if color_target == "fill" and cur_color is None:
+                pygame.draw.rect(screen, (250, 250, 250), inner, border_radius=4)
+                pygame.draw.line(screen, (200, 60, 60), inner.topleft, inner.bottomright, 2)
+                hex_txt = "None"
+            else:
+                rgb_show = tuple(int(c * 255) for c in display_color)
+                pygame.draw.rect(screen, rgb_show, inner, border_radius=4)
+                hex_txt = rgb_to_hex(display_color)
+            pygame.draw.rect(screen, BUTTON_BORDER, preview, 1, border_radius=6)
+            screen.blit(font_small.render(hex_txt, True, TEXT_COLOR), (x + 42, y + 9))
+            # No fill button
+            if color_target == "fill":
+                nofill = pygame.Rect(x + 150, y + 4, 70, 26)
+                state["nofill_rect"] = nofill
+                nf_active = (cur_color is None)
+                pygame.draw.rect(screen, TOOL_ACTIVE if nf_active else BUTTON_BG, nofill, border_radius=6)
+                pygame.draw.rect(screen, ACCENT if nf_active else BUTTON_BORDER, nofill, 1, border_radius=6)
+                nt = font_small.render("No fill", True, ACCENT if nf_active else TEXT_COLOR)
+                screen.blit(nt, nt.get_rect(center=nofill.center))
+            else:
+                state["nofill_rect"] = pygame.Rect(0, 0, 0, 0)
+            y += 40
+
+            # SV square
+            sv_w = PANEL_W - 40
+            sv_h = 110
+            sv_rect = pygame.Rect(x, y, sv_w, sv_h)
+            state["sv_rect"] = sv_rect
+            # draw SV gradient for current hue
+            sv_surf = pygame.Surface((sv_w, sv_h))
+            for ix in range(sv_w):
+                s_val = ix / max(1, sv_w - 1)
+                for iy in range(sv_h):
+                    v_val = 1.0 - iy / max(1, sv_h - 1)
+                    col = hsv_to_rgb(ph, s_val, v_val)
+                    sv_surf.set_at((ix, iy), tuple(int(c * 255) for c in col))
+            screen.blit(sv_surf, sv_rect.topleft)
+            pygame.draw.rect(screen, BUTTON_BORDER, sv_rect, 1, border_radius=4)
+            # SV cursor
+            cxp = sv_rect.x + int(ps * (sv_w - 1))
+            cyp = sv_rect.y + int((1.0 - pv) * (sv_h - 1))
+            pygame.draw.circle(screen, (255, 255, 255), (cxp, cyp), 6, 2)
+            pygame.draw.circle(screen, (0, 0, 0), (cxp, cyp), 6, 1)
+            y += sv_h + 8
+
+            # Hue bar
+            hue_h = 14
+            hue_rect = pygame.Rect(x, y, sv_w, hue_h)
+            state["hue_rect"] = hue_rect
+            for ix in range(sv_w):
+                hh = (ix / max(1, sv_w - 1)) * 360.0
+                col = hsv_to_rgb(hh, 1.0, 1.0)
+                pygame.draw.line(screen, tuple(int(c * 255) for c in col), (hue_rect.x + ix, hue_rect.y), (hue_rect.x + ix, hue_rect.y + hue_h - 1))
+            pygame.draw.rect(screen, BUTTON_BORDER, hue_rect, 1, border_radius=4)
+            hx = hue_rect.x + int((ph / 360.0) * (sv_w - 1))
+            pygame.draw.rect(screen, (255, 255, 255), (hx - 3, hue_rect.y - 2, 6, hue_h + 4), 2, border_radius=2)
+            pygame.draw.rect(screen, (0, 0, 0), (hx - 3, hue_rect.y - 2, 6, hue_h + 4), 1, border_radius=2)
+            y += hue_h + 8
+
+            # Alpha / opacity slider (stroke always; fill only when a fill color exists)
+            show_alpha = (color_target == "stroke") or (cur_color is not None)
+            state["alpha_rect"] = pygame.Rect(0, 0, 0, 0)
+            if show_alpha:
+                cur_alpha = color_alpha(cur_color, 1.0)
+                screen.blit(font_small.render(f"Opacity {int(round(cur_alpha * 100))}%", True, TEXT_COLOR), (x, y))
+                y += 16
+                alpha_h = 12
+                alpha_rect = pygame.Rect(x, y, sv_w, alpha_h)
+                state["alpha_rect"] = alpha_rect
+                # simple gradient bar from transparent to current rgb
+                base_rgb = color_rgb(display_color, (1.0, 1.0, 1.0))
+                for ix in range(sv_w):
+                    a = ix / max(1, sv_w - 1)
+                    # blend over a light checker-like background approximation
+                    bgv = 235 if (ix // 6) % 2 == 0 else 210
+                    r = int((base_rgb[0] * a + (bgv / 255.0) * (1 - a)) * 255)
+                    g = int((base_rgb[1] * a + (bgv / 255.0) * (1 - a)) * 255)
+                    b = int((base_rgb[2] * a + (bgv / 255.0) * (1 - a)) * 255)
+                    pygame.draw.line(screen, (r, g, b), (alpha_rect.x + ix, alpha_rect.y), (alpha_rect.x + ix, alpha_rect.y + alpha_h - 1))
+                pygame.draw.rect(screen, BUTTON_BORDER, alpha_rect, 1, border_radius=4)
+                ax = alpha_rect.x + int(clamp(cur_alpha, 0.0, 1.0) * (sv_w - 1))
+                pygame.draw.rect(screen, (255, 255, 255), (ax - 3, alpha_rect.y - 2, 6, alpha_h + 4), 2, border_radius=2)
+                pygame.draw.rect(screen, (0, 0, 0), (ax - 3, alpha_rect.y - 2, 6, alpha_h + 4), 1, border_radius=2)
+                y += alpha_h + 8
+            else:
+                y += 2
+
+            # Preset swatches
+            presets = STROKE_SWATCHES
+            sw = 26
+            state["stroke_swatch_rects"] = [pygame.Rect(0,0,0,0) for _ in presets]
+            state["fill_swatch_rects"] = [pygame.Rect(0,0,0,0) for _ in presets]
+            for i, col in enumerate(presets):
+                r = pygame.Rect(x + i * (sw + 6), y, sw, sw)
+                if color_target == "stroke":
+                    state["stroke_swatch_rects"][i] = r
+                else:
+                    state["fill_swatch_rects"][i] = r
+                sel_match = (cur_color == col) if cur_color is not None else False
+                draw_swatch(screen, r, col, sel_match, mouse_pos)
+            y += sw + 10
+
+        sel_label = "-" if sel_count == 0 else (str(next(iter(sel_strokes)) + 1) if sel_count == 1 else f"{sel_count}")
+        stats = font_small.render(f"Strokes: {state['stroke_count']} | Selected: {sel_label}", True, MUTED_COLOR)
+        screen.blit(stats, (x, y)); y += 20
+        if state.get("selection_submode", "transform") == "transform":
+            help_lines = [
+                "Click stroke to select.",
+                "Shift+click: multi-select.",
+                "Drag inside box to move.",
+                "Drag handles to scale/rotate.",
+                "N: toggle Transform/Edit Nodes.",
+                "Delete: remove selected.",
+                "Shortcuts: Ctrl+Z, C, Esc",
+            ]
+        else:
+            help_lines = [
+                "Click stroke to select.",
+                "Shift+click: multi-select.",
+                "Drag anchors/handles to edit.",
+                "Smooth joins mirror handles.",
+                "Merged/closed joins are corners.",
+                "N: toggle Transform/Edit Nodes.",
+                "Delete: remove selected.",
+                "Shortcuts: Ctrl+Z, C, Esc",
+            ]
+
     for line in help_lines:
         txt = font_small.render(line, True, MUTED_COLOR)
-        screen.blit(txt, (x, y))
-        y += 20
+        screen.blit(txt, (x, y)); y += 18
+
+
+def to_canvas(pos):
+    return (pos[0] - CANVAS_X, pos[1])
+
+
+def in_canvas(pos):
+    return CANVAS_X <= pos[0] < CANVAS_X + CANVAS_W and 0 <= pos[1] < HEIGHT
+
+
+def clamp_to_canvas(pos):
+    """Map any window position to the nearest point inside the canvas."""
+    cx = clamp(pos[0] - CANVAS_X, 0, CANVAS_W - 1)
+    cy = clamp(pos[1], 0, HEIGHT - 1)
+    return (cx, cy)
 
 
 def main():
@@ -237,98 +1264,511 @@ def main():
     clock = pygame.time.Clock()
 
     cairo_surface = make_cairo_surface(CANVAS_W, HEIGHT)
-    strokes = []  # list of list[(p0,c1,c2,p3)]
+    strokes = []
     current_points = []
     drawing = False
-    max_points_per_curve = 50  # max simplified points per stroke used for Bezier fitting
+    tool_mode = "draw"
+    selected_strokes = set()
+    selected_point = None
+    drag_last = None
+    selection_submode = "transform"  # "transform" (bbox) or "nodes" (point editing)
+    transform_drag = None  # {"handle": name, "start_mouse": (x,y), "start_strokes": {i: copy}, "center": (cx,cy), "start_bbox": bbox}
+    max_points_per_curve = 4
+    boost_points = False
+    NORMAL_MAX_POINTS = 5
+    BOOST_MAX_POINTS = 100
+    trace_algorithm = "fit"  # "fit", "catmull-rom", "single" (per new stroke)
 
     font = pygame.font.SysFont(None, 24)
     font_small = pygame.font.SysFont(None, 20)
     font_title = pygame.font.SysFont(None, 30)
     fonts = (font, font_small, font_title)
 
-    btn_dec = Button((0, 0, 56, 34), "-")
-    btn_inc = Button((0, 0, 56, 34), "+")
+    btn_draw = Button((8, 12, 40, 40), "")
+    btn_select = Button((8, 60, 40, 40), "")
+    btn_boost = Button((0, 0, PANEL_W - 40, 34), "Boost limit")
     btn_undo = Button((0, 0, PANEL_W - 40, 36), "Undo")
     btn_clear = Button((0, 0, PANEL_W - 40, 36), "Clear")
-    buttons = {"max": [btn_dec, btn_inc], "actions": [btn_undo, btn_clear]}
-    slider = Slider(CANVAS_W + 20, 0, PANEL_W - 40, 2, 500, max_points_per_curve)
+    buttons = {"boost": btn_boost, "actions": [btn_undo, btn_clear]}
+    slider = Slider(PANEL_X + 20, 0, PANEL_W - 40, 2, NORMAL_MAX_POINTS, max_points_per_curve)
+    width_slider = Slider(PANEL_X + 20, 0, PANEL_W - 40, 1, 20, 3)
 
+    color_target = "stroke"  # "stroke" or "fill"
+    picker_h, picker_s, picker_v = 0.0, 0.0, 0.1
+    picker_drag_sv = False
+    picker_drag_hue = False
+    picker_drag_alpha = False
+    picker_rects = {"sv": pygame.Rect(0,0,0,0), "hue": pygame.Rect(0,0,0,0),
+                    "tab_stroke": pygame.Rect(0,0,0,0), "tab_fill": pygame.Rect(0,0,0,0),
+                    "nofill": pygame.Rect(0,0,0,0), "alpha": pygame.Rect(0,0,0,0)}
+    trace_algo_rects_cache = {}
+    nodes_toggle_rect_cache = pygame.Rect(0, 0, 0, 0)
+    swatch_rects_cache = {
+        "stroke": [pygame.Rect(0, 0, 0, 0) for _ in STROKE_SWATCHES],
+        "fill": [pygame.Rect(0, 0, 0, 0) for _ in STROKE_SWATCHES],  # presets sized to STROKE_SWATCHES in picker
+    }
+
+    SNAP_RADIUS = 22
     running = True
     while running:
         mouse_pos = pygame.mouse.get_pos()
+        hover_snap = None
+        if tool_mode == "draw" and in_canvas(mouse_pos):
+            cpos = to_canvas(mouse_pos)
+            extras = [current_points[0]] if (drawing and current_points) else None
+            if drawing and tool_mode == "draw":
+                shift_held = bool(pygame.key.get_mods() & pygame.KMOD_SHIFT)
+                hover_snap = draw_snap_point(cpos, strokes, SNAP_RADIUS, shift_held, extra_points=extras)
+            else:
+                hover_snap = nearest_endpoint(cpos, strokes, SNAP_RADIUS, extra_points=extras)
+
+        stroke_swatch_rects = list(swatch_rects_cache["stroke"])
+        fill_swatch_rects = list(swatch_rects_cache["fill"])
+        # sanitize selection indices
+        selected_strokes = {i for i in selected_strokes if 0 <= i < len(strokes)}
+        sel_list = sorted(selected_strokes)
+        primary = sel_list[0] if len(sel_list) == 1 else (sel_list[0] if sel_list else None)
+        sel_obj = strokes[primary] if primary is not None else None
+        state = {
+            "tool_mode": tool_mode, "max_points": max_points_per_curve, "boost_points": boost_points,
+            "NORMAL_MAX_POINTS": NORMAL_MAX_POINTS, "BOOST_MAX_POINTS": BOOST_MAX_POINTS,
+            "slider": slider, "width_slider": width_slider, "buttons": buttons,
+            "stroke_count": len(strokes), "selected_strokes": set(selected_strokes), "selected_obj": sel_obj,
+            "stroke_swatch_rects": stroke_swatch_rects, "fill_swatch_rects": fill_swatch_rects,
+            "color_target": color_target, "picker_h": picker_h, "picker_s": picker_s, "picker_v": picker_v,
+            "picker_drag_sv": picker_drag_sv, "picker_drag_hue": picker_drag_hue, "picker_drag_alpha": picker_drag_alpha,
+            "sv_rect": picker_rects["sv"], "hue_rect": picker_rects["hue"],
+            "tab_stroke_rect": picker_rects["tab_stroke"], "tab_fill_rect": picker_rects["tab_fill"],
+            "nofill_rect": picker_rects["nofill"], "alpha_rect": picker_rects["alpha"],
+            "selection_submode": selection_submode,
+            "nodes_toggle_rect": nodes_toggle_rect_cache,
+            "trace_algorithm": trace_algorithm,
+            "trace_algo_rects": trace_algo_rects_cache,
+        }
+
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
                 break
 
-            # Slider consumes drag/click events on it
             if slider.handle_event(event):
                 max_points_per_curve = slider.value
+            if tool_mode == "selection" and selected_strokes and width_slider.handle_event(event):
+                for si in selected_strokes:
+                    if 0 <= si < len(strokes):
+                        strokes[si]["stroke_width"] = float(width_slider.value)
 
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     running = False
+                elif event.key in (pygame.K_LSHIFT, pygame.K_RSHIFT) and drawing and tool_mode == "draw" and current_points:
+                    snap = nearest_snap_point(current_points[0], strokes, SNAP_RADIUS)
+                    if snap is not None:
+                        current_points[0] = snap
                 elif event.key == pygame.K_c:
-                    strokes.clear()
+                    strokes.clear(); selected_strokes.clear(); selected_point = None; transform_drag = None
                 elif event.key == pygame.K_z and (pygame.key.get_mods() & pygame.KMOD_CTRL):
                     if strokes:
                         strokes.pop()
+                    selected_strokes.clear(); selected_point = None; transform_drag = None
+                elif event.key in (pygame.K_DELETE, pygame.K_BACKSPACE) and tool_mode == "selection":
+                    if selected_strokes:
+                        for i in sorted(selected_strokes, reverse=True):
+                            if 0 <= i < len(strokes):
+                                strokes.pop(i)
+                        selected_strokes.clear(); selected_point = None; transform_drag = None
+                elif event.key == pygame.K_n and tool_mode == "selection":
+                    selection_submode = "nodes" if selection_submode == "transform" else "transform"
+                    selected_point = None; transform_drag = None; drag_last = None
                 elif event.key in (pygame.K_LEFTBRACKET, pygame.K_MINUS, pygame.K_KP_MINUS):
-                    max_points_per_curve = max(2, max_points_per_curve - 1)
-                    slider.value = max_points_per_curve
+                    max_points_per_curve = max(2, max_points_per_curve - 1); slider.value = max_points_per_curve
                 elif event.key in (pygame.K_RIGHTBRACKET, pygame.K_EQUALS, pygame.K_PLUS, pygame.K_KP_PLUS):
-                    max_points_per_curve = min(500, max_points_per_curve + 1)
-                    slider.value = max_points_per_curve
+                    limit = BOOST_MAX_POINTS if boost_points else NORMAL_MAX_POINTS
+                    max_points_per_curve = min(limit, max_points_per_curve + 1); slider.value = max_points_per_curve
+            elif event.type == pygame.KEYUP:
+                if event.key in (pygame.K_LSHIFT, pygame.K_RSHIFT) and drawing and tool_mode == "draw" and current_points:
+                    snap = nearest_snap_point(current_points[-1], strokes, SNAP_RADIUS)
+                    if snap is not None:
+                        current_points[-1] = snap
 
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                if event.pos[0] >= CANVAS_W:
-                    # Panel interactions
-                    if btn_dec.hit(event.pos):
-                        max_points_per_curve = max(2, max_points_per_curve - 1)
+                if btn_draw.hit(event.pos):
+                    tool_mode = "draw"; drawing = False; current_points = []; selected_strokes.clear(); selected_point = None; transform_drag = None
+                elif btn_select.hit(event.pos):
+                    tool_mode = "selection"; drawing = False; current_points = []; selected_point = None; drag_last = None; transform_drag = None; selection_submode = "transform"
+                elif event.pos[0] >= PANEL_X:
+                    # Right panel interactions
+                    if btn_boost.hit(event.pos) and tool_mode == "draw":
+                        boost_points = not boost_points
+                        slider.max_v = BOOST_MAX_POINTS if boost_points else NORMAL_MAX_POINTS
+                        if not boost_points:
+                            max_points_per_curve = min(max_points_per_curve, NORMAL_MAX_POINTS)
                         slider.value = max_points_per_curve
-                    elif btn_inc.hit(event.pos):
-                        max_points_per_curve = min(500, max_points_per_curve + 1)
-                        slider.value = max_points_per_curve
-                    elif btn_undo.hit(event.pos):
-                        if strokes:
-                            strokes.pop()
-                    elif btn_clear.hit(event.pos):
-                        strokes.clear()
+                    elif tool_mode == "draw" and btn_undo.hit(event.pos):
+                        if strokes: strokes.pop()
+                        selected_strokes.clear(); selected_point = None
+                    elif tool_mode == "draw" and btn_clear.hit(event.pos):
+                        strokes.clear(); selected_strokes.clear(); selected_point = None
+                    elif tool_mode == "draw":
+                        for key, r in state.get("trace_algo_rects", {}).items():
+                            if r.collidepoint(event.pos):
+                                trace_algorithm = key
+                                break
+                    elif tool_mode == "selection" and state.get("nodes_toggle_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
+                        r = state["nodes_toggle_rect"]
+                        selection_submode = "nodes" if event.pos[0] >= r.centerx else "transform"
+                        selected_point = None; transform_drag = None; drag_last = None
+                    elif tool_mode == "selection" and selected_strokes:
+                        # Modern color picker interactions (apply to all selected strokes)
+                        sel_list = sorted(selected_strokes)
+                        primary_i = sel_list[0]
+                        primary_obj = strokes[primary_i] if 0 <= primary_i < len(strokes) else None
+                        if primary_obj is None:
+                            pass
+                        elif state["tab_stroke_rect"].collidepoint(event.pos):
+                            color_target = "stroke"
+                            sc = primary_obj.get("stroke_color", (0.1, 0.1, 0.15)) or (0.1, 0.1, 0.15)
+                            picker_h, picker_s, picker_v = rgb_to_hsv(*sc)
+                            state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
+                        elif state["tab_fill_rect"].collidepoint(event.pos):
+                            color_target = "fill"
+                            fc = primary_obj.get("fill_color", None) or (1.0, 1.0, 1.0)
+                            picker_h, picker_s, picker_v = rgb_to_hsv(*fc)
+                            state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
+                        elif state.get("nofill_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos) and color_target == "fill":
+                            for si in sel_list:
+                                if 0 <= si < len(strokes):
+                                    strokes[si]["fill_color"] = None
+                        elif state["sv_rect"].collidepoint(event.pos):
+                            picker_drag_sv = True
+                            sv = state["sv_rect"]
+                            picker_s = clamp((event.pos[0] - sv.x) / max(1, sv.w - 1), 0.0, 1.0)
+                            picker_v = clamp(1.0 - (event.pos[1] - sv.y) / max(1, sv.h - 1), 0.0, 1.0)
+                            col = hsv_to_rgb(picker_h, picker_s, picker_v)
+                            for si in sel_list:
+                                if 0 <= si < len(strokes):
+                                    if color_target == "stroke":
+                                        alpha = color_alpha(strokes[si].get("stroke_color"), 1.0)
+                                        strokes[si]["stroke_color"] = (col[0], col[1], col[2], alpha)
+                                    else:
+                                        alpha = color_alpha(strokes[si].get("fill_color"), 1.0)
+                                        strokes[si]["fill_color"] = (col[0], col[1], col[2], alpha)
+                            state["picker_drag_sv"] = True
+                            state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
+                        elif state["hue_rect"].collidepoint(event.pos):
+                            picker_drag_hue = True
+                            hr = state["hue_rect"]
+                            picker_h = clamp((event.pos[0] - hr.x) / max(1, hr.w - 1), 0.0, 1.0) * 360.0
+                            col = hsv_to_rgb(picker_h, picker_s, picker_v)
+                            for si in sel_list:
+                                if 0 <= si < len(strokes):
+                                    if color_target == "stroke":
+                                        alpha = color_alpha(strokes[si].get("stroke_color"), 1.0)
+                                        strokes[si]["stroke_color"] = (col[0], col[1], col[2], alpha)
+                                    else:
+                                        alpha = color_alpha(strokes[si].get("fill_color"), 1.0)
+                                        strokes[si]["fill_color"] = (col[0], col[1], col[2], alpha)
+                            state["picker_drag_hue"] = True
+                            state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
+                        elif state.get("alpha_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
+                            ar = state["alpha_rect"]
+                            new_alpha = clamp((event.pos[0] - ar.x) / max(1, ar.w - 1), 0.0, 1.0)
+                            for si in sel_list:
+                                if 0 <= si < len(strokes):
+                                    if color_target == "stroke":
+                                        strokes[si]["stroke_color"] = set_color_alpha(strokes[si].get("stroke_color", (0.1,0.1,0.15,1.0)), new_alpha)
+                                    elif strokes[si].get("fill_color") is not None:
+                                        strokes[si]["fill_color"] = set_color_alpha(strokes[si].get("fill_color"), new_alpha)
+                            picker_drag_alpha = True
+                            state["picker_drag_alpha"] = True
+                        else:
+                            # preset swatches (draw_panel populates rects matching active target)
+                            rects = state["stroke_swatch_rects"] if color_target == "stroke" else state["fill_swatch_rects"]
+                            for i, r in enumerate(rects):
+                                if r.w > 0 and r.collidepoint(event.pos) and i < len(STROKE_SWATCHES):
+                                    col = STROKE_SWATCHES[i]
+                                    for si in sel_list:
+                                        if 0 <= si < len(strokes):
+                                            if color_target == "stroke":
+                                                alpha = color_alpha(strokes[si].get("stroke_color"), 1.0)
+                                                strokes[si]["stroke_color"] = (col[0], col[1], col[2], alpha)
+                                            else:
+                                                alpha = color_alpha(strokes[si].get("fill_color"), 1.0)
+                                                strokes[si]["fill_color"] = (col[0], col[1], col[2], alpha)
+                                    picker_h, picker_s, picker_v = rgb_to_hsv(*col)
+                                    state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
+                                    break
+                elif in_canvas(event.pos):
+                    cpos = to_canvas(event.pos)
+                    if tool_mode == "draw":
+                        drawing = True
+                        shift_held = bool(pygame.key.get_mods() & pygame.KMOD_SHIFT)
+                        start_pos = draw_snap_point(cpos, strokes, SNAP_RADIUS, shift_held) or cpos
+                        current_points = [start_pos]
+                    else:
+                        # Selection mode
+                        selected_point = None
+                        transform_drag = None
+                        mods = pygame.key.get_mods()
+                        shift = bool(mods & pygame.KMOD_SHIFT)
+                        if selection_submode == "transform":
+                            handled = False
+                            if selected_strokes:
+                                bb = combined_bbox(strokes, selected_strokes)
+                                h = hit_test_bbox_handle(bb, cpos)
+                                if h is not None:
+                                    cx, cy = ((bb[0] + bb[2]) / 2, (bb[1] + bb[3]) / 2)
+                                    import copy as _copy
+                                    start_strokes = {i: _copy.deepcopy(strokes[i]) for i in sorted(selected_strokes) if 0 <= i < len(strokes)}
+                                    transform_drag = {
+                                        "handle": h,
+                                        "start_mouse": cpos,
+                                        "start_strokes": start_strokes,
+                                        "center": (cx, cy),
+                                        "start_bbox": bb,
+                                    }
+                                    handled = True
+                                elif bb and point_in_bbox(bb, cpos):
+                                    # move all selected (keep multi-selection)
+                                    drag_last = cpos
+                                    handled = True
+                                elif hit_test_stroke(cpos, strokes) in selected_strokes:
+                                    drag_last = cpos
+                                    handled = True
+                            if not handled:
+                                hit = hit_test_stroke(cpos, strokes)
+                                if hit is not None:
+                                    if shift:
+                                        if hit in selected_strokes:
+                                            selected_strokes.discard(hit)
+                                        else:
+                                            selected_strokes.add(hit)
+                                    else:
+                                        selected_strokes = {hit}
+                                    if selected_strokes:
+                                        primary_i = sorted(selected_strokes)[0]
+                                        if 0 <= primary_i < len(strokes):
+                                            width_slider.value = int(round(strokes[primary_i].get("stroke_width", 3)))
+                                        drag_last = cpos
+                                    else:
+                                        drag_last = None
+                                else:
+                                    if not shift:
+                                        selected_strokes.clear()
+                                    drag_last = None
+                        else:
+                            # Nodes mode: point editing only for single selection
+                            if len(selected_strokes) == 1:
+                                only = next(iter(selected_strokes))
+                                if 0 <= only < len(strokes):
+                                    pt_hit = hit_test_point(strokes[only], cpos)
+                                    if pt_hit is not None:
+                                        selected_point = pt_hit; drag_last = cpos
+                                    else:
+                                        hit = hit_test_stroke(cpos, strokes)
+                                        if hit == only:
+                                            drag_last = cpos
+                                        elif hit is not None:
+                                            if shift:
+                                                if hit in selected_strokes:
+                                                    selected_strokes.discard(hit)
+                                                else:
+                                                    selected_strokes.add(hit)
+                                            else:
+                                                selected_strokes = {hit}
+                                            if selected_strokes:
+                                                primary_i = sorted(selected_strokes)[0]
+                                                if 0 <= primary_i < len(strokes):
+                                                    width_slider.value = int(round(strokes[primary_i].get("stroke_width", 3)))
+                                            drag_last = cpos if hit is not None else None
+                                        else:
+                                            if not shift:
+                                                selected_strokes.clear()
+                                            drag_last = None
+                                else:
+                                    selected_strokes.clear(); drag_last = None
+                            else:
+                                # multi or none: selection changes only
+                                hit = hit_test_stroke(cpos, strokes)
+                                if hit is not None:
+                                    if shift:
+                                        if hit in selected_strokes:
+                                            selected_strokes.discard(hit)
+                                        else:
+                                            selected_strokes.add(hit)
+                                    else:
+                                        selected_strokes = {hit}
+                                    if selected_strokes:
+                                        primary_i = sorted(selected_strokes)[0]
+                                        if 0 <= primary_i < len(strokes):
+                                            width_slider.value = int(round(strokes[primary_i].get("stroke_width", 3)))
+                                    drag_last = cpos
+                                else:
+                                    if not shift:
+                                        selected_strokes.clear()
+                                    drag_last = None
                 else:
-                    drawing = True
-                    current_points = [event.pos]
+                    # left bar area (not buttons) - ignore
+                    pass
 
-            elif event.type == pygame.MOUSEMOTION and drawing:
-                pos = event.pos
-                if pos[0] < CANVAS_W:
-                    if not current_points or math.hypot(pos[0] - current_points[-1][0], pos[1] - current_points[-1][1]) >= 2.0:
-                        current_points.append(pos)
-                else:
-                    edge = (CANVAS_W - 1, pos[1])
-                    if not current_points or current_points[-1] != edge:
-                        current_points.append(edge)
+            elif event.type == pygame.MOUSEMOTION:
+                if (picker_drag_sv or picker_drag_hue or picker_drag_alpha) and selected_strokes:
+                    sel_list = sorted(selected_strokes)
+                    if picker_drag_sv:
+                        sv = state["sv_rect"]
+                        picker_s = clamp((event.pos[0] - sv.x) / max(1, sv.w - 1), 0.0, 1.0)
+                        picker_v = clamp(1.0 - (event.pos[1] - sv.y) / max(1, sv.h - 1), 0.0, 1.0)
+                        col = hsv_to_rgb(picker_h, picker_s, picker_v)
+                        for si in sel_list:
+                            if 0 <= si < len(strokes):
+                                if color_target == "stroke":
+                                    alpha = color_alpha(strokes[si].get("stroke_color"), 1.0)
+                                    strokes[si]["stroke_color"] = (col[0], col[1], col[2], alpha)
+                                else:
+                                    alpha = color_alpha(strokes[si].get("fill_color"), 1.0)
+                                    strokes[si]["fill_color"] = (col[0], col[1], col[2], alpha)
+                        state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
+                    elif picker_drag_hue:
+                        hr = state["hue_rect"]
+                        picker_h = clamp((event.pos[0] - hr.x) / max(1, hr.w - 1), 0.0, 1.0) * 360.0
+                        col = hsv_to_rgb(picker_h, picker_s, picker_v)
+                        for si in sel_list:
+                            if 0 <= si < len(strokes):
+                                if color_target == "stroke":
+                                    alpha = color_alpha(strokes[si].get("stroke_color"), 1.0)
+                                    strokes[si]["stroke_color"] = (col[0], col[1], col[2], alpha)
+                                else:
+                                    alpha = color_alpha(strokes[si].get("fill_color"), 1.0)
+                                    strokes[si]["fill_color"] = (col[0], col[1], col[2], alpha)
+                        state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
+                    elif picker_drag_alpha:
+                        ar = state.get("alpha_rect", pygame.Rect(0,0,0,0))
+                        new_alpha = clamp((event.pos[0] - ar.x) / max(1, ar.w - 1), 0.0, 1.0)
+                        for si in sel_list:
+                            if 0 <= si < len(strokes):
+                                if color_target == "stroke":
+                                    strokes[si]["stroke_color"] = set_color_alpha(strokes[si].get("stroke_color", (0.1,0.1,0.15,1.0)), new_alpha)
+                                elif strokes[si].get("fill_color") is not None:
+                                    strokes[si]["fill_color"] = set_color_alpha(strokes[si].get("fill_color"), new_alpha)
+                elif drawing and tool_mode == "draw":
+                    cpos = clamp_to_canvas(event.pos)
+                    extras = [current_points[0]] if current_points else None
+                    shift_held = bool(pygame.key.get_mods() & pygame.KMOD_SHIFT)
+                    end_snap = draw_snap_point(cpos, strokes, SNAP_RADIUS, shift_held, extra_points=extras)
+                    sample_pos = end_snap if end_snap is not None else cpos
+                    if not current_points or math.hypot(sample_pos[0]-current_points[-1][0], sample_pos[1]-current_points[-1][1]) >= 2.0:
+                        current_points.append(sample_pos)
+                    elif end_snap is not None and current_points[-1] != end_snap:
+                        current_points[-1] = end_snap
+                elif tool_mode == "selection" and transform_drag is not None and selected_strokes and pygame.mouse.get_pressed()[0]:
+                    cpos = clamp_to_canvas(event.pos)
+                    td = transform_drag
+                    cx, cy = td["center"]
+                    sx0, sy0 = td["start_mouse"]
+                    h = td["handle"]
+                    start_strokes = td.get("start_strokes", {})
+                    if h == "rot":
+                        a0 = math.atan2(sy0 - cy, sx0 - cx)
+                        a1 = math.atan2(cpos[1] - cy, cpos[0] - cx)
+                        for i, st0 in start_strokes.items():
+                            if 0 <= i < len(strokes):
+                                strokes[i] = transform_stroke(st0, cx, cy, a1 - a0, 1.0)
+                    else:
+                        def _safe_ratio(cur_d, start_d):
+                            if abs(start_d) < 1e-6:
+                                return 1.0
+                            return cur_d / start_d
+                        sx = sy = 1.0
+                        if h in ("e", "w"):
+                            sx = _safe_ratio(cpos[0] - cx, sx0 - cx)
+                        elif h in ("n", "s"):
+                            sy = _safe_ratio(cpos[1] - cy, sy0 - cy)
+                        else:
+                            d0 = math.hypot(sx0 - cx, sy0 - cy)
+                            d1 = math.hypot(cpos[0] - cx, cpos[1] - cy)
+                            s = _safe_ratio(d1, d0)
+                            sx = sy = s
+                        sx = clamp(sx, 0.05, 20.0)
+                        sy = clamp(sy, 0.05, 20.0)
+                        for i, st0 in start_strokes.items():
+                            if 0 <= i < len(strokes):
+                                strokes[i] = transform_stroke(st0, cx, cy, 0.0, sx, sy)
+                elif tool_mode == "selection" and drag_last is not None and selected_strokes and pygame.mouse.get_pressed()[0]:
+                    cpos = clamp_to_canvas(event.pos)
+                    if selected_point is not None and len(selected_strokes) == 1:
+                        only = next(iter(selected_strokes))
+                        seg_i, pname = selected_point
+                        if 0 <= only < len(strokes):
+                            strokes[only] = set_stroke_point(strokes[only], seg_i, pname, cpos)
+                        drag_last = cpos
+                    else:
+                        dx = cpos[0] - drag_last[0]; dy = cpos[1] - drag_last[1]
+                        if dx != 0 or dy != 0:
+                            for si in list(selected_strokes):
+                                if 0 <= si < len(strokes):
+                                    strokes[si] = translate_stroke(strokes[si], dx, dy)
+                            drag_last = cpos
+                # (translation handled above when drag_last is set)
 
             elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
-                if drawing:
+                if drawing and tool_mode == "draw":
                     drawing = False
+                    cpos = clamp_to_canvas(event.pos)
+                    extras = [current_points[0]] if current_points else None
+                    shift_held = bool(pygame.key.get_mods() & pygame.KMOD_SHIFT)
+                    end_snap = draw_snap_point(cpos, strokes, SNAP_RADIUS, shift_held, extra_points=extras)
+                    if end_snap is not None:
+                        if current_points: current_points[-1] = end_snap
+                        else: current_points = [end_snap]
+                    elif current_points and current_points[-1] != cpos:
+                        current_points.append(cpos)
                     if len(current_points) >= 2:
                         beziers = stroke_to_beziers(
-                            current_points,
-                            simplify_epsilon=2.5,
-                            tension=0.0,
-                            max_points=max_points_per_curve,
+                            current_points, simplify_epsilon=2.5, tension=0.0,
+                            max_points=max_points_per_curve, algorithm=trace_algorithm,
                         )
                         if beziers:
-                            strokes.append(beziers)
+                            st = _close_path_if_needed(new_stroke(beziers, algorithm=trace_algorithm))
+                            strokes.append(st)
+                            strokes = merge_connected_strokes(strokes)
+                            selected_strokes.clear(); selected_point = None
                     current_points = []
+                drag_last = None; selected_point = None; transform_drag = None
+                picker_drag_sv = False; picker_drag_hue = False; picker_drag_alpha = False
+                state["picker_drag_sv"] = False; state["picker_drag_hue"] = False; state["picker_drag_alpha"] = False
                 max_points_per_curve = slider.value
 
-        active = current_points if drawing else None
-        draw_scene(cairo_surface, strokes, active)
+        # Draw scene (Cairo) and blit at canvas offset
+        active = current_points if (drawing and tool_mode == "draw") else None
+        draw_scene(cairo_surface, strokes, active, snap_point=hover_snap, selected_indices=selected_strokes, edit_mode=(tool_mode == "selection"), selection_submode=selection_submode)
         frame = surface_to_pygame(cairo_surface)
-        screen.blit(frame, (0, 0))
-        draw_panel(screen, fonts, mouse_pos, max_points_per_curve, len(strokes), buttons, slider)
+        screen.fill((230, 233, 238))
+        screen.blit(frame, (CANVAS_X, 0))
+
+        # Need swatch rects for this frame's layout - draw panel and capture by recomputing? we passed refs in state but draw_panel fills them during draw
+        draw_left_toolbar(screen, mouse_pos, tool_mode, btn_draw, btn_select)
+        draw_panel(screen, fonts, mouse_pos, state)
+
+        # sync picker state/rects from panel for next frame's event handling
+        picker_h = state.get("picker_h", picker_h)
+        picker_s = state.get("picker_s", picker_s)
+        picker_v = state.get("picker_v", picker_v)
+        picker_rects["sv"] = state.get("sv_rect", picker_rects["sv"])
+        picker_rects["hue"] = state.get("hue_rect", picker_rects["hue"])
+        picker_rects["tab_stroke"] = state.get("tab_stroke_rect", picker_rects["tab_stroke"])
+        picker_rects["tab_fill"] = state.get("tab_fill_rect", picker_rects["tab_fill"])
+        picker_rects["nofill"] = state.get("nofill_rect", picker_rects["nofill"])
+        picker_rects["alpha"] = state.get("alpha_rect", picker_rects["alpha"])
+        trace_algo_rects_cache = state.get("trace_algo_rects", trace_algo_rects_cache)
+        nodes_toggle_rect_cache = state.get("nodes_toggle_rect", nodes_toggle_rect_cache)
+        swatch_rects_cache["stroke"] = list(state.get("stroke_swatch_rects", swatch_rects_cache["stroke"]))
+        swatch_rects_cache["fill"] = list(state.get("fill_swatch_rects", swatch_rects_cache["fill"]))
+
+        # sync width slider to selected on selection changes shown next frame (simple keep)
+        if tool_mode == "selection" and selected_strokes and not width_slider.dragging:
+            primary_i = sorted(selected_strokes)[0]
+            if 0 <= primary_i < len(strokes):
+                width_slider.value = int(round(strokes[primary_i].get("stroke_width", 3)))
 
         pygame.display.flip()
         clock.tick(120)
