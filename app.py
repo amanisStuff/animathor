@@ -12,6 +12,14 @@ import pygame
 
 from bezier import stroke_to_beziers, fit_single_cubic_bezier
 
+import os
+try:
+    import tkinter as tk
+    from tkinter import filedialog as tk_filedialog
+except Exception:
+    tk = None
+    tk_filedialog = None
+
 LEFT_BAR_W = 56
 CANVAS_W, HEIGHT = 980, 700
 PANEL_W = 280
@@ -973,7 +981,7 @@ def combined_bbox(strokes, indices):
     return (min(xs), min(ys), max(xs), max(ys))
 
 
-def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, selected_index=None, selected_indices=None, edit_mode=False, selection_submode="transform", selected_curve=None, snap_kind="connect", redrawing_curve=None):
+def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, selected_index=None, selected_indices=None, edit_mode=False, selection_submode="transform", selected_curve=None, snap_kind="connect", redrawing_curve=None, ref_img=None):
     # Backward compat: selected_index (single) or selected_indices (collection)
     if selected_indices is None and selected_index is not None:
         selected_indices = selected_index
@@ -986,6 +994,21 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
         pass
     ctx.set_source_rgb(*BG_COLOR)
     ctx.paint()
+
+    # Reference image, behind strokes
+    if ref_img and ref_img.get("visible", True) and ref_img.get("surface") is not None:
+        try:
+            rsurf = ref_img["surface"]
+            ctx.save()
+            ctx.translate(float(ref_img.get("x", 0)), float(ref_img.get("y", 0)))
+            s = float(ref_img.get("scale", 1.0))
+            ctx.scale(s, s)
+            ctx.set_source_surface(rsurf, 0, 0)
+            ctx.paint_with_alpha(clamp(float(ref_img.get("opacity", 0.5)), 0.0, 1.0))
+            ctx.restore()
+        except Exception:
+            pass
+
     ctx.set_line_cap(cairo.LINE_CAP_ROUND)
     ctx.set_line_join(cairo.LINE_JOIN_ROUND)
 
@@ -1193,6 +1216,48 @@ def surface_to_pygame(cairo_surface):
     return pygame.image.frombuffer(data, (width, height), "BGRA")
 
 
+def load_reference_image(path):
+    """Load image file into a cairo ImageSurface (ARGB32) for reference drawing."""
+    if not path:
+        return None
+    try:
+        # Prefer cairo PNG loader when possible
+        if str(path).lower().endswith(".png"):
+            surf = cairo.ImageSurface.create_from_png(path)
+            w, h = surf.get_width(), surf.get_height()
+        else:
+            img = pygame.image.load(path).convert_alpha()
+            w, h = img.get_width(), img.get_height()
+            data = pygame.image.tostring(img, "BGRA")
+            buf = bytearray(data)
+            surf = cairo.ImageSurface.create_for_data(buf, cairo.FORMAT_ARGB32, w, h)
+            # keep buffer alive
+            surf._buf = buf
+        return {"surface": surf, "w": w, "h": h, "x": 0.0, "y": 0.0, "scale": 1.0, "opacity": 0.5, "visible": True, "path": path}
+    except Exception:
+        return None
+
+
+def pick_reference_image_path():
+    if tk is None or tk_filedialog is None:
+        return None
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        try:
+            root.attributes("-topmost", True)
+        except Exception:
+            pass
+        path = tk_filedialog.askopenfilename(
+            title="Select reference image",
+            filetypes=[("Images", "*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp"), ("All files", "*.*")],
+        )
+        root.destroy()
+        return path or None
+    except Exception:
+        return None
+
+
 class Button:
     def __init__(self, rect, label):
         self.rect = pygame.Rect(rect)
@@ -1352,6 +1417,40 @@ def draw_panel(screen, fonts, mouse_pos, state):
             screen.blit(t, t.get_rect(center=r.center))
         state["trace_algo_rects"] = rects
         y += 36
+
+        # Reference image
+        screen.blit(font.render("Reference image", True, TEXT_COLOR), (x, y)); y += 22
+        ref = state.get("reference_image")
+        bw3 = (PANEL_W - 40 - 16) // 3
+        load_r = pygame.Rect(x, y, bw3, 28)
+        vis_r = pygame.Rect(x + bw3 + 8, y, bw3, 28)
+        clear_r = pygame.Rect(x + (bw3 + 8) * 2, y, PANEL_W - 40 - (bw3 + 8) * 2, 28)
+        state["ref_load_rect"] = load_r
+        state["ref_vis_rect"] = vis_r
+        state["ref_clear_rect"] = clear_r
+        vis_label = "Hide" if (ref and ref.get("visible", True)) else "Show"
+        for r, label in ((load_r, "Load"), (vis_r, vis_label), (clear_r, "Clear")):
+            bg = BUTTON_HOVER if r.collidepoint(mouse_pos) else BUTTON_BG
+            pygame.draw.rect(screen, bg, r, border_radius=6)
+            pygame.draw.rect(screen, BUTTON_BORDER, r, 1, border_radius=6)
+            t = font_small.render(label, True, TEXT_COLOR)
+            screen.blit(t, t.get_rect(center=r.center))
+        y += 34
+        if ref and ref.get("surface") is not None:
+            op = int(round(clamp(ref.get("opacity", 0.5), 0.0, 1.0) * 100))
+            screen.blit(font_small.render(f"Opacity {op}%  (Alt+drag to move)", True, MUTED_COLOR), (x, y)); y += 18
+            bar = pygame.Rect(x, y, PANEL_W - 40, 10)
+            state["ref_opacity_rect"] = bar
+            pygame.draw.rect(screen, (225, 228, 235), bar, border_radius=4)
+            fill_w = int(bar.w * clamp(ref.get("opacity", 0.5), 0.0, 1.0))
+            if fill_w > 0:
+                pygame.draw.rect(screen, ACCENT, (bar.x, bar.y, fill_w, bar.h), border_radius=4)
+            pygame.draw.rect(screen, BUTTON_BORDER, bar, 1, border_radius=4)
+            y += 18
+        else:
+            state["ref_opacity_rect"] = pygame.Rect(0, 0, 0, 0)
+            screen.blit(font_small.render("No reference image", True, MUTED_COLOR), (x, y)); y += 18
+        y += 4
 
         label2 = font.render("Actions", True, TEXT_COLOR)
         screen.blit(label2, (x, y)); y += 28
@@ -1703,6 +1802,7 @@ def main():
     picker_drag_sv = False
     picker_drag_hue = False
     picker_drag_alpha = False
+    ref_opacity_drag = False
     picker_rects = {"sv": pygame.Rect(0,0,0,0), "hue": pygame.Rect(0,0,0,0),
                     "tab_stroke": pygame.Rect(0,0,0,0), "tab_fill": pygame.Rect(0,0,0,0),
                     "nofill": pygame.Rect(0,0,0,0), "alpha": pygame.Rect(0,0,0,0)}
@@ -1710,6 +1810,12 @@ def main():
     nodes_toggle_rect_cache = pygame.Rect(0, 0, 0, 0)
     curve_hide_rect_cache = pygame.Rect(0, 0, 0, 0)
     curve_redraw_rect_cache = pygame.Rect(0, 0, 0, 0)
+    ref_load_rect_cache = pygame.Rect(0, 0, 0, 0)
+    ref_vis_rect_cache = pygame.Rect(0, 0, 0, 0)
+    ref_clear_rect_cache = pygame.Rect(0, 0, 0, 0)
+    ref_opacity_rect_cache = pygame.Rect(0, 0, 0, 0)
+    reference_image = None  # {"surface": cairo.ImageSurface, "w","h","x","y","opacity","visible","path"}
+    ref_drag = None
     swatch_rects_cache = {
         "stroke": [pygame.Rect(0, 0, 0, 0) for _ in STROKE_SWATCHES],
         "fill": [pygame.Rect(0, 0, 0, 0) for _ in STROKE_SWATCHES],  # presets sized to STROKE_SWATCHES in picker
@@ -1788,6 +1894,11 @@ def main():
             "redrawing_curve": state_redrawing_curve,
             "curve_hide_rect": curve_hide_rect_cache,
             "curve_redraw_rect": curve_redraw_rect_cache,
+            "reference_image": reference_image,
+            "ref_load_rect": ref_load_rect_cache,
+            "ref_vis_rect": ref_vis_rect_cache,
+            "ref_clear_rect": ref_clear_rect_cache,
+            "ref_opacity_rect": ref_opacity_rect_cache,
         }
 
         for event in pygame.event.get():
@@ -1872,10 +1983,31 @@ def main():
                     elif tool_mode == "draw" and btn_clear.hit(event.pos):
                         strokes.clear(); selected_strokes.clear(); selected_point = None
                     elif tool_mode == "draw":
-                        for key, r in state.get("trace_algo_rects", {}).items():
-                            if r.collidepoint(event.pos):
-                                trace_algorithm = key
-                                break
+                        handled_draw_panel = False
+                        if state.get("ref_load_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
+                            path = pick_reference_image_path()
+                            if path:
+                                ref = load_reference_image(path)
+                                if ref is not None:
+                                    reference_image = ref
+                            handled_draw_panel = True
+                        elif state.get("ref_vis_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
+                            if reference_image:
+                                reference_image["visible"] = not reference_image.get("visible", True)
+                            handled_draw_panel = True
+                        elif state.get("ref_clear_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
+                            reference_image = None
+                            handled_draw_panel = True
+                        elif reference_image and state.get("ref_opacity_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
+                            bar = state["ref_opacity_rect"]
+                            reference_image["opacity"] = clamp((event.pos[0] - bar.x) / max(1, bar.w - 1), 0.0, 1.0)
+                            ref_opacity_drag = True
+                            handled_draw_panel = True
+                        if not handled_draw_panel:
+                            for key, r in state.get("trace_algo_rects", {}).items():
+                                if r.collidepoint(event.pos):
+                                    trace_algorithm = key
+                                    break
                     elif tool_mode == "selection" and state.get("nodes_toggle_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
                         r = state["nodes_toggle_rect"]
                         rel = (event.pos[0] - r.x) / max(1, r.w)
@@ -2000,10 +2132,15 @@ def main():
                 elif in_canvas(event.pos):
                     cpos = to_canvas(event.pos)
                     if tool_mode == "draw":
-                        drawing = True
-                        shift_held = bool(pygame.key.get_mods() & pygame.KMOD_SHIFT)
-                        start_pos = draw_snap_point(cpos, strokes, SNAP_RADIUS, shift_held) or cpos
-                        current_points = [start_pos]
+                        mods = pygame.key.get_mods()
+                        if (mods & pygame.KMOD_ALT) and reference_image and reference_image.get("visible", True):
+                            ref_drag = {"offset": (cpos[0] - reference_image.get("x", 0), cpos[1] - reference_image.get("y", 0))}
+                            drawing = False
+                        else:
+                            drawing = True
+                            shift_held = bool(mods & pygame.KMOD_SHIFT)
+                            start_pos = draw_snap_point(cpos, strokes, SNAP_RADIUS, shift_held) or cpos
+                            current_points = [start_pos]
                     elif redrawing_curve is not None:
                         # Redraw selected stroke/component: focused draw with snap features
                         fixed_start = redrawing_curve.get("fixed_start")
@@ -2134,7 +2271,16 @@ def main():
                     pass
 
             elif event.type == pygame.MOUSEMOTION:
-                if (picker_drag_sv or picker_drag_hue or picker_drag_alpha) and selected_strokes:
+                if ref_opacity_drag and reference_image is not None:
+                    bar = state.get("ref_opacity_rect", pygame.Rect(0,0,0,0))
+                    if bar.w > 0:
+                        reference_image["opacity"] = clamp((event.pos[0] - bar.x) / max(1, bar.w - 1), 0.0, 1.0)
+                elif ref_drag is not None and reference_image is not None and (pygame.mouse.get_pressed()[0]):
+                    cpos = clamp_to_canvas(event.pos)
+                    off = ref_drag.get("offset", (0, 0))
+                    reference_image["x"] = cpos[0] - off[0]
+                    reference_image["y"] = cpos[1] - off[1]
+                elif (picker_drag_sv or picker_drag_hue or picker_drag_alpha) and selected_strokes:
                     sel_list = sorted(selected_strokes)
                     if picker_drag_sv:
                         sv = state["sv_rect"]
@@ -2316,8 +2462,9 @@ def main():
                             selected_strokes.clear(); selected_point = None; selected_curve = None; redrawing_curve = None
                     current_points = []
                 drag_last = None; selected_point = None; transform_drag = None
-                picker_drag_sv = False; picker_drag_hue = False; picker_drag_alpha = False
+                picker_drag_sv = False; picker_drag_hue = False; picker_drag_alpha = False; ref_opacity_drag = False
                 state["picker_drag_sv"] = False; state["picker_drag_hue"] = False; state["picker_drag_alpha"] = False
+                ref_drag = None
                 max_points_per_curve = slider.value
 
         # Draw scene (Cairo) and blit at canvas offset
@@ -2327,6 +2474,7 @@ def main():
             selected_indices=selected_strokes, edit_mode=(tool_mode == "selection"),
             selection_submode=selection_submode, selected_curve=selected_curve,
             snap_kind=hover_snap_kind, redrawing_curve=redrawing_curve,
+            ref_img=reference_image,
         )
         frame = surface_to_pygame(cairo_surface)
         screen.fill((230, 233, 238))
@@ -2361,6 +2509,10 @@ def main():
         nodes_toggle_rect_cache = state.get("nodes_toggle_rect", nodes_toggle_rect_cache)
         curve_hide_rect_cache = state.get("curve_hide_rect", curve_hide_rect_cache)
         curve_redraw_rect_cache = state.get("curve_redraw_rect", curve_redraw_rect_cache)
+        ref_load_rect_cache = state.get("ref_load_rect", ref_load_rect_cache)
+        ref_vis_rect_cache = state.get("ref_vis_rect", ref_vis_rect_cache)
+        ref_clear_rect_cache = state.get("ref_clear_rect", ref_clear_rect_cache)
+        ref_opacity_rect_cache = state.get("ref_opacity_rect", ref_opacity_rect_cache)
         swatch_rects_cache["stroke"] = list(state.get("stroke_swatch_rects", swatch_rects_cache["stroke"]))
         swatch_rects_cache["fill"] = list(state.get("fill_swatch_rects", swatch_rects_cache["fill"]))
 

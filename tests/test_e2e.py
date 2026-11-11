@@ -176,6 +176,29 @@ class TestRenderE2E(unittest.TestCase):
         self.assertEqual(pg.get_width(), 64)
         self.assertEqual(pg.get_height(), 32)
 
+    def test_reference_image_load_and_draw(self):
+        import tempfile
+        img_surf = app.make_cairo_surface(12, 8)
+        ctx = app.cairo.Context(img_surf)
+        ctx.set_source_rgb(1, 0, 0)
+        ctx.paint()
+        img_surf.flush()
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+            path = f.name
+        try:
+            img_surf.write_to_png(path)
+            ref = app.load_reference_image(path)
+            self.assertIsNotNone(ref)
+            self.assertEqual(ref["w"], 12)
+            self.assertEqual(ref["h"], 8)
+            surf = app.make_cairo_surface(50, 40)
+            app.draw_scene(surf, [], ref_img=ref)
+        finally:
+            try:
+                os.unlink(path)
+            except Exception:
+                pass
+
 
 if __name__ == "__main__":
     unittest.main()
