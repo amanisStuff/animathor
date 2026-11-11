@@ -417,9 +417,9 @@ def hit_test_stroke(pos, strokes, threshold=10.0):
             _, d = _nearest_point_on_cubic(pos, seg)
             if d <= threshold:
                 return i
-        # filled/closed interior
-        if isinstance(stroke, dict) and stroke.get("fill_color") is not None and _is_closed_segs(segs, 6.0):
-            poly = _stroke_polyline(stroke, samples=10)
+        # closed shape interior (select by area even if unfilled)
+        if _is_closed_segs(segs, 6.0):
+            poly = _stroke_polyline(stroke, samples=12)
             if _point_in_poly(pos, poly):
                 return i
     return None
