@@ -1807,7 +1807,7 @@ def main():
                     elif tool_mode == "selection" and selection_submode == "curve" and state.get("curve_redraw_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
                         if selected_curve and selected_curve[0] in selected_strokes:
                             si, comp_i = selected_curve
-                            redrawing_curve = {"stroke_idx": si, "comp_idx": comp_i, "points": []}
+                            redrawing_curve = {"stroke_idx": si, "comp_idx": comp_i, "points": [], "started": False}
                             selected_point = None; transform_drag = None; drag_last = None
                     elif tool_mode == "selection" and selected_strokes:
                         # Modern color picker interactions (apply to all selected strokes)
@@ -1897,8 +1897,9 @@ def main():
                         start_pos = draw_snap_point(cpos, strokes, SNAP_RADIUS, shift_held) or cpos
                         current_points = [start_pos]
                     elif redrawing_curve is not None:
-                        # Redraw selected curve: capture replacement stroke
+                        # Redraw selected stroke/component: start capture on canvas click-drag
                         redrawing_curve["points"] = [cpos]
+                        redrawing_curve["started"] = True
                     else:
                         # Selection mode
                         selected_point = None
@@ -2061,7 +2062,7 @@ def main():
                                     strokes[si]["stroke_color"] = set_color_alpha(strokes[si].get("stroke_color", (0.1,0.1,0.15,1.0)), new_alpha)
                                 elif strokes[si].get("fill_color") is not None:
                                     strokes[si]["fill_color"] = set_color_alpha(strokes[si].get("fill_color"), new_alpha)
-                elif redrawing_curve is not None and pygame.mouse.get_pressed()[0]:
+                elif redrawing_curve is not None and redrawing_curve.get("started") and pygame.mouse.get_pressed()[0]:
                     cpos = clamp_to_canvas(event.pos)
                     pts = redrawing_curve.get("points", [])
                     if not pts or math.hypot(cpos[0]-pts[-1][0], cpos[1]-pts[-1][1]) >= 2.0:
@@ -2129,12 +2130,16 @@ def main():
 
             elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
                 if redrawing_curve is not None:
-                    si = redrawing_curve.get("stroke_idx")
-                    comp_i = redrawing_curve.get("comp_idx", redrawing_curve.get("seg_idx"))
-                    pts = redrawing_curve.get("points", [])
-                    if si is not None and comp_i is not None and 0 <= si < len(strokes) and len(pts) >= 2:
-                        strokes[si] = redraw_stroke_component(strokes[si], comp_i, pts)
-                    redrawing_curve = None
+                    if redrawing_curve.get("started"):
+                        si = redrawing_curve.get("stroke_idx")
+                        comp_i = redrawing_curve.get("comp_idx", redrawing_curve.get("seg_idx"))
+                        pts = redrawing_curve.get("points", [])
+                        if si is not None and comp_i is not None and 0 <= si < len(strokes) and len(pts) >= 2:
+                            strokes[si] = redraw_stroke_component(strokes[si], comp_i, pts)
+                        redrawing_curve = None
+                    else:
+                        # Redraw mode armed but drawing not started yet (e.g. released on button); wait for canvas drag
+                        pass
                 elif drawing and tool_mode == "draw":
                     drawing = False
                     cpos = clamp_to_canvas(event.pos)
