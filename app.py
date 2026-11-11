@@ -316,6 +316,60 @@ def draw_snap_info(pos, strokes, radius, shift_held, extra_points=None):
     return pt, kind
 
 
+def _drawing_sample_pos(cpos, points, strokes, snap_radius, shift_held, straight_line, fixed_end=None):
+    extras = [points[0]] if points else None
+    if fixed_end is not None:
+        # redraw end is fixed; follow cursor during drag, finalization enforces fixed_end
+        return cpos
+    end_snap = draw_snap_point(cpos, strokes, snap_radius, shift_held, extra_points=extras)
+    return end_snap if end_snap is not None else cpos
+
+
+def _append_drawing_point(points, sample_pos, end_snap_active=False):
+    if not points:
+        return [sample_pos]
+    pts = list(points)
+    if math.hypot(sample_pos[0] - pts[-1][0], sample_pos[1] - pts[-1][1]) >= 2.0:
+        pts.append(sample_pos)
+    elif end_snap_active and pts[-1] != sample_pos:
+        pts[-1] = sample_pos
+    return pts
+
+
+def advance_drawing_points(points, cpos, strokes, snap_radius, shift_held, straight_line, fixed_end=None):
+    """Shared draw/redraw motion sampling with snapping and straight-line (V) mode."""
+    if not points:
+        return points
+    sample_pos = _drawing_sample_pos(cpos, points, strokes, snap_radius, shift_held, straight_line, fixed_end=fixed_end)
+    if straight_line:
+        return [points[0], sample_pos]
+    extras = [points[0]]
+    end_snap_active = (fixed_end is None and draw_snap_point(cpos, strokes, snap_radius, shift_held, extra_points=extras) is not None)
+    return _append_drawing_point(points, sample_pos, end_snap_active=end_snap_active)
+
+
+def finalize_drawing_points(points, cpos, strokes, snap_radius, shift_held, straight_line, fixed_end=None):
+    """Shared draw/redraw mouse-up finalization."""
+    if not points:
+        return points
+    pts = list(points)
+    extras = [pts[0]]
+    if fixed_end is not None:
+        sample_pos = tuple(fixed_end)
+    else:
+        end_snap = draw_snap_point(cpos, strokes, snap_radius, shift_held, extra_points=extras)
+        sample_pos = end_snap if end_snap is not None else cpos
+    if straight_line:
+        pts = [pts[0], sample_pos]
+    else:
+        if len(pts) >= 1:
+            if sample_pos != pts[-1] and math.hypot(sample_pos[0]-pts[-1][0], sample_pos[1]-pts[-1][1]) < 2.0 and fixed_end is None:
+                pts[-1] = sample_pos
+            elif pts[-1] != sample_pos:
+                pts.append(sample_pos)
+    return pts
+
+
 def _dist_point_seg(p, a, b):
     px, py = p
     ax, ay = a
@@ -2144,7 +2198,11 @@ def main():
                     elif redrawing_curve is not None:
                         # Redraw selected stroke/component: focused draw with snap features
                         fixed_start = redrawing_curve.get("fixed_start")
-                        start_pos = tuple(fixed_start) if fixed_start is not None else cpos
+                        if fixed_start is not None:
+                            start_pos = tuple(fixed_start)
+                        else:
+                            shift_held = bool(pygame.key.get_mods() & pygame.KMOD_SHIFT)
+                            start_pos = draw_snap_point(cpos, strokes, SNAP_RADIUS, shift_held) or cpos
                         redrawing_curve["points"] = [start_pos]
                         redrawing_curve["started"] = True
                     else:
@@ -2325,31 +2383,19 @@ def main():
                     fixed_end = redrawing_curve.get("fixed_end")
                     if fixed_start is not None and pts:
                         pts[0] = tuple(fixed_start)
-                    # While redrawing, follow cursor; end will be fixed on release
-                    sample_pos = cpos
-                    if not pts or math.hypot(sample_pos[0]-pts[-1][0], sample_pos[1]-pts[-1][1]) >= 2.0:
-                        pts.append(sample_pos)
-                    else:
-                        if pts:
-                            pts[-1] = sample_pos
+                    keys = pygame.key.get_pressed()
+                    straight_line = bool(keys[pygame.K_v]) if keys else False
+                    shift_held = bool(pygame.key.get_mods() & pygame.KMOD_SHIFT)
+                    pts = advance_drawing_points(pts, cpos, strokes, SNAP_RADIUS, shift_held, straight_line, fixed_end=fixed_end)
                     redrawing_curve["points"] = pts
                 elif marquee_select is not None and tool_mode == "selection" and pygame.mouse.get_pressed()[0]:
                     marquee_select["current"] = clamp_to_canvas(event.pos)
                 elif drawing and tool_mode == "draw":
                     cpos = clamp_to_canvas(event.pos)
-                    extras = [current_points[0]] if current_points else None
                     shift_held = bool(pygame.key.get_mods() & pygame.KMOD_SHIFT)
-                    end_snap = draw_snap_point(cpos, strokes, SNAP_RADIUS, shift_held, extra_points=extras)
-                    sample_pos = end_snap if end_snap is not None else cpos
                     keys = pygame.key.get_pressed()
                     straight_line = bool(keys[pygame.K_v]) if keys else False
-                    if straight_line and current_points:
-                        current_points = [current_points[0], sample_pos]
-                    else:
-                        if not current_points or math.hypot(sample_pos[0]-current_points[-1][0], sample_pos[1]-current_points[-1][1]) >= 2.0:
-                            current_points.append(sample_pos)
-                        elif end_snap is not None and current_points[-1] != end_snap:
-                            current_points[-1] = end_snap
+                    current_points = advance_drawing_points(current_points, cpos, strokes, SNAP_RADIUS, shift_held, straight_line)
                 elif tool_mode == "selection" and transform_drag is not None and selected_strokes and pygame.mouse.get_pressed()[0]:
                     cpos = clamp_to_canvas(event.pos)
                     td = transform_drag
@@ -2419,6 +2465,13 @@ def main():
                         pts = list(redrawing_curve.get("points", []))
                         fixed_start = redrawing_curve.get("fixed_start")
                         fixed_end = redrawing_curve.get("fixed_end")
+                        if fixed_start is not None and pts:
+                            pts[0] = tuple(fixed_start)
+                        cpos = clamp_to_canvas(event.pos)
+                        shift_held = bool(pygame.key.get_mods() & pygame.KMOD_SHIFT)
+                        keys = pygame.key.get_pressed()
+                        straight_line = bool(keys[pygame.K_v]) if keys else False
+                        pts = finalize_drawing_points(pts, cpos, strokes, SNAP_RADIUS, shift_held, straight_line, fixed_end=fixed_end)
                         if fixed_start is not None:
                             if pts:
                                 pts[0] = tuple(fixed_start)
@@ -2427,7 +2480,7 @@ def main():
                         if fixed_end is not None:
                             if len(pts) == 1:
                                 pts.append(tuple(fixed_end))
-                            else:
+                            elif pts:
                                 pts[-1] = tuple(fixed_end)
                         if si is not None and comp_i is not None and 0 <= si < len(strokes) and len(pts) >= 2:
                             strokes[si] = redraw_stroke_component(strokes[si], comp_i, pts)
@@ -2438,20 +2491,10 @@ def main():
                 elif drawing and tool_mode == "draw":
                     drawing = False
                     cpos = clamp_to_canvas(event.pos)
-                    extras = [current_points[0]] if current_points else None
                     shift_held = bool(pygame.key.get_mods() & pygame.KMOD_SHIFT)
                     keys = pygame.key.get_pressed()
                     straight_line = bool(keys[pygame.K_v]) if keys else False
-                    end_snap = draw_snap_point(cpos, strokes, SNAP_RADIUS, shift_held, extra_points=extras)
-                    sample_pos = end_snap if end_snap is not None else cpos
-                    if straight_line and current_points:
-                        current_points = [current_points[0], sample_pos]
-                    else:
-                        if end_snap is not None:
-                            if current_points: current_points[-1] = end_snap
-                            else: current_points = [end_snap]
-                        elif current_points and current_points[-1] != cpos:
-                            current_points.append(cpos)
+                    current_points = finalize_drawing_points(current_points, cpos, strokes, SNAP_RADIUS, shift_held, straight_line)
                     if len(current_points) >= 2:
                         raw = list(current_points)
                         if straight_line:
