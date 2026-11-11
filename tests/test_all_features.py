@@ -213,6 +213,12 @@ class TestTransformsAndGeometry(unittest.TestCase):
         self.assertFalse(app.point_in_bbox(bb, (-1.0, 25.0)))
         self.assertFalse(app.point_in_bbox(None, (0.0, 0.0)))
 
+    def test_normalize_rect_and_intersection(self):
+        r = app.normalize_rect((10, 20), (5, 30))
+        self.assertEqual(r, (5, 20, 10, 30))
+        self.assertTrue(app.rects_intersect((0, 0, 10, 10), (5, 5, 15, 15)))
+        self.assertFalse(app.rects_intersect((0, 0, 10, 10), (11, 0, 20, 10)))
+
     def test_transform_stroke_scale(self):
         st = app.new_stroke([((10.0, 10.0), (10.0, 10.0), (20.0, 20.0), (20.0, 20.0))])
         cx, cy = 15.0, 15.0
