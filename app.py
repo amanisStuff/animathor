@@ -1617,7 +1617,12 @@ def main():
                                 strokes[si]["hidden_segs"] = hidden
                     elif tool_mode == "selection" and selection_submode == "curve" and state.get("curve_redraw_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
                         if selected_curve and selected_curve[0] in selected_strokes:
-                            redrawing_curve = {"stroke_idx": selected_curve[0], "seg_idx": selected_curve[1], "points": []}
+                            si, seg_i = selected_curve
+                            if 0 <= si < len(strokes) and isinstance(strokes[si], dict):
+                                hidden = set(strokes[si].get("hidden_segs", set()) or set())
+                                hidden.add(seg_i)
+                                strokes[si]["hidden_segs"] = hidden
+                            redrawing_curve = {"stroke_idx": si, "seg_idx": seg_i, "points": []}
                             selected_point = None; transform_drag = None; drag_last = None
                     elif tool_mode == "selection" and selected_strokes:
                         # Modern color picker interactions (apply to all selected strokes)
@@ -1943,6 +1948,17 @@ def main():
                     pts = redrawing_curve.get("points", [])
                     if si is not None and seg_i is not None and 0 <= si < len(strokes) and len(pts) >= 2:
                         strokes[si] = redraw_curve_segment(strokes[si], seg_i, pts)
+                        # ensure redrawn curve is visible
+                        if isinstance(strokes[si], dict):
+                            hidden = set(strokes[si].get("hidden_segs", set()) or set())
+                            hidden.discard(seg_i)
+                            strokes[si]["hidden_segs"] = hidden
+                    elif si is not None and seg_i is not None and 0 <= si < len(strokes):
+                        # cancelled/no draw: keep it visible
+                        if isinstance(strokes[si], dict):
+                            hidden = set(strokes[si].get("hidden_segs", set()) or set())
+                            hidden.discard(seg_i)
+                            strokes[si]["hidden_segs"] = hidden
                     redrawing_curve = None
                 elif drawing and tool_mode == "draw":
                     drawing = False
