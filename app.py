@@ -1162,15 +1162,16 @@ def draw_panel(screen, fonts, mouse_pos, state):
             screen.blit(t, t.get_rect(center=r.center))
         y += 38
 
+        sel_stroke = state.get("selected_obj")
         # Curve-edit controls (single selection in curve mode)
         state.setdefault("curve_hide_rect", pygame.Rect(0,0,0,0))
         state.setdefault("curve_redraw_rect", pygame.Rect(0,0,0,0))
-        if submode == "curve" and sel_count == 1 and stroke is not None:
+        if submode == "curve" and sel_count == 1 and sel_stroke is not None:
             sc = state.get("selected_curve")
             if sc and sc[0] in sel_strokes:
                 seg_i = sc[1]
-                segs = segs_of(stroke)
-                hidden = set(stroke.get("hidden_segs", set()) or set()) if isinstance(stroke, dict) else set()
+                segs = segs_of(sel_stroke)
+                hidden = set(sel_stroke.get("hidden_segs", set()) or set()) if isinstance(sel_stroke, dict) else set()
                 screen.blit(font_small.render(f"Selected curve: {seg_i + 1}/{len(segs)}", True, MUTED_COLOR), (x, y)); y += 22
                 hide_rect = pygame.Rect(x, y, (PANEL_W - 48) // 2, 30)
                 redraw_rect = pygame.Rect(hide_rect.right + 8, y, (PANEL_W - 48) - hide_rect.w, 30)
@@ -1195,7 +1196,7 @@ def draw_panel(screen, fonts, mouse_pos, state):
             info = font_small.render("Select a stroke", True, MUTED_COLOR)
             screen.blit(info, (x, y)); y += 28
         else:
-            stroke = state["selected_obj"]
+            stroke = sel_stroke if sel_stroke is not None else state.get("selected_obj")
             if sel_count > 1:
                 screen.blit(font_small.render(f"Multiple selected ({sel_count})", True, MUTED_COLOR), (x, y)); y += 20
             # Stroke width
