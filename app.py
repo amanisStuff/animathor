@@ -912,7 +912,7 @@ def combined_bbox(strokes, indices):
     return (min(xs), min(ys), max(xs), max(ys))
 
 
-def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, selected_index=None, selected_indices=None, edit_mode=False, selection_submode="transform", selected_curve=None, snap_kind="connect"):
+def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, selected_index=None, selected_indices=None, edit_mode=False, selection_submode="transform", selected_curve=None, snap_kind="connect", redrawing_curve=None):
     # Backward compat: selected_index (single) or selected_indices (collection)
     if selected_indices is None and selected_index is not None:
         selected_indices = selected_index
@@ -928,6 +928,10 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
     ctx.set_line_cap(cairo.LINE_CAP_ROUND)
     ctx.set_line_join(cairo.LINE_JOIN_ROUND)
 
+    redraw_target = None
+    if redrawing_curve is not None:
+        redraw_target = (redrawing_curve.get("stroke_idx"), redrawing_curve.get("comp_idx", redrawing_curve.get("seg_idx")))
+
     for idx, stroke in enumerate(strokes):
         segs = segs_of(stroke)
         if not segs:
@@ -936,6 +940,46 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
         stroke_width = stroke.get("stroke_width", 3.0) if isinstance(stroke, dict) else 3.0
         fill_color = stroke.get("fill_color") if isinstance(stroke, dict) else None
         is_selected_stroke = (idx in sel_set and edit_mode)
+
+        if redraw_target and redraw_target[0] == idx:
+            comp_i = redraw_target[1]
+            ranges = _component_ranges(stroke)
+            in_redraw = set()
+            if 0 <= comp_i < len(ranges):
+                s0, s1 = ranges[comp_i]
+                in_redraw = set(range(s0, min(s1, len(segs))))
+            hidden = set(stroke.get("hidden_segs", set()) or set()) if isinstance(stroke, dict) else set()
+
+            # draw non-redraw, non-hidden segments normally
+            normal_segs = [i for i in range(len(segs)) if i not in in_redraw and i not in hidden]
+            if normal_segs:
+                # selection highlight for normal part
+                if is_selected_stroke:
+                    ctx.new_path()
+                    for i in normal_segs:
+                        p0, c1, c2, p3 = segs[i]
+                        ctx.move_to(p0[0], p0[1]); ctx.curve_to(c1[0], c1[1], c2[0], c2[1], p3[0], p3[1])
+                    ctx.set_source_rgba(0.1, 0.45, 0.95, 0.35)
+                    ctx.set_line_width(stroke_width + 4.0)
+                    ctx.stroke()
+                ctx.new_path()
+                for i in normal_segs:
+                    p0, c1, c2, p3 = segs[i]
+                    ctx.move_to(p0[0], p0[1]); ctx.curve_to(c1[0], c1[1], c2[0], c2[1], p3[0], p3[1])
+                ctx.set_source_rgba(*color_rgba(stroke_color, (0.1, 0.1, 0.15, 1.0)))
+                ctx.set_line_width(stroke_width)
+                ctx.stroke()
+
+            # draw redrawn component as bright yellow low-opacity template
+            if in_redraw:
+                ctx.new_path()
+                for i in sorted(in_redraw):
+                    p0, c1, c2, p3 = segs[i]
+                    ctx.move_to(p0[0], p0[1]); ctx.curve_to(c1[0], c1[1], c2[0], c2[1], p3[0], p3[1])
+                ctx.set_source_rgba(1.0, 1.0, 0.0, 0.35)
+                ctx.set_line_width(max(stroke_width, 2.0))
+                ctx.stroke()
+            continue
 
         # Selection highlight behind the stroke so the actual stroke color stays visible
         if is_selected_stroke and draw_stroke_path(ctx, stroke):
@@ -1763,13 +1807,6 @@ def main():
                     elif tool_mode == "selection" and selection_submode == "curve" and state.get("curve_redraw_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
                         if selected_curve and selected_curve[0] in selected_strokes:
                             si, comp_i = selected_curve
-                            if 0 <= si < len(strokes) and isinstance(strokes[si], dict):
-                                ranges = _component_ranges(strokes[si])
-                                if 0 <= comp_i < len(ranges):
-                                    s0, s1 = ranges[comp_i]
-                                    hidden = set(strokes[si].get("hidden_segs", set()) or set())
-                                    for i in range(s0, s1): hidden.add(i)
-                                    strokes[si]["hidden_segs"] = hidden
                             redrawing_curve = {"stroke_idx": si, "comp_idx": comp_i, "points": []}
                             selected_point = None; transform_drag = None; drag_last = None
                     elif tool_mode == "selection" and selected_strokes:
@@ -2095,17 +2132,8 @@ def main():
                     si = redrawing_curve.get("stroke_idx")
                     comp_i = redrawing_curve.get("comp_idx", redrawing_curve.get("seg_idx"))
                     pts = redrawing_curve.get("points", [])
-                    if si is not None and comp_i is not None and 0 <= si < len(strokes):
-                        if len(pts) >= 2:
-                            strokes[si] = redraw_stroke_component(strokes[si], comp_i, pts)
-                        # ensure component visible (redraw_stroke_component clears hidden, but handle cancel case)
-                        if isinstance(strokes[si], dict):
-                            ranges = _component_ranges(strokes[si])
-                            if 0 <= comp_i < len(ranges):
-                                s0, s1 = ranges[comp_i]
-                                hidden = set(strokes[si].get("hidden_segs", set()) or set())
-                                for i in range(s0, s1): hidden.discard(i)
-                                strokes[si]["hidden_segs"] = hidden
+                    if si is not None and comp_i is not None and 0 <= si < len(strokes) and len(pts) >= 2:
+                        strokes[si] = redraw_stroke_component(strokes[si], comp_i, pts)
                     redrawing_curve = None
                 elif drawing and tool_mode == "draw":
                     drawing = False
@@ -2149,7 +2177,7 @@ def main():
             cairo_surface, strokes, active, snap_point=hover_snap,
             selected_indices=selected_strokes, edit_mode=(tool_mode == "selection"),
             selection_submode=selection_submode, selected_curve=selected_curve,
-            snap_kind=hover_snap_kind,
+            snap_kind=hover_snap_kind, redrawing_curve=redrawing_curve,
         )
         frame = surface_to_pygame(cairo_surface)
         screen.fill((230, 233, 238))
