@@ -3140,9 +3140,6 @@ def main():
                     keys = pygame.key.get_pressed()
                     straight_line = bool(keys[pygame.K_v]) if keys else False
                     current_points = finalize_drawing_points(current_points, cpos, strokes, SNAP_RADIUS, shift_held, straight_line)
-                elif drawing and tool_mode == "draw" and draw_tool == "eraser":
-                    drawing = False
-                    current_points = []
                     if len(current_points) >= 2:
                         raw = list(current_points)
                         shape_segs = None
@@ -3211,6 +3208,9 @@ def main():
                                 strokes.append(st)
                                 strokes = merge_connected_strokes(strokes)
                                 selected_strokes.clear(); selected_point = None; selected_curve = None; redrawing_curve = None
+                    current_points = []
+                elif drawing and tool_mode == "draw" and draw_tool == "eraser":
+                    drawing = False
                     current_points = []
                 drag_last = None; selected_point = None; transform_drag = None
                 picker_drag_sv = False; picker_drag_hue = False; picker_drag_alpha = False; ref_opacity_drag = False
