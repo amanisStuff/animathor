@@ -537,6 +537,27 @@ def _component_ranges(stroke):
     return ranges
 
 
+def _effective_component_style(stroke, comp_i):
+    comps = _stroke_components(stroke)
+    base_sc = stroke.get("stroke_color", (0.1, 0.1, 0.15)) if isinstance(stroke, dict) else (0.1, 0.1, 0.15)
+    base_sw = stroke.get("stroke_width", 3.0) if isinstance(stroke, dict) else 3.0
+    if 0 <= comp_i < len(comps):
+        c = comps[comp_i]
+        if "stroke_color" in c and c["stroke_color"] is not None:
+            base_sc = c["stroke_color"]
+        if "stroke_width" in c and c["stroke_width"] is not None:
+            base_sw = c["stroke_width"]
+    return base_sc, float(base_sw)
+
+
+def _stroke_has_component_styles(stroke):
+    comps = _stroke_components(stroke) if isinstance(stroke, dict) else []
+    for c in comps:
+        if "stroke_color" in c or "stroke_width" in c:
+            return True
+    return False
+
+
 def hit_test_component(stroke, pos, threshold=10.0):
     segs = segs_of(stroke)
     ranges = _component_ranges(stroke)
@@ -1119,24 +1140,32 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
                 in_redraw = set(range(s0, min(s1, len(segs))))
 
             # draw non-redraw, non-hidden segments normally
-            normal_segs = [i for i in range(len(segs)) if i not in in_redraw and i not in hidden]
-            if normal_segs:
+            normal_segs_set = {i for i in range(len(segs)) if i not in in_redraw and i not in hidden}
+            if normal_segs_set:
                 # selection highlight for normal part
                 if is_selected_stroke:
                     ctx.new_path()
-                    for i in normal_segs:
+                    for i in sorted(normal_segs_set):
                         p0, c1, c2, p3 = segs[i]
                         ctx.move_to(p0[0], p0[1]); ctx.curve_to(c1[0], c1[1], c2[0], c2[1], p3[0], p3[1])
                     ctx.set_source_rgba(0.1, 0.45, 0.95, 0.35)
                     ctx.set_line_width(stroke_width + 4.0)
                     ctx.stroke()
-                ctx.new_path()
-                for i in normal_segs:
-                    p0, c1, c2, p3 = segs[i]
-                    ctx.move_to(p0[0], p0[1]); ctx.curve_to(c1[0], c1[1], c2[0], c2[1], p3[0], p3[1])
-                ctx.set_source_rgba(*color_rgba(stroke_color, (0.1, 0.1, 0.15, 1.0)))
-                ctx.set_line_width(stroke_width)
-                ctx.stroke()
+                ranges = _component_ranges(stroke)
+                for ci, (s0, s1) in enumerate(ranges):
+                    sc_i, sw_i = _effective_component_style(stroke, ci)
+                    ctx.new_path()
+                    drew_c = False
+                    for i in range(s0, min(s1, len(segs))):
+                        if i not in normal_segs_set:
+                            continue
+                        p0, c1, c2, p3 = segs[i]
+                        ctx.move_to(p0[0], p0[1]); ctx.curve_to(c1[0], c1[1], c2[0], c2[1], p3[0], p3[1])
+                        drew_c = True
+                    if drew_c:
+                        ctx.set_source_rgba(*color_rgba(sc_i, (0.1, 0.1, 0.15, 1.0)))
+                        ctx.set_line_width(sw_i)
+                        ctx.stroke()
 
             # draw redrawn component as bright yellow low-opacity template
             if in_redraw:
@@ -1158,18 +1187,58 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
             ctx.set_line_width(stroke_width + 4.0)
             ctx.stroke()
 
-        if fill_color is not None:
-            if draw_stroke_path(ctx, stroke):
-                ctx.set_source_rgba(*color_rgba(fill_color, (0.0, 0.0, 0.0, 1.0)))
-                ctx.fill_preserve()
+        if fill_color is not None and draw_stroke_path(ctx, stroke):
+            ctx.set_source_rgba(*color_rgba(fill_color, (0.0, 0.0, 0.0, 1.0)))
+            ctx.fill_preserve()
+            # stroke after fill
+            if _stroke_has_component_styles(stroke):
+                ctx.new_path()  # clear preserved path; stroke by components
+                ranges = _component_ranges(stroke)
+                for ci, (s0, s1) in enumerate(ranges):
+                    sc_i, sw_i = _effective_component_style(stroke, ci)
+                    ctx.new_path()
+                    drew_c = False
+                    for i in range(s0, min(s1, len(segs))):
+                        if i in hidden:
+                            continue
+                        p0, c1, c2, p3 = segs[i]
+                        if not drew_c:
+                            ctx.move_to(p0[0], p0[1])
+                        else:
+                            ctx.move_to(p0[0], p0[1])
+                        ctx.curve_to(c1[0], c1[1], c2[0], c2[1], p3[0], p3[1])
+                        drew_c = True
+                    if drew_c:
+                        ctx.set_source_rgba(*color_rgba(sc_i, (0.1, 0.1, 0.15, 1.0)))
+                        ctx.set_line_width(sw_i)
+                        ctx.stroke()
+            else:
                 ctx.set_source_rgba(*color_rgba(stroke_color, (0.1, 0.1, 0.15, 1.0)))
                 ctx.set_line_width(stroke_width)
                 ctx.stroke()
         else:
-            if draw_stroke_path(ctx, stroke):
-                ctx.set_source_rgba(*color_rgba(stroke_color, (0.1, 0.1, 0.15, 1.0)))
-                ctx.set_line_width(stroke_width)
-                ctx.stroke()
+            if _stroke_has_component_styles(stroke):
+                ranges = _component_ranges(stroke)
+                for ci, (s0, s1) in enumerate(ranges):
+                    sc_i, sw_i = _effective_component_style(stroke, ci)
+                    ctx.new_path()
+                    drew_c = False
+                    for i in range(s0, min(s1, len(segs))):
+                        if i in hidden:
+                            continue
+                        p0, c1, c2, p3 = segs[i]
+                        ctx.move_to(p0[0], p0[1])
+                        ctx.curve_to(c1[0], c1[1], c2[0], c2[1], p3[0], p3[1])
+                        drew_c = True
+                    if drew_c:
+                        ctx.set_source_rgba(*color_rgba(sc_i, (0.1, 0.1, 0.15, 1.0)))
+                        ctx.set_line_width(sw_i)
+                        ctx.stroke()
+            else:
+                if draw_stroke_path(ctx, stroke):
+                    ctx.set_source_rgba(*color_rgba(stroke_color, (0.1, 0.1, 0.15, 1.0)))
+                    ctx.set_line_width(stroke_width)
+                    ctx.stroke()
 
         # Show hidden curves differently in edit curve/nodes modes for easier selection
         if show_hidden:
@@ -1649,57 +1718,78 @@ def draw_panel(screen, fonts, mouse_pos, state):
             stroke = sel_stroke if sel_stroke is not None else state.get("selected_obj")
             if sel_count > 1:
                 screen.blit(font_small.render(f"Multiple selected ({sel_count})", True, MUTED_COLOR), (x, y)); y += 20
-            style_enabled = (submode == "transform")
-            label_color = TEXT_COLOR if style_enabled else MUTED_COLOR
-            value_color = ACCENT if style_enabled else MUTED_COLOR
+
+            comp_style_target = None
+            if submode == "curve" and sel_count == 1 and state.get("selected_curve") and stroke is not None:
+                scv = state.get("selected_curve")
+                if scv and scv[0] in sel_strokes:
+                    comp_style_target = scv[1]
+            shape_style_enabled = (submode == "transform")
+            component_stroke_enabled = (comp_style_target is not None)
+            width_enabled = shape_style_enabled or component_stroke_enabled
+            stroke_color_enabled = shape_style_enabled or component_stroke_enabled
+            fill_enabled = shape_style_enabled
+            if component_stroke_enabled and state.get("color_target") == "fill":
+                # fill can't apply to individual curve stroke
+                state["color_target"] = "stroke"
+            color_target = state.get("color_target", "stroke")
+            state["style_controls_enabled"] = shape_style_enabled  # shape-level color picker (fill etc.)
+
+            # effective values for display/controls
+            eff_sw = stroke.get("stroke_width", 3.0) if stroke else 3.0
+            eff_sc = stroke.get("stroke_color", (0.1, 0.1, 0.15)) if stroke else (0.1, 0.1, 0.15)
+            if component_stroke_enabled and stroke is not None:
+                eff_sc, eff_sw = _effective_component_style(stroke, comp_style_target)
+
             # Stroke width
-            screen.blit(font.render("Stroke width", True, label_color), (x, y)); y += 22
-            wv = font_title.render(str(int(round(stroke.get("stroke_width", 3)))), True, value_color)
+            screen.blit(font.render("Stroke width", True, TEXT_COLOR if width_enabled else MUTED_COLOR), (x, y)); y += 22
+            wv = font_title.render(str(int(round(eff_sw))), True, ACCENT if width_enabled else MUTED_COLOR)
             screen.blit(wv, (x, y - 2)); y += 30
             state["width_slider"].track.topleft = (x, y)
             state["width_slider"].track.width = PANEL_W - 40
+            state["width_slider"].value = int(round(clamp(eff_sw, state["width_slider"].min_v, state["width_slider"].max_v)))
             state["width_slider"].draw(screen)
-            state["style_controls_enabled"] = style_enabled
             y += 20
             algo_label = next((lbl for k, lbl in TRACE_ALGORITHMS if k == stroke.get("algorithm", "fit")), stroke.get("algorithm", "fit"))
             if sel_count == 1:
                 screen.blit(font_small.render(f"Tracing: {algo_label}", True, MUTED_COLOR), (x, y)); y += 20
             else:
                 y += 4
-            if not style_enabled:
+            if submode == "nodes":
                 screen.blit(font_small.render("Stroke/color apply to shape in Transform mode", True, MUTED_COLOR), (x, y)); y += 18
+            elif submode == "curve" and not component_stroke_enabled:
+                screen.blit(font_small.render("Select a curve to edit its stroke", True, MUTED_COLOR), (x, y)); y += 18
+            elif submode == "curve" and component_stroke_enabled:
+                screen.blit(font_small.render("Stroke applies to selected curve", True, MUTED_COLOR), (x, y)); y += 18
 
             # --- Modern color picker ---
-            color_target = state.get("color_target", "stroke")
-            screen.blit(font.render("Color", True, label_color), (x, y)); y += 22
+            screen.blit(font.render("Color", True, TEXT_COLOR if (stroke_color_enabled or fill_enabled) else MUTED_COLOR), (x, y)); y += 22
             # target tabs
             tab_w = (PANEL_W - 40 - 8) // 2
             tab_stroke = pygame.Rect(x, y, tab_w, 26)
             tab_fill = pygame.Rect(x + tab_w + 8, y, tab_w, 26)
-            if style_enabled:
-                state["tab_stroke_rect"] = tab_stroke
-                state["tab_fill_rect"] = tab_fill
-            else:
-                state["tab_stroke_rect"] = pygame.Rect(0,0,0,0)
-                state["tab_fill_rect"] = pygame.Rect(0,0,0,0)
+            state["tab_stroke_rect"] = tab_stroke if stroke_color_enabled else pygame.Rect(0,0,0,0)
+            state["tab_fill_rect"] = tab_fill if fill_enabled else pygame.Rect(0,0,0,0)
             for rect, label, key in ((tab_stroke, "Stroke", "stroke"), (tab_fill, "Fill", "fill")):
-                active = (color_target == key) and style_enabled
-                bg = TOOL_ACTIVE if active else (BUTTON_HOVER if (style_enabled and rect.collidepoint(mouse_pos)) else BUTTON_BG)
+                enabled_tab = stroke_color_enabled if key == "stroke" else fill_enabled
+                active = (color_target == key) and enabled_tab
+                bg = TOOL_ACTIVE if active else (BUTTON_HOVER if (enabled_tab and rect.collidepoint(mouse_pos)) else BUTTON_BG)
                 pygame.draw.rect(screen, bg, rect, border_radius=6)
                 border_c = ACCENT if active else BUTTON_BORDER
-                if not style_enabled:
+                if not enabled_tab:
                     border_c = BUTTON_BORDER
                 pygame.draw.rect(screen, border_c, rect, 2 if active else 1, border_radius=6)
-                tc = (ACCENT if active else TEXT_COLOR) if style_enabled else MUTED_COLOR
+                tc = (ACCENT if active else TEXT_COLOR) if enabled_tab else MUTED_COLOR
                 t = font_small.render(label, True, tc)
                 screen.blit(t, t.get_rect(center=rect.center))
             y += 32
 
             # current color for target
             if color_target == "stroke":
-                cur_color = stroke.get("stroke_color", (0.1, 0.1, 0.15)) or (0.1, 0.1, 0.15)
+                cur_color = eff_sc if stroke_color_enabled else (stroke.get("stroke_color", (0.1, 0.1, 0.15)) if stroke else (0.1,0.1,0.15))
+                cur_color = cur_color or (0.1, 0.1, 0.15)
             else:
-                cur_color = stroke.get("fill_color", None)
+                cur_color = stroke.get("fill_color", None) if stroke else None
             display_color = cur_color if cur_color is not None else (1.0, 1.0, 1.0)
             h, s, vcol = rgb_to_hsv(*display_color)
             # keep picker state in sync if not dragging
@@ -1817,16 +1907,22 @@ def draw_panel(screen, fonts, mouse_pos, state):
                 draw_swatch(screen, r, col, sel_match, mouse_pos)
             y += sw + 10
 
-            # Disable style controls in curve/point (nodes) modes: can't apply to curve/point
-            if not style_enabled:
-                state["tab_stroke_rect"] = pygame.Rect(0,0,0,0)
+            # Disable non-applicable style controls
+            if not fill_enabled:
                 state["tab_fill_rect"] = pygame.Rect(0,0,0,0)
+                state["nofill_rect"] = pygame.Rect(0,0,0,0)
+                if not stroke_color_enabled:
+                    state["tab_stroke_rect"] = pygame.Rect(0,0,0,0)
+            if not (stroke_color_enabled or fill_enabled):
                 state["sv_rect"] = pygame.Rect(0,0,0,0)
                 state["hue_rect"] = pygame.Rect(0,0,0,0)
-                state["nofill_rect"] = pygame.Rect(0,0,0,0)
                 state["alpha_rect"] = pygame.Rect(0,0,0,0)
                 state["stroke_swatch_rects"] = [pygame.Rect(0,0,0,0) for _ in STROKE_SWATCHES]
                 state["fill_swatch_rects"] = [pygame.Rect(0,0,0,0) for _ in STROKE_SWATCHES]
+            elif component_stroke_enabled and not fill_enabled:
+                # only stroke color editable for selected curve; fill swatches/controls off
+                state["fill_swatch_rects"] = [pygame.Rect(0,0,0,0) for _ in STROKE_SWATCHES]
+            state["component_style_target"] = comp_style_target if component_stroke_enabled else None
 
         sel_label = "-" if sel_count == 0 else (str(next(iter(sel_strokes)) + 1) if sel_count == 1 else f"{sel_count}")
         stats = font_small.render(f"Strokes: {state['stroke_count']} | Selected: {sel_label}", True, MUTED_COLOR)
@@ -2045,10 +2141,23 @@ def main():
 
             if slider.handle_event(event):
                 max_points_per_curve = slider.value
-            if tool_mode == "selection" and selection_submode == "transform" and selected_strokes and width_slider.handle_event(event):
-                for si in selected_strokes:
+            comp_style_target = None
+            if tool_mode == "selection" and selection_submode == "curve" and selected_curve and len(selected_strokes) == 1:
+                scv = selected_curve
+                if scv and scv[0] in selected_strokes:
+                    comp_style_target = (scv[0], scv[1])
+            if tool_mode == "selection" and selected_strokes and width_slider.handle_event(event):
+                if selection_submode == "transform":
+                    for si in selected_strokes:
+                        if 0 <= si < len(strokes):
+                            strokes[si]["stroke_width"] = float(width_slider.value)
+                elif comp_style_target is not None:
+                    si, ci = comp_style_target
                     if 0 <= si < len(strokes):
-                        strokes[si]["stroke_width"] = float(width_slider.value)
+                        comps = _stroke_components(strokes[si])
+                        if 0 <= ci < len(comps):
+                            comps[ci]["stroke_width"] = float(width_slider.value)
+                            strokes[si]["components"] = comps
 
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
@@ -2172,75 +2281,55 @@ def main():
                                 "started": False, "fixed_start": fixed_start, "fixed_end": fixed_end,
                             }
                             selected_point = None; transform_drag = None; drag_last = None
-                    elif tool_mode == "selection" and selection_submode == "transform" and selected_strokes:
-                        # Modern color picker interactions (apply to all selected strokes - shape level)
-                        sel_list = sorted(selected_strokes)
-                        primary_i = sel_list[0]
-                        primary_obj = strokes[primary_i] if 0 <= primary_i < len(strokes) else None
-                        if primary_obj is None:
+                    elif tool_mode == "selection" and selected_strokes and (selection_submode == "transform" or (selection_submode == "curve" and selected_curve)):
+                        # Modern color picker interactions (shape-level in transform, stroke-level per selected curve in curve mode)
+                        comp_style_target = None
+                        if selection_submode == "curve" and selected_curve and len(selected_strokes) == 1 and selected_curve[0] in selected_strokes:
+                            comp_style_target = selected_curve
+                        if selection_submode == "curve" and comp_style_target is None:
                             pass
-                        elif state["tab_stroke_rect"].collidepoint(event.pos):
-                            color_target = "stroke"
-                            sc = primary_obj.get("stroke_color", (0.1, 0.1, 0.15)) or (0.1, 0.1, 0.15)
-                            picker_h, picker_s, picker_v = rgb_to_hsv(*sc)
-                            state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
-                        elif state["tab_fill_rect"].collidepoint(event.pos):
-                            color_target = "fill"
-                            fc = primary_obj.get("fill_color", None) or (1.0, 1.0, 1.0)
-                            picker_h, picker_s, picker_v = rgb_to_hsv(*fc)
-                            state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
-                        elif state.get("nofill_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos) and color_target == "fill":
-                            for si in sel_list:
-                                if 0 <= si < len(strokes):
-                                    strokes[si]["fill_color"] = None
-                        elif state["sv_rect"].collidepoint(event.pos):
-                            picker_drag_sv = True
-                            sv = state["sv_rect"]
-                            picker_s = clamp((event.pos[0] - sv.x) / max(1, sv.w - 1), 0.0, 1.0)
-                            picker_v = clamp(1.0 - (event.pos[1] - sv.y) / max(1, sv.h - 1), 0.0, 1.0)
-                            col = hsv_to_rgb(picker_h, picker_s, picker_v)
-                            for si in sel_list:
-                                if 0 <= si < len(strokes):
-                                    if color_target == "stroke":
-                                        alpha = color_alpha(strokes[si].get("stroke_color"), 1.0)
-                                        strokes[si]["stroke_color"] = (col[0], col[1], col[2], alpha)
-                                    else:
-                                        alpha = color_alpha(strokes[si].get("fill_color"), 1.0)
-                                        strokes[si]["fill_color"] = (col[0], col[1], col[2], alpha)
-                            state["picker_drag_sv"] = True
-                            state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
-                        elif state["hue_rect"].collidepoint(event.pos):
-                            picker_drag_hue = True
-                            hr = state["hue_rect"]
-                            picker_h = clamp((event.pos[0] - hr.x) / max(1, hr.w - 1), 0.0, 1.0) * 360.0
-                            col = hsv_to_rgb(picker_h, picker_s, picker_v)
-                            for si in sel_list:
-                                if 0 <= si < len(strokes):
-                                    if color_target == "stroke":
-                                        alpha = color_alpha(strokes[si].get("stroke_color"), 1.0)
-                                        strokes[si]["stroke_color"] = (col[0], col[1], col[2], alpha)
-                                    else:
-                                        alpha = color_alpha(strokes[si].get("fill_color"), 1.0)
-                                        strokes[si]["fill_color"] = (col[0], col[1], col[2], alpha)
-                            state["picker_drag_hue"] = True
-                            state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
-                        elif state.get("alpha_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
-                            ar = state["alpha_rect"]
-                            new_alpha = clamp((event.pos[0] - ar.x) / max(1, ar.w - 1), 0.0, 1.0)
-                            for si in sel_list:
-                                if 0 <= si < len(strokes):
-                                    if color_target == "stroke":
-                                        strokes[si]["stroke_color"] = set_color_alpha(strokes[si].get("stroke_color", (0.1,0.1,0.15,1.0)), new_alpha)
-                                    elif strokes[si].get("fill_color") is not None:
-                                        strokes[si]["fill_color"] = set_color_alpha(strokes[si].get("fill_color"), new_alpha)
-                            picker_drag_alpha = True
-                            state["picker_drag_alpha"] = True
                         else:
-                            # preset swatches (draw_panel populates rects matching active target)
-                            rects = state["stroke_swatch_rects"] if color_target == "stroke" else state["fill_swatch_rects"]
-                            for i, r in enumerate(rects):
-                                if r.w > 0 and r.collidepoint(event.pos) and i < len(STROKE_SWATCHES):
-                                    col = STROKE_SWATCHES[i]
+                            sel_list = sorted(selected_strokes)
+                            primary_i = sel_list[0]
+                            primary_obj = strokes[primary_i] if 0 <= primary_i < len(strokes) else None
+                            def _set_comp_stroke_color(si, ci, rgb, alpha):
+                                comps = _stroke_components(strokes[si])
+                                if 0 <= ci < len(comps):
+                                    comps[ci]["stroke_color"] = (rgb[0], rgb[1], rgb[2], alpha)
+                                    strokes[si]["components"] = comps
+                            if primary_obj is None:
+                                pass
+                            elif state["tab_stroke_rect"].collidepoint(event.pos):
+                                color_target = "stroke"
+                                if comp_style_target is not None:
+                                    sc, _sw = _effective_component_style(primary_obj, comp_style_target[1])
+                                    sc = sc or (0.1, 0.1, 0.15)
+                                else:
+                                    sc = primary_obj.get("stroke_color", (0.1, 0.1, 0.15)) or (0.1, 0.1, 0.15)
+                                picker_h, picker_s, picker_v = rgb_to_hsv(*sc)
+                                state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
+                            elif state["tab_fill_rect"].collidepoint(event.pos) and comp_style_target is None:
+                                color_target = "fill"
+                                fc = primary_obj.get("fill_color", None) or (1.0, 1.0, 1.0)
+                                picker_h, picker_s, picker_v = rgb_to_hsv(*fc)
+                                state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
+                            elif state.get("nofill_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos) and color_target == "fill" and comp_style_target is None:
+                                for si in sel_list:
+                                    if 0 <= si < len(strokes):
+                                        strokes[si]["fill_color"] = None
+                            elif state["sv_rect"].collidepoint(event.pos):
+                                picker_drag_sv = True
+                                sv = state["sv_rect"]
+                                picker_s = clamp((event.pos[0] - sv.x) / max(1, sv.w - 1), 0.0, 1.0)
+                                picker_v = clamp(1.0 - (event.pos[1] - sv.y) / max(1, sv.h - 1), 0.0, 1.0)
+                                col = hsv_to_rgb(picker_h, picker_s, picker_v)
+                                if comp_style_target is not None and color_target == "stroke":
+                                    si, ci = comp_style_target
+                                    if 0 <= si < len(strokes):
+                                        cur_sc, _ = _effective_component_style(strokes[si], ci)
+                                        alpha = color_alpha(cur_sc, 1.0)
+                                        _set_comp_stroke_color(si, ci, col, alpha)
+                                else:
                                     for si in sel_list:
                                         if 0 <= si < len(strokes):
                                             if color_target == "stroke":
@@ -2249,9 +2338,72 @@ def main():
                                             else:
                                                 alpha = color_alpha(strokes[si].get("fill_color"), 1.0)
                                                 strokes[si]["fill_color"] = (col[0], col[1], col[2], alpha)
-                                    picker_h, picker_s, picker_v = rgb_to_hsv(*col)
-                                    state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
-                                    break
+                                state["picker_drag_sv"] = True
+                                state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
+                            elif state["hue_rect"].collidepoint(event.pos):
+                                picker_drag_hue = True
+                                hr = state["hue_rect"]
+                                picker_h = clamp((event.pos[0] - hr.x) / max(1, hr.w - 1), 0.0, 1.0) * 360.0
+                                col = hsv_to_rgb(picker_h, picker_s, picker_v)
+                                if comp_style_target is not None and color_target == "stroke":
+                                    si, ci = comp_style_target
+                                    if 0 <= si < len(strokes):
+                                        cur_sc, _ = _effective_component_style(strokes[si], ci)
+                                        alpha = color_alpha(cur_sc, 1.0)
+                                        _set_comp_stroke_color(si, ci, col, alpha)
+                                else:
+                                    for si in sel_list:
+                                        if 0 <= si < len(strokes):
+                                            if color_target == "stroke":
+                                                alpha = color_alpha(strokes[si].get("stroke_color"), 1.0)
+                                                strokes[si]["stroke_color"] = (col[0], col[1], col[2], alpha)
+                                            else:
+                                                alpha = color_alpha(strokes[si].get("fill_color"), 1.0)
+                                                strokes[si]["fill_color"] = (col[0], col[1], col[2], alpha)
+                                state["picker_drag_hue"] = True
+                                state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
+                            elif state.get("alpha_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
+                                ar = state["alpha_rect"]
+                                new_alpha = clamp((event.pos[0] - ar.x) / max(1, ar.w - 1), 0.0, 1.0)
+                                if comp_style_target is not None and color_target == "stroke":
+                                    si, ci = comp_style_target
+                                    if 0 <= si < len(strokes):
+                                        cur_sc, _ = _effective_component_style(strokes[si], ci)
+                                        base = color_rgb(cur_sc, (0.1,0.1,0.15))
+                                        _set_comp_stroke_color(si, ci, base, new_alpha)
+                                else:
+                                    for si in sel_list:
+                                        if 0 <= si < len(strokes):
+                                            if color_target == "stroke":
+                                                strokes[si]["stroke_color"] = set_color_alpha(strokes[si].get("stroke_color", (0.1,0.1,0.15,1.0)), new_alpha)
+                                            elif strokes[si].get("fill_color") is not None:
+                                                strokes[si]["fill_color"] = set_color_alpha(strokes[si].get("fill_color"), new_alpha)
+                                picker_drag_alpha = True
+                                state["picker_drag_alpha"] = True
+                            else:
+                                # preset swatches (draw_panel populates rects matching active target)
+                                rects = state["stroke_swatch_rects"] if color_target == "stroke" else state["fill_swatch_rects"]
+                                for i, r in enumerate(rects):
+                                    if r.w > 0 and r.collidepoint(event.pos) and i < len(STROKE_SWATCHES):
+                                        col = STROKE_SWATCHES[i]
+                                        if comp_style_target is not None and color_target == "stroke":
+                                            si, ci = comp_style_target
+                                            if 0 <= si < len(strokes):
+                                                cur_sc, _ = _effective_component_style(strokes[si], ci)
+                                                alpha = color_alpha(cur_sc, 1.0)
+                                                _set_comp_stroke_color(si, ci, col, alpha)
+                                        else:
+                                            for si in sel_list:
+                                                if 0 <= si < len(strokes):
+                                                    if color_target == "stroke":
+                                                        alpha = color_alpha(strokes[si].get("stroke_color"), 1.0)
+                                                        strokes[si]["stroke_color"] = (col[0], col[1], col[2], alpha)
+                                                    else:
+                                                        alpha = color_alpha(strokes[si].get("fill_color"), 1.0)
+                                                        strokes[si]["fill_color"] = (col[0], col[1], col[2], alpha)
+                                        picker_h, picker_s, picker_v = rgb_to_hsv(*col)
+                                        state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
+                                        break
                 elif in_canvas(event.pos):
                     cpos = to_canvas(event.pos)
                     if tool_mode == "draw":
@@ -2422,44 +2574,73 @@ def main():
                     off = ref_drag.get("offset", (0, 0))
                     reference_image["x"] = cpos[0] - off[0]
                     reference_image["y"] = cpos[1] - off[1]
-                elif (picker_drag_sv or picker_drag_hue or picker_drag_alpha) and selected_strokes and selection_submode == "transform":
+                elif (picker_drag_sv or picker_drag_hue or picker_drag_alpha) and selected_strokes and (selection_submode == "transform" or (selection_submode == "curve" and selected_curve and color_target == "stroke")):
                     sel_list = sorted(selected_strokes)
+                    comp_style_target = None
+                    if selection_submode == "curve" and selected_curve and len(selected_strokes) == 1 and selected_curve[0] in selected_strokes and color_target == "stroke":
+                        comp_style_target = selected_curve
+                    def _apply_comp_stroke_color_drag(si, ci, rgb, alpha):
+                        comps = _stroke_components(strokes[si])
+                        if 0 <= ci < len(comps):
+                            comps[ci]["stroke_color"] = (rgb[0], rgb[1], rgb[2], alpha)
+                            strokes[si]["components"] = comps
                     if picker_drag_sv:
                         sv = state["sv_rect"]
                         picker_s = clamp((event.pos[0] - sv.x) / max(1, sv.w - 1), 0.0, 1.0)
                         picker_v = clamp(1.0 - (event.pos[1] - sv.y) / max(1, sv.h - 1), 0.0, 1.0)
                         col = hsv_to_rgb(picker_h, picker_s, picker_v)
-                        for si in sel_list:
+                        if comp_style_target is not None:
+                            si, ci = comp_style_target
                             if 0 <= si < len(strokes):
-                                if color_target == "stroke":
-                                    alpha = color_alpha(strokes[si].get("stroke_color"), 1.0)
-                                    strokes[si]["stroke_color"] = (col[0], col[1], col[2], alpha)
-                                else:
-                                    alpha = color_alpha(strokes[si].get("fill_color"), 1.0)
-                                    strokes[si]["fill_color"] = (col[0], col[1], col[2], alpha)
+                                cur_sc, _ = _effective_component_style(strokes[si], ci)
+                                alpha = color_alpha(cur_sc, 1.0)
+                                _apply_comp_stroke_color_drag(si, ci, col, alpha)
+                        else:
+                            for si in sel_list:
+                                if 0 <= si < len(strokes):
+                                    if color_target == "stroke":
+                                        alpha = color_alpha(strokes[si].get("stroke_color"), 1.0)
+                                        strokes[si]["stroke_color"] = (col[0], col[1], col[2], alpha)
+                                    else:
+                                        alpha = color_alpha(strokes[si].get("fill_color"), 1.0)
+                                        strokes[si]["fill_color"] = (col[0], col[1], col[2], alpha)
                         state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
                     elif picker_drag_hue:
                         hr = state["hue_rect"]
                         picker_h = clamp((event.pos[0] - hr.x) / max(1, hr.w - 1), 0.0, 1.0) * 360.0
                         col = hsv_to_rgb(picker_h, picker_s, picker_v)
-                        for si in sel_list:
+                        if comp_style_target is not None:
+                            si, ci = comp_style_target
                             if 0 <= si < len(strokes):
-                                if color_target == "stroke":
-                                    alpha = color_alpha(strokes[si].get("stroke_color"), 1.0)
-                                    strokes[si]["stroke_color"] = (col[0], col[1], col[2], alpha)
-                                else:
-                                    alpha = color_alpha(strokes[si].get("fill_color"), 1.0)
-                                    strokes[si]["fill_color"] = (col[0], col[1], col[2], alpha)
+                                cur_sc, _ = _effective_component_style(strokes[si], ci)
+                                alpha = color_alpha(cur_sc, 1.0)
+                                _apply_comp_stroke_color_drag(si, ci, col, alpha)
+                        else:
+                            for si in sel_list:
+                                if 0 <= si < len(strokes):
+                                    if color_target == "stroke":
+                                        alpha = color_alpha(strokes[si].get("stroke_color"), 1.0)
+                                        strokes[si]["stroke_color"] = (col[0], col[1], col[2], alpha)
+                                    else:
+                                        alpha = color_alpha(strokes[si].get("fill_color"), 1.0)
+                                        strokes[si]["fill_color"] = (col[0], col[1], col[2], alpha)
                         state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
                     elif picker_drag_alpha:
                         ar = state.get("alpha_rect", pygame.Rect(0,0,0,0))
                         new_alpha = clamp((event.pos[0] - ar.x) / max(1, ar.w - 1), 0.0, 1.0)
-                        for si in sel_list:
+                        if comp_style_target is not None:
+                            si, ci = comp_style_target
                             if 0 <= si < len(strokes):
-                                if color_target == "stroke":
-                                    strokes[si]["stroke_color"] = set_color_alpha(strokes[si].get("stroke_color", (0.1,0.1,0.15,1.0)), new_alpha)
-                                elif strokes[si].get("fill_color") is not None:
-                                    strokes[si]["fill_color"] = set_color_alpha(strokes[si].get("fill_color"), new_alpha)
+                                cur_sc, _ = _effective_component_style(strokes[si], ci)
+                                base = color_rgb(cur_sc, (0.1,0.1,0.15))
+                                _apply_comp_stroke_color_drag(si, ci, base, new_alpha)
+                        else:
+                            for si in sel_list:
+                                if 0 <= si < len(strokes):
+                                    if color_target == "stroke":
+                                        strokes[si]["stroke_color"] = set_color_alpha(strokes[si].get("stroke_color", (0.1,0.1,0.15,1.0)), new_alpha)
+                                    elif strokes[si].get("fill_color") is not None:
+                                        strokes[si]["fill_color"] = set_color_alpha(strokes[si].get("fill_color"), new_alpha)
                 elif redrawing_curve is not None and redrawing_curve.get("started") and pygame.mouse.get_pressed()[0]:
                     cpos = clamp_to_canvas(event.pos)
                     pts = redrawing_curve.get("points", [])

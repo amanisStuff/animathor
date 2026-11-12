@@ -647,6 +647,16 @@ class TestStrokeComponentsRedraw(unittest.TestCase):
         # near second component
         self.assertEqual(app.hit_test_component(merged, (60.0, 1.0), threshold=10.0), 1)
 
+    def test_component_stroke_style(self):
+        s = self._make_component_stroke([(0, 0), (50, 0), (100, 0)], max_points=2, algorithm="fit")
+        s["components"][0]["stroke_color"] = (1.0, 0.0, 0.0, 1.0)
+        s["components"][0]["stroke_width"] = 7.0
+        sc, sw = app._effective_component_style(s, 0)
+        self.assertEqual(sc, (1.0, 0.0, 0.0, 1.0))
+        self.assertEqual(sw, 7.0)
+        surf = app.make_cairo_surface(120, 40)
+        app.draw_scene(surf, [s])
+
 
 class TestMultiSelectUI(unittest.TestCase):
     def setUp(self):
