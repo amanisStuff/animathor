@@ -484,6 +484,410 @@ def _cubic_point(p0, c1, c2, p3, t):
     return (x, y)
 
 
+WAVE_SHAPES = ["sine", "triangle", "square", "sawtooth", "circular", "half_circle", "formula"]
+
+
+def default_wave_params():
+    return {
+        "type": "wave",
+        "enabled": False,
+        "shape": "sine",
+        "amplitude": 8.0,
+        "frequency": 3.0,
+        "phase": 0.0,
+        "noise": 0.0,
+        "seed": 0,
+        "noise_scale": 2.0,
+        "formula": "sin(x)",
+    }
+
+
+def _component_styles(component):
+    if not isinstance(component, dict):
+        return []
+    styles = component.get("styles")
+    if isinstance(styles, list):
+        return list(styles)
+    w = component.get("wave")
+    if isinstance(w, dict):
+        d = default_wave_params()
+        d.update({k: w.get(k, d[k]) for k in d.keys() if k != "type"})
+        d["type"] = "wave"
+        return [d]
+    return []
+
+
+def _get_wave_style(component):
+    for s0 in _component_styles(component):
+        if isinstance(s0, dict) and s0.get("type") == "wave":
+            d = default_wave_params()
+            d.update({k: s0.get(k, d[k]) for k in d.keys() if k != "type"})
+            d["type"] = "wave"
+            return d
+    if isinstance(component, dict) and isinstance(component.get("wave"), dict):
+        d = default_wave_params()
+        d.update({k: component["wave"].get(k, d[k]) for k in d.keys() if k != "type"})
+        d["type"] = "wave"
+        return d
+    return default_wave_params()
+
+
+def _set_wave_style(component, wave_style):
+    if not isinstance(component, dict):
+        return
+    d = default_wave_params()
+    if isinstance(wave_style, dict):
+        d.update({k: wave_style.get(k, d[k]) for k in d.keys() if k != "type"})
+    d["type"] = "wave"
+    styles = [dict(s0) for s0 in _component_styles(component) if not (isinstance(s0, dict) and s0.get("type") == "wave")]
+    styles.append(d)
+    component["styles"] = styles
+    component["wave"] = {k: d[k] for k in d.keys() if k != "type"}
+
+
+def _remove_wave_style(component):
+    if not isinstance(component, dict):
+        return
+    styles = [dict(s0) for s0 in _component_styles(component) if not (isinstance(s0, dict) and s0.get("type") == "wave")]
+    component["styles"] = styles
+    component.pop("wave", None)
+
+
+def _wave_params(component):
+    return _get_wave_style(component)
+
+
+def _component_wave_enabled(component):
+    w = _get_wave_style(component)
+    try:
+        return bool(w.get("enabled")) and (abs(float(w.get("amplitude", 0))) > 1e-6 or abs(float(w.get("noise", 0))) > 1e-6)
+    except Exception:
+        return False
+
+
+def _pseudo_noise01(i, seed=0):
+    # deterministic hash-based noise in [0,1)
+    x = (int(i) * 374761393 + int(seed) * 668265263 + 1442695041) & 0xFFFFFFFF
+    x = (x ^ (x >> 13)) * 1274126177 & 0xFFFFFFFF
+    x = x ^ (x >> 16)
+    return (x & 0xFFFFFFFF) / 4294967295.0
+
+
+def _smooth_noise1d(x, seed=0, scale=2.0):
+    try:
+        scale = max(0.1, float(scale))
+    except Exception:
+        scale = 2.0
+    p = float(x) * scale
+    i0 = int(math.floor(p))
+    i1 = i0 + 1
+    f = p - i0
+    # smoothstep
+    t = f * f * (3.0 - 2.0 * f)
+    n0 = _pseudo_noise01(i0, seed) * 2.0 - 1.0
+    n1 = _pseudo_noise01(i1, seed) * 2.0 - 1.0
+    return n0 + (n1 - n0) * t
+
+
+def _latex_to_python_expr(expr):
+    """Best-effort conversion of LaTeX-like math formulas to Python expressions."""
+    import re
+    if expr is None:
+        return "sin(x)"
+    s = str(expr).strip()
+    if not s:
+        return "sin(x)"
+    # strip f(x)=
+    s = re.sub(r'^\s*[A-Za-z]\s*\\left\s*\(.*?\\right\s*\)\s*=\s*', '', s)
+    s = re.sub(r'^\s*[A-Za-z]\s*\(.*?\)\s*=\s*', '', s)
+    s = re.sub(r'^\s*y\s*=\s*', '', s)
+    s = s.replace(r'\left', '').replace(r'\right', '')
+    s = s.replace(r'\cdot', '*').replace(r'\times', '*')
+    s = s.replace(r'\pi', 'pi')
+    s = re.sub(r'\^\{([^{}]*)\}', r'**(\1)', s)
+    s = s.replace('^', '**')
+    s = re.sub(r'\\operatorname\s*\{([^}]+)\}', r'\1', s)
+    # functions - longer/more specific first
+    for k,v in [(r'\arcsin','asin'),(r'\arccos','acos'),(r'\arctan','atan'),
+                (r'\sin','sin'),(r'\cos','cos'),(r'\tan','tan'),
+                (r'\sqrt','sqrt'),(r'\ln','log'),(r'\log','log10'),(r'\exp','exp'),(r'\abs','abs')]:
+        s = s.replace(k,v)
+    s = re.sub(r'\\([A-Za-z]+)', r'\1', s)
+    s = s.replace('\\', '')
+
+    def read_group(text, j):
+        while j < len(text) and text[j].isspace(): j += 1
+        if j < len(text) and text[j] == '{':
+            depth=0; k=j
+            while k<len(text):
+                if text[k]=='{': depth+=1
+                elif text[k]=='}':
+                    depth-=1
+                    if depth==0: return text[j+1:k], k+1
+                k+=1
+            return text[j+1:], len(text)
+        elif j<len(text): return text[j], j+1
+        return '', j
+
+    for _ in range(20):
+        i=0; out=[]; changed=False
+        while i<len(s):
+            if s.startswith('frac',i) and (i==0 or not (s[i-1].isalnum() or s[i-1]=='_')):
+                i+=4; a,i=read_group(s,i); b,i=read_group(s,i)
+                out.append('((' + a + ')/(' + b + '))'); changed=True
+            else:
+                out.append(s[i]); i+=1
+        ns=''.join(out)
+        if not changed: break
+        s=ns
+
+    funcs=['sqrt','sin','cos','tan','asin','acos','atan','abs','log','log10','exp','sign','floor','ceil','min','max']
+    for fn in funcs:
+        for _ in range(12):
+            i=0; out=[]; changed=False
+            while i<len(s):
+                if s.startswith(fn+'{',i) and (i==0 or not (s[i-1].isalnum() or s[i-1]=='_')):
+                    j=i+len(fn); a,j=read_group(s,j)
+                    out.append(fn+'('+a+')'); i=j; changed=True
+                else:
+                    out.append(s[i]); i+=1
+            ns=''.join(out)
+            if not changed: break
+            s=ns
+
+    for _ in range(12):
+        m=re.search(r'\|([^|]+)\|', s)
+        if not m: break
+        s=s[:m.start()]+'abs('+m.group(1)+')'+s[m.end():]
+    s=s.replace('|','').replace('{','(').replace('}',')')
+    func_pat=r'(?:'+'|'.join(sorted(funcs,key=len,reverse=True))+r')'
+    s=re.sub(r'(\d)([A-Za-z_\(])', r'\1*\2', s)
+    s=re.sub(r'(\))([A-Za-z0-9_\(])', r'\1*\2', s)
+    s=re.sub(r'(\bpi\b)([A-Za-z0-9_\(])', r'\1*\2', s)
+    s=re.sub(r'([A-Za-z0-9_\)])(\bpi\b)', r'\1*\2', s)
+    # insert * before function calls, but avoid splitting identifiers like asin -> a*sin
+    def _mult_before_func(m):
+        pre = m.group(1)
+        fn = m.group(2)
+        # if pre ends with letter and pre+fn forms a known function name, skip
+        if pre and pre[-1].isalpha():
+            combo = pre[-1] + fn
+            if combo in funcs:
+                return m.group(0)
+        return pre + '*' + fn
+    s=re.sub(r'([A-Za-z0-9_\)])(' + func_pat + r')\b', _mult_before_func, s)
+    s=re.sub(r'\b(\d)\s*([A-Za-z])\b', r'\1*\2', s)
+    s=s.replace('pi x','pi*x').replace('npi','n*pi')
+    s=re.sub(r'^[A-Za-z]\s*\([^)]*\)\s*=\s*', '', s)
+    return s.strip() or "sin(x)"
+
+def sample_distorted_component(stroke, comp_index, samples_per_seg=24):
+    """Return sampled polyline points for a component with wave distortion applied.
+    Distortion is for rendering only; base geometry remains unchanged."""
+    comps = _stroke_components(stroke)
+    if not (0 <= comp_index < len(comps)):
+        return []
+    comp = comps[comp_index]
+    # Always sample from current stroke base geometry so distortion follows edits/transforms/redraws.
+    ranges = _component_ranges(stroke)
+    segs = []
+    if 0 <= comp_index < len(ranges):
+        s0, s1 = ranges[comp_index]
+        segs = list(segs_of(stroke)[s0:s1])
+    if not segs:
+        segs = list(comp.get("segs") or [])
+    if not segs:
+        return []
+    w = _wave_params(comp)
+    if not _component_wave_enabled(comp):
+        # return dense samples of base for consistency? caller can choose; but return base polyline
+        pts = []
+        for si, (p0, c1, c2, p3) in enumerate(segs):
+            if si == 0:
+                pts.append(p0)
+            steps = max(2, int(samples_per_seg))
+            for i in range(1, steps + 1):
+                pts.append(cubic_bezier_point(p0, c1, c2, p3, i / steps))
+        return pts
+    amp = float(w.get("amplitude", 0.0) or 0.0)
+    freq = float(w.get("frequency", 0.0) or 0.0)
+    phase = float(w.get("phase", 0.0) or 0.0)
+    noise_amt = float(w.get("noise", 0.0) or 0.0)
+    seed = int(w.get("seed", 0) or 0)
+    noise_scale = float(w.get("noise_scale", 2.0) or 2.0)
+
+    # approximate arc-length parameter for stable waves across segments
+    # precompute cumulative lengths
+    seg_samples = max(4, int(samples_per_seg))
+    lengths = []
+    total = 0.0
+    for (p0, c1, c2, p3) in segs:
+        prev = p0
+        l = 0.0
+        for i in range(1, seg_samples + 1):
+            pt = cubic_bezier_point(p0, c1, c2, p3, i / seg_samples)
+            l += math.hypot(pt[0] - prev[0], pt[1] - prev[1])
+            prev = pt
+        lengths.append(l)
+        total += l
+    if total <= 1e-6:
+        total = 1.0
+
+    # sample base points and tangents along whole component for stable normals
+    base_pts = []
+    base_s = []
+    cum = 0.0
+    for si, (p0, c1, c2, p3) in enumerate(segs):
+        seg_len = lengths[si] if si < len(lengths) else 0.0
+        start_s = cum / total
+        end_s = (cum + seg_len) / total if total > 0 else start_s
+        steps = seg_samples
+        for i in range(0 if si == 0 else 1, steps + 1):
+            t = i / steps
+            x, y = cubic_bezier_point(p0, c1, c2, p3, t)
+            s = start_s + (end_s - start_s) * t
+            base_pts.append((x, y))
+            base_s.append(s)
+        cum += seg_len
+    if len(base_pts) < 2:
+        return base_pts
+
+    # compute normals from finite differences to avoid derivative singularities/flips
+    normals = []
+    n = len(base_pts)
+    for i in range(n):
+        if i == 0:
+            dx = base_pts[1][0] - base_pts[0][0]
+            dy = base_pts[1][1] - base_pts[0][1]
+        elif i == n - 1:
+            dx = base_pts[-1][0] - base_pts[-2][0]
+            dy = base_pts[-1][1] - base_pts[-2][1]
+        else:
+            dx = base_pts[i + 1][0] - base_pts[i - 1][0]
+            dy = base_pts[i + 1][1] - base_pts[i - 1][1]
+        l = math.hypot(dx, dy)
+        if l < 1e-6:
+            # fallback to previous normal or arbitrary
+            if normals:
+                normals.append(normals[-1])
+            else:
+                normals.append((0.0, -1.0))
+            continue
+        normals.append((-dy / l, dx / l))
+
+    # ensure normal consistency (avoid sudden flips)
+    for i in range(1, len(normals)):
+        px, py = normals[i - 1]
+        nx, ny = normals[i]
+        if px * nx + py * ny < 0:
+            normals[i] = (-nx, -ny)
+
+    def _wave_value(shape, p):
+        # p in radians-like phase
+        t = p / math.tau
+        frac = t - math.floor(t)  # 0..1
+        if shape == "triangle":
+            # -1..1 triangle
+            return 4.0 * abs(frac - 0.5) - 1.0
+        if shape == "square":
+            return 1.0 if frac < 0.5 else -1.0
+        if shape == "sawtooth":
+            return 2.0 * frac - 1.0
+        if shape == "circular":
+            # semicircular/arc wave alternating up and down
+            if frac < 0.5:
+                q = 4.0 * frac - 1.0  # -1..1
+                return math.sqrt(max(0.0, 1.0 - q * q))
+            q = 4.0 * (frac - 0.5) - 1.0
+            return -math.sqrt(max(0.0, 1.0 - q * q))
+        if shape == "half_circle":
+            # half-circle bump per period (0..1..0)
+            q = 2.0 * frac - 1.0  # -1..1
+            return math.sqrt(max(0.0, 1.0 - q * q))
+        if shape == "formula":
+            formula = str(w.get("formula", "sin(x)") or "sin(x)")
+            # evaluate safely with math functions; x = phase angle p
+            try:
+                allowed = {k: getattr(math, k) for k in dir(math) if not k.startswith("_")}
+                allowed.update({
+                    "x": p, "p": p, "t": frac, "s": s, "frac": frac,
+                    "pi": math.pi, "tau": math.tau, "e": math.e,
+                    "abs": abs, "min": min, "max": max, "pow": pow, "round": round,
+                })
+                val = eval(formula, {"__builtins__": {}}, allowed)
+                return float(val)
+            except Exception:
+                return math.sin(p)
+        # sine default
+        return math.sin(p)
+
+    shape = str(w.get("shape", "sine") or "sine").lower()
+    formula = str(w.get("formula", "sin(x)") or "sin(x)")
+    formula_env = None
+    if shape == "formula":
+        allowed_base = {k: getattr(math, k) for k in dir(math) if not k.startswith("_")}
+        allowed_base.update({"pi": math.pi, "tau": math.tau, "e": math.e,
+                             "abs": abs, "min": min, "max": max, "pow": pow, "round": round,
+                             "sign": lambda v: (1.0 if v > 0 else (-1.0 if v < 0 else 0.0)),
+                             "r": max(1.0, float(w.get("amplitude", 8.0) or 8.0)),
+                             "n": 0.0,
+                             "a": float(w.get("amplitude", 8.0) or 8.0),
+                             "f": float(w.get("frequency", 3.0) or 3.0),
+                             "phi": float(w.get("phase", 0.0) or 0.0)})
+        try:
+            expr = _latex_to_python_expr(formula)
+        except Exception:
+            expr = "sin(x)"
+        formula_env = (expr, allowed_base)
+    out = []
+    for i, (pt, s, nrmv) in enumerate(zip(base_pts, base_s, normals)):
+        x, y = pt
+        nx, ny = nrmv
+        p = (s * freq * math.tau) + phase
+        if freq != 0:
+            if shape == "formula" and formula_env is not None:
+                fstr, abase = formula_env
+                try:
+                    env = dict(abase)
+                    frac = (p / math.tau) - math.floor(p / math.tau)
+                    env.update({"x": p, "p": p, "t": frac, "s": s, "frac": frac})
+                    wave = float(eval(fstr, {"__builtins__": {}}, env))
+                except Exception:
+                    wave = math.sin(p)
+            else:
+                tval = p / math.tau
+                frac = tval - math.floor(tval)
+                if shape == "triangle":
+                    wave = 4.0 * abs(frac - 0.5) - 1.0
+                elif shape == "square":
+                    wave = 1.0 if frac < 0.5 else -1.0
+                elif shape == "sawtooth":
+                    wave = 2.0 * frac - 1.0
+                elif shape == "circular":
+                    if frac < 0.5:
+                        q = 4.0 * frac - 1.0
+                        wave = math.sqrt(max(0.0, 1.0 - q * q))
+                    else:
+                        q = 4.0 * (frac - 0.5) - 1.0
+                        wave = -math.sqrt(max(0.0, 1.0 - q * q))
+                elif shape == "half_circle":
+                    q = 2.0 * frac - 1.0
+                    wave = math.sqrt(max(0.0, 1.0 - q * q))
+                else:
+                    wave = math.sin(p)
+        else:
+            wave = 0.0
+        nz = _smooth_noise1d(s * max(1.0, freq) * 4.0, seed=seed, scale=noise_scale) if noise_amt != 0 else 0.0
+        offset = amp * wave + noise_amt * nz
+        out.append((x + nx * offset, y + ny * offset))
+
+    # Keep distorted curve endpoints exactly on the base/guide curve endpoints
+    if out and segs:
+        out[0] = tuple(segs[0][0])
+        out[-1] = tuple(segs[-1][3])
+    return out
+
+
 def _nearest_point_on_cubic(pos, seg, samples=24):
     best_pt = None
     best_d = float("inf")
@@ -1327,7 +1731,26 @@ def merge_connected_strokes(strokes, eps=6.0):
     return paths
 
 
+def _stroke_has_wave(stroke):
+    for comp in _stroke_components(stroke):
+        if _component_wave_enabled(comp):
+            return True
+    return False
+
+
+def _component_distorted_polyline(stroke, comp_index, samples_per_seg=24):
+    comps = _stroke_components(stroke)
+    if not (0 <= comp_index < len(comps)):
+        return []
+    comp = comps[comp_index]
+    if not _component_wave_enabled(comp):
+        return []
+    return sample_distorted_component(stroke, comp_index, samples_per_seg=samples_per_seg)
+
+
 def draw_stroke_path(ctx, stroke):
+    if _stroke_has_wave(stroke):
+        return draw_stroke_path_distorted(ctx, stroke)
     segs = segs_of(stroke)
     if not segs:
         return False
@@ -1348,6 +1771,62 @@ def draw_stroke_path(ctx, stroke):
         ctx.curve_to(c1[0], c1[1], c2[0], c2[1], p3[0], p3[1])
         drew = True
     # if closed and fully visible, close path for nicer fill
+    if len(visible) == len(segs) and _pts_close(segs[0][0], segs[-1][3], 6.0):
+        ctx.close_path()
+    return True
+
+
+def draw_stroke_path_distorted(ctx, stroke):
+    segs = segs_of(stroke)
+    if not segs:
+        return False
+    hidden = set()
+    if isinstance(stroke, dict):
+        hidden = set(stroke.get("hidden_segs", set()) or set())
+    visible = [i for i in range(len(segs)) if i not in hidden]
+    if not visible:
+        return False
+    comps = _stroke_components(stroke)
+    ranges = _component_ranges(stroke)
+    ctx.new_path()
+    drew_any = False
+    for ci, (s0, s1) in enumerate(ranges):
+        comp_visible = [i for i in range(s0, min(s1, len(segs))) if i not in hidden]
+        if not comp_visible:
+            continue
+        poly = _component_distorted_polyline(stroke, ci)
+        if poly and len(poly) >= 2 and _component_wave_enabled(comps[ci] if ci < len(comps) else {}):
+            # draw distorted polyline for whole component if fully/mostly visible; if partial hidden, fall back per-seg
+            if len(comp_visible) == (min(s1, len(segs)) - s0):
+                if not drew_any or not _pts_close(poly[0], segs[s0][0], 1e-3):
+                    ctx.move_to(poly[0][0], poly[0][1])
+                else:
+                    ctx.line_to(poly[0][0], poly[0][1])
+                for pt in poly[1:]:
+                    ctx.line_to(pt[0], pt[1])
+                drew_any = True
+                continue
+            # partial hidden: sample base segs for visible ones with distortion per seg
+            for i in comp_visible:
+                p0, c1, c2, p3 = segs[i]
+                steps = 20
+                pts = [cubic_bezier_point(p0, c1, c2, p3, t / steps) for t in range(steps + 1)]
+                # approximate local distortion by sampling component and mapping? easier: draw base for hidden-partial case
+                if not drew_any or not _pts_close(pts[0], segs[i - 1][3] if i > 0 else pts[0], 1e-3):
+                    ctx.move_to(pts[0][0], pts[0][1])
+                for pt in pts[1:]:
+                    ctx.line_to(pt[0], pt[1])
+                drew_any = True
+            continue
+        # base draw for this component range
+        for i in comp_visible:
+            p0, c1, c2, p3 = segs[i]
+            if not drew_any or not _pts_close(segs[i][0], segs[i - 1][3] if i > 0 else segs[i][0], 1e-3):
+                ctx.move_to(p0[0], p0[1])
+            ctx.curve_to(c1[0], c1[1], c2[0], c2[1], p3[0], p3[1])
+            drew_any = True
+    if not drew_any:
+        return False
     if len(visible) == len(segs) and _pts_close(segs[0][0], segs[-1][3], 6.0):
         ctx.close_path()
     return True
@@ -1440,36 +1919,41 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
         if _stroke_needs_variable_width(stroke, seg_set):
             _draw_variable_width_segments(ctx, stroke, seg_set, None)
             return
-        # draw by components if needed
-        if _stroke_has_component_styles(stroke):
-            ranges = _component_ranges(stroke)
-            for ci, (s0, s1) in enumerate(ranges):
-                sc_i, sw_i = _effective_component_style(stroke, ci)
-                ctx.new_path()
-                drew_c = False
-                for i in range(s0, min(s1, len(segs_of(stroke)))):
-                    if i not in seg_set:
-                        continue
-                    p0, c1, c2, p3 = segs_of(stroke)[i]
+        segs_all = segs_of(stroke)
+        ranges = _component_ranges(stroke)
+        comps = _stroke_components(stroke)
+
+        def _draw_polyline(pts):
+            if not pts or len(pts) < 2:
+                return False
+            ctx.move_to(pts[0][0], pts[0][1])
+            for pt in pts[1:]:
+                ctx.line_to(pt[0], pt[1])
+            return True
+
+        # draw by components to support per-component styles and wave distortion
+        for ci, (s0, s1) in enumerate(ranges):
+            idxs = [i for i in range(s0, min(s1, len(segs_all))) if i in seg_set]
+            if not idxs:
+                continue
+            sc_i, sw_i = _effective_component_style(stroke, ci)
+            comp = comps[ci] if ci < len(comps) else {}
+            ctx.new_path()
+            drew_c = False
+            if _component_wave_enabled(comp) and len(idxs) == (min(s1, len(segs_all)) - s0):
+                poly = sample_distorted_component(stroke, ci)
+                if poly and len(poly) >= 2:
+                    drew_c = _draw_polyline(poly)
+            if not drew_c:
+                for i in idxs:
+                    p0, c1, c2, p3 = segs_all[i]
                     ctx.move_to(p0[0], p0[1]); ctx.curve_to(c1[0], c1[1], c2[0], c2[1], p3[0], p3[1])
                     drew_c = True
-                if drew_c:
-                    ctx.set_source_rgba(*color_rgba(sc_i, (0.1, 0.1, 0.15, 1.0)))
-                    ctx.set_line_width(sw_i)
-                    ctx.stroke()
-        else:
-            segs = segs_of(stroke)
-            ctx.new_path()
-            drew = False
-            for i in sorted(seg_set):
-                if 0 <= i < len(segs):
-                    p0, c1, c2, p3 = segs[i]
-                    ctx.move_to(p0[0], p0[1]); ctx.curve_to(c1[0], c1[1], c2[0], c2[1], p3[0], p3[1])
-                    drew = True
-            if drew:
-                ctx.set_source_rgba(*color_rgba(stroke_color, (0.1, 0.1, 0.15, 1.0)))
-                ctx.set_line_width(stroke_width)
+            if drew_c:
+                ctx.set_source_rgba(*color_rgba(sc_i if _stroke_has_component_styles(stroke) or _component_wave_enabled(comp) else stroke_color, (0.1, 0.1, 0.15, 1.0)))
+                ctx.set_line_width(sw_i if _stroke_has_component_styles(stroke) or _component_wave_enabled(comp) else stroke_width)
                 ctx.stroke()
+
 
     for idx, stroke in enumerate(strokes):
         segs = segs_of(stroke)
@@ -1481,6 +1965,37 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
         hidden = set(stroke.get("hidden_segs", set()) or set()) if isinstance(stroke, dict) else set()
         is_selected_stroke = (idx in sel_set and edit_mode)
         show_hidden = edit_mode and selection_submode in ("curve", "nodes") and bool(hidden)
+
+        # Hint: show original/base (guide) shape for distorted curves so they remain selectable
+        if _stroke_has_wave(stroke):
+            comps = _stroke_components(stroke)
+            ranges = _component_ranges(stroke)
+            ctx.save()
+            try:
+                ctx.set_dash([4, 4])
+            except Exception:
+                pass
+            for ci, (s0, s1) in enumerate(ranges):
+                comp = comps[ci] if ci < len(comps) else {}
+                if not _component_wave_enabled(comp):
+                    continue
+                ctx.new_path()
+                drew_g = False
+                for i in range(s0, min(s1, len(segs))):
+                    if i in hidden:
+                        continue
+                    p0, c1, c2, p3 = segs[i]
+                    ctx.move_to(p0[0], p0[1]); ctx.curve_to(c1[0], c1[1], c2[0], c2[1], p3[0], p3[1])
+                    drew_g = True
+                if drew_g:
+                    ctx.set_source_rgba(0.1, 0.45, 0.95, 0.35)
+                    ctx.set_line_width(max(1.0, float(stroke_width) * 0.8))
+                    ctx.stroke()
+            try:
+                ctx.set_dash([])
+            except Exception:
+                pass
+            ctx.restore()
 
         if redraw_target and redraw_target[0] == idx:
             comp_i = redraw_target[1]
@@ -2036,10 +2551,19 @@ def draw_panel(screen, fonts, mouse_pos, state):
                 comps = _stroke_components(sel_stroke)
                 label_what = "stroke" if len(comps) > 1 else "curve"
                 screen.blit(font_small.render(f"Selected {label_what}: {comp_i + 1}/{max(1,len(comps))}", True, MUTED_COLOR), (x, y)); y += 22
+                hidden = set(sel_stroke.get("hidden_segs", set()) or set()) if isinstance(sel_stroke, dict) else set()
+                ranges = _component_ranges(sel_stroke)
+                comp_hidden = []
+                if 0 <= comp_i < len(ranges):
+                    s0, s1 = ranges[comp_i]
+                    comp_hidden = [i for i in range(s0, min(s1, len(segs_of(sel_stroke)))) if i in hidden]
                 if 0 <= comp_i < len(comps):
                     ci = comps[comp_i]
                     info = f"Settings: {ci.get('algorithm','fit')}, pts {ci.get('draw_max_points',4)}"
                     screen.blit(font_small.render(info, True, MUTED_COLOR), (x, y)); y += 18
+                if comp_hidden:
+                    hint = "Hidden curve segment(s)" if len(comp_hidden) < (ranges[comp_i][1]-ranges[comp_i][0] if 0 <= comp_i < len(ranges) else 999) else "Hidden curve"
+                    screen.blit(font_small.render(f"Hint: {hint} (shown dashed in edit modes)", True, (170, 95, 40)), (x, y)); y += 18
                 redraw_rect = pygame.Rect(x, y, PANEL_W - 40, 30)
                 state["curve_hide_rect"] = pygame.Rect(0,0,0,0)
                 state["curve_redraw_rect"] = redraw_rect
@@ -2049,13 +2573,139 @@ def draw_panel(screen, fonts, mouse_pos, state):
                 t = font_small.render("Redraw stroke", True, TEXT_COLOR)
                 screen.blit(t, t.get_rect(center=redraw_rect.center))
                 y += 38
+
+                # Curve styles list (non-destructive). Styles are added to this curve.
+                screen.blit(font_small.render("Curve styles", True, TEXT_COLOR), (x, y)); y += 20
+                comp = comps[comp_i] if 0 <= comp_i < len(comps) else {}
+                styles = _component_styles(comp)
+                has_wave = any(isinstance(s, dict) and s.get("type") == "wave" for s in styles)
+                state["wave_add_rect"] = pygame.Rect(0,0,0,0)
+                state["wave_remove_rect"] = pygame.Rect(0,0,0,0)
+                state["wave_toggle_rect"] = pygame.Rect(0,0,0,0)
+                state["wave_slider_rects"] = {}
+
+                if has_wave:
+                    wave = _get_wave_style(comp)
+                    enabled = bool(wave.get("enabled"))
+                    row = pygame.Rect(x, y, PANEL_W - 40, 28)
+                    rem_w = 28
+                    tog_rect = pygame.Rect(row.x, row.y, row.w - rem_w - 4, row.h)
+                    rem_rect = pygame.Rect(row.right - rem_w, row.y, rem_w, row.h)
+                    state["wave_toggle_rect"] = tog_rect
+                    state["wave_remove_rect"] = rem_rect
+                    bg = TOOL_ACTIVE if enabled else (BUTTON_HOVER if tog_rect.collidepoint(mouse_pos) else BUTTON_BG)
+                    pygame.draw.rect(screen, bg, tog_rect, border_radius=6)
+                    pygame.draw.rect(screen, ACCENT if enabled else BUTTON_BORDER, tog_rect, 2 if enabled else 1, border_radius=6)
+                    t = font_small.render(f"Wave distortion: {'ON' if enabled else 'OFF'}", True, ACCENT if enabled else TEXT_COLOR)
+                    screen.blit(t, (tog_rect.x + 8, tog_rect.y + 6))
+                    rbg = BUTTON_HOVER if rem_rect.collidepoint(mouse_pos) else BUTTON_BG
+                    pygame.draw.rect(screen, rbg, rem_rect, border_radius=6)
+                    pygame.draw.rect(screen, BUTTON_BORDER, rem_rect, 1, border_radius=6)
+                    xt = font_small.render("×", True, (140, 60, 60))
+                    screen.blit(xt, xt.get_rect(center=rem_rect.center))
+                    y += 34
+
+                    # Wave shape selector
+                    screen.blit(font_small.render("Shape", True, TEXT_COLOR), (x, y)); y += 20
+                    shape = str(wave.get("shape", "sine") or "sine").lower()
+                    shape_labels = [("sine", "Sine"), ("triangle", "Tri"), ("square", "Sq"), ("sawtooth", "Saw"), ("circular", "Circ"), ("half_circle", "Half"), ("formula", "Formula")]
+                    shape_rects = {}
+                    bw = (PANEL_W - 40 - 8) // 3
+                    for i, (key, label) in enumerate(shape_labels):
+                        rowi, coli = divmod(i, 3)
+                        r = pygame.Rect(x + coli * (bw + 4), y + rowi * 28, bw, 24)
+                        shape_rects[key] = r
+                        active = (shape == key)
+                        bg = TOOL_ACTIVE if active else (BUTTON_HOVER if r.collidepoint(mouse_pos) else BUTTON_BG)
+                        pygame.draw.rect(screen, bg, r, border_radius=5)
+                        pygame.draw.rect(screen, ACCENT if active else BUTTON_BORDER, r, 2 if active else 1, border_radius=5)
+                        t = font_small.render(label, True, ACCENT if active else TEXT_COLOR)
+                        screen.blit(t, t.get_rect(center=r.center))
+                    state["wave_shape_rects"] = shape_rects
+                    y += ((len(shape_labels) + 2) // 3) * 28 + 6
+
+                    # Formula input (for formula shape)
+                    state["wave_formula_rect"] = pygame.Rect(0,0,0,0)
+                    if shape == "formula":
+                        screen.blit(font_small.render("Formula (x=p, t,s)", True, TEXT_COLOR), (x, y)); y += 18
+                        frect = pygame.Rect(x, y, PANEL_W - 40, 26)
+                        state["wave_formula_rect"] = frect
+                        focused = bool(state.get("wave_formula_focus"))
+                        bg = (255,255,255) if focused else (BUTTON_HOVER if frect.collidepoint(mouse_pos) else BUTTON_BG)
+                        pygame.draw.rect(screen, bg, frect, border_radius=5)
+                        pygame.draw.rect(screen, ACCENT if focused else BUTTON_BORDER, frect, 2 if focused else 1, border_radius=5)
+                        ftxt = str(wave.get("formula", "sin(x)") or "sin(x)")
+                        if focused and (pygame.time.get_ticks() // 500) % 2 == 0:
+                            ftxt_disp = ftxt + "|"
+                        else:
+                            ftxt_disp = ftxt
+                        # clip text to fit
+                        while ftxt_disp and font_small.size(ftxt_disp)[0] > frect.w - 12:
+                            ftxt_disp = ftxt_disp[1:]
+                        tt = font_small.render(ftxt_disp, True, TEXT_COLOR)
+                        screen.blit(tt, (frect.x + 6, frect.y + 5))
+                        y += 32
+
+                    def _wave_slider(label, key, val, lo, hi, fmt=None):
+                        nonlocal y
+                        screen.blit(font_small.render(label, True, TEXT_COLOR), (x, y))
+                        txt = fmt(val) if fmt else str(val)
+                        vt = font_small.render(txt, True, ACCENT)
+                        screen.blit(vt, (x + PANEL_W - 40 - vt.get_width(), y))
+                        y += 18
+                        track = pygame.Rect(x, y, PANEL_W - 40, 6)
+                        pygame.draw.rect(screen, (220, 225, 235), track, border_radius=3)
+                        if hi == lo:
+                            tx = track.x
+                        else:
+                            tx = int(track.x + (clamp(val, lo, hi) - lo) / (hi - lo) * track.w)
+                        filled = pygame.Rect(track.x, track.y, max(0, tx - track.x), track.h)
+                        pygame.draw.rect(screen, ACCENT, filled, border_radius=3)
+                        pygame.draw.circle(screen, (255, 255, 255), (tx, track.centery), 7)
+                        pygame.draw.circle(screen, ACCENT, (tx, track.centery), 7, width=2)
+                        hit = track.inflate(0, 16)
+                        state.setdefault("wave_slider_rects", {})[key] = (hit, lo, hi)
+                        y += 16
+
+                    amp_v = float(wave.get("amplitude", 0.0))
+                    freq_v = float(wave.get("frequency", 0.0))
+                    phase_v = float(wave.get("phase", 0.0))
+                    noise_v = float(wave.get("noise", 0.0))
+                    seed_v = int(wave.get("seed", 0) or 0)
+                    nscale_v = float(wave.get("noise_scale", 2.0))
+                    _wave_slider("Amplitude", "amplitude", amp_v, 0.0, 100.0, fmt=lambda v: str(int(round(v))))
+                    _wave_slider("Frequency", "frequency", freq_v, 0.0, 20.0, fmt=lambda v: f"{v:.1f}")
+                    _wave_slider("Phase", "phase", phase_v, 0.0, 360.0, fmt=lambda v: str(int(round(v))))
+                    _wave_slider("Noise", "noise", noise_v, 0.0, 100.0, fmt=lambda v: str(int(round(v))))
+                    _wave_slider("Noise scale", "noise_scale", nscale_v, 0.2, 10.0, fmt=lambda v: f"{v:.1f}")
+                    _wave_slider("Seed", "seed", seed_v, 0.0, 999.0, fmt=lambda v: str(int(round(v))))
+                    y += 4
+                else:
+                    add_rect = pygame.Rect(x, y, PANEL_W - 40, 28)
+                    state["wave_add_rect"] = add_rect
+                    state["wave_shape_rects"] = {}
+                    bg = BUTTON_HOVER if add_rect.collidepoint(mouse_pos) else BUTTON_BG
+                    pygame.draw.rect(screen, bg, add_rect, border_radius=6)
+                    pygame.draw.rect(screen, BUTTON_BORDER, add_rect, 1, border_radius=6)
+                    t = font_small.render("+ Add Wave distortion", True, TEXT_COLOR)
+                    screen.blit(t, t.get_rect(center=add_rect.center))
+                    y += 34
+                    screen.blit(font_small.render("No curve styles added", True, MUTED_COLOR), (x, y)); y += 18
             else:
                 screen.blit(font_small.render("Click a stroke to edit separately", True, MUTED_COLOR), (x, y)); y += 24
                 state["curve_hide_rect"] = pygame.Rect(0,0,0,0)
                 state["curve_redraw_rect"] = pygame.Rect(0,0,0,0)
+                state["wave_toggle_rect"] = pygame.Rect(0,0,0,0)
+                state["wave_add_rect"] = pygame.Rect(0,0,0,0)
+                state["wave_remove_rect"] = pygame.Rect(0,0,0,0)
+                state["wave_slider_rects"] = {}
         else:
             state["curve_hide_rect"] = pygame.Rect(0,0,0,0)
             state["curve_redraw_rect"] = pygame.Rect(0,0,0,0)
+            state["wave_toggle_rect"] = pygame.Rect(0,0,0,0)
+            state["wave_add_rect"] = pygame.Rect(0,0,0,0)
+            state["wave_remove_rect"] = pygame.Rect(0,0,0,0)
+            state["wave_slider_rects"] = {}
 
         if sel_count == 0:
             info = font_small.render("Select a stroke", True, MUTED_COLOR)
@@ -2460,6 +3110,14 @@ def main():
     nodes_toggle_rect_cache = pygame.Rect(0, 0, 0, 0)
     curve_hide_rect_cache = pygame.Rect(0, 0, 0, 0)
     curve_redraw_rect_cache = pygame.Rect(0, 0, 0, 0)
+    wave_toggle_rect_cache = pygame.Rect(0, 0, 0, 0)
+    wave_add_rect_cache = pygame.Rect(0, 0, 0, 0)
+    wave_remove_rect_cache = pygame.Rect(0, 0, 0, 0)
+    wave_shape_rects_cache = {}
+    wave_formula_rect_cache = pygame.Rect(0, 0, 0, 0)
+    wave_formula_focus = False
+    wave_slider_rects_cache = {}
+    wave_slider_drag = None
     ref_load_rect_cache = pygame.Rect(0, 0, 0, 0)
     ref_vis_rect_cache = pygame.Rect(0, 0, 0, 0)
     ref_clear_rect_cache = pygame.Rect(0, 0, 0, 0)
@@ -2550,6 +3208,13 @@ def main():
             "redrawing_curve": state_redrawing_curve,
             "curve_hide_rect": curve_hide_rect_cache,
             "curve_redraw_rect": curve_redraw_rect_cache,
+            "wave_toggle_rect": wave_toggle_rect_cache,
+            "wave_add_rect": wave_add_rect_cache,
+            "wave_remove_rect": wave_remove_rect_cache,
+            "wave_shape_rects": wave_shape_rects_cache,
+            "wave_formula_rect": wave_formula_rect_cache,
+            "wave_formula_focus": wave_formula_focus,
+            "wave_slider_rects": wave_slider_rects_cache,
             "strokes": strokes,
             "reference_image": reference_image,
             "ref_load_rect": ref_load_rect_cache,
@@ -2594,7 +3259,35 @@ def main():
                         set_point_width(strokes[si], seg_i, pname, float(width_slider.value))
 
             if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
+                if wave_formula_focus and tool_mode == "selection" and selection_submode == "curve" and selected_curve and selected_curve[0] in selected_strokes:
+                    si, comp_i = selected_curve
+                    if 0 <= si < len(strokes):
+                        comps = _stroke_components(strokes[si])
+                        if 0 <= comp_i < len(comps):
+                            comps[comp_i] = dict(comps[comp_i])
+                            w = _get_wave_style(comps[comp_i])
+                            formula = str(w.get("formula", "sin(x)") or "")
+                            if event.key == pygame.K_ESCAPE or event.key == pygame.K_RETURN or event.key == pygame.K_KP_ENTER:
+                                wave_formula_focus = False
+                                state["wave_formula_focus"] = False
+                            elif event.key == pygame.K_BACKSPACE:
+                                formula = formula[:-1]
+                                w["formula"] = formula
+                                _set_wave_style(comps[comp_i], w)
+                                strokes[si]["components"] = comps
+                            elif event.unicode and event.unicode.isprintable():
+                                formula += event.unicode
+                                w["formula"] = formula
+                                _set_wave_style(comps[comp_i], w)
+                                strokes[si]["components"] = comps
+                    # consume key while editing formula (except we already handled)
+                    if wave_formula_focus or event.key in (pygame.K_ESCAPE, pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_BACKSPACE) or (event.unicode and event.unicode.isprintable()):
+                        pass
+                    # prevent other shortcuts while typing formula
+                    if wave_formula_focus:
+                        # still allow continuing event loop; skip other handlers below
+                        pass
+                elif event.key == pygame.K_ESCAPE:
                     if redrawing_curve is not None:
                         redrawing_curve = None
                     else:
@@ -2656,6 +3349,9 @@ def main():
                                 redrawing_curve["points"][-1] = snap
 
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                if wave_formula_focus and not state.get("wave_formula_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
+                    wave_formula_focus = False
+                    state["wave_formula_focus"] = False
                 if btn_undo.hit(event.pos):
                     if do_undo():
                         selected_strokes = {i for i in selected_strokes if 0 <= i < len(strokes)}
@@ -2745,7 +3441,206 @@ def main():
                                 "started": False, "fixed_start": fixed_start, "fixed_end": fixed_end,
                             }
                             selected_point = None; transform_drag = None; drag_last = None
-                    elif tool_mode == "selection" and selected_strokes and (selection_submode == "transform" or (selection_submode == "curve" and selected_curve)):
+                    elif tool_mode == "selection" and selection_submode == "curve" and selected_curve and selected_curve[0] in selected_strokes and state.get("wave_add_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
+                        si, comp_i = selected_curve
+                        if 0 <= si < len(strokes):
+                            comps = _stroke_components(strokes[si])
+                            if 0 <= comp_i < len(comps):
+                                comps[comp_i] = dict(comps[comp_i])
+                                w = _get_wave_style(comps[comp_i])
+                                w["enabled"] = True
+                                _set_wave_style(comps[comp_i], w)
+                                strokes[si]["components"] = comps
+                        wave_formula_focus = False
+                        state["wave_formula_focus"] = False
+                    elif tool_mode == "selection" and selection_submode == "curve" and selected_curve and selected_curve[0] in selected_strokes and state.get("wave_remove_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
+                        si, comp_i = selected_curve
+                        if 0 <= si < len(strokes):
+                            comps = _stroke_components(strokes[si])
+                            if 0 <= comp_i < len(comps):
+                                comps[comp_i] = dict(comps[comp_i])
+                                _remove_wave_style(comps[comp_i])
+                                strokes[si]["components"] = comps
+                        wave_formula_focus = False
+                        state["wave_formula_focus"] = False
+                    elif tool_mode == "selection" and selection_submode == "curve" and selected_curve and selected_curve[0] in selected_strokes and state.get("wave_toggle_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
+                        si, comp_i = selected_curve
+                        if 0 <= si < len(strokes):
+                            comps = _stroke_components(strokes[si])
+                            if 0 <= comp_i < len(comps):
+                                comps[comp_i] = dict(comps[comp_i])
+                                w = _get_wave_style(comps[comp_i])
+                                w["enabled"] = not bool(w.get("enabled"))
+                                _set_wave_style(comps[comp_i], w)
+                                strokes[si]["components"] = comps
+                        wave_formula_focus = False
+                        state["wave_formula_focus"] = False
+                    elif tool_mode == "selection" and selection_submode == "curve" and selected_curve and selected_curve[0] in selected_strokes:
+                        _w_hit = False
+                        # formula input focus
+                        f_rect = state.get("wave_formula_rect", pygame.Rect(0,0,0,0))
+                        if f_rect.collidepoint(event.pos) and f_rect.w > 0 and f_rect.h > 0:
+                            wave_formula_focus = True
+                            state["wave_formula_focus"] = True
+                            _w_hit = True
+                        # add/remove handled above; check sliders
+                        if not _w_hit:
+                            for key, (r, lo, hi) in (state.get("wave_slider_rects") or {}).items():
+                                if r.collidepoint(event.pos):
+                                    si, comp_i = selected_curve
+                                    if 0 <= si < len(strokes):
+                                        comps = _stroke_components(strokes[si])
+                                        if 0 <= comp_i < len(comps):
+                                            comps[comp_i] = dict(comps[comp_i])
+                                            w = _get_wave_style(comps[comp_i])
+                                            t = (event.pos[0] - r.x) / max(1, r.w - 1)
+                                            val = lo + clamp(t, 0.0, 1.0) * (hi - lo)
+                                            if key in ("amplitude", "noise", "phase", "seed"):
+                                                val = float(int(round(val)))
+                                            else:
+                                                val = float(val)
+                                            w[key] = val
+                                            w["enabled"] = True
+                                            _set_wave_style(comps[comp_i], w)
+                                            strokes[si]["components"] = comps
+                                            wave_slider_drag = {"key": key, "rect": r, "lo": lo, "hi": hi, "si": si, "comp_i": comp_i}
+                                    _w_hit = True
+                                    break
+                        if not _w_hit:
+                            for key, r in (state.get("wave_shape_rects") or {}).items():
+                                if r.collidepoint(event.pos):
+                                    si, comp_i = selected_curve
+                                    if 0 <= si < len(strokes):
+                                        comps = _stroke_components(strokes[si])
+                                        if 0 <= comp_i < len(comps):
+                                            comps[comp_i] = dict(comps[comp_i])
+                                            w = _get_wave_style(comps[comp_i])
+                                            w["shape"] = key
+                                            w["enabled"] = True
+                                            _set_wave_style(comps[comp_i], w)
+                                            strokes[si]["components"] = comps
+                                    _w_hit = True
+                                    break
+                        if not _w_hit and selected_strokes and (selection_submode == "transform" or (selection_submode == "curve" and selected_curve)):
+                            # Modern color picker interactions
+                            comp_style_target = None
+                            if selection_submode == "curve" and selected_curve and len(selected_strokes) == 1 and selected_curve[0] in selected_strokes:
+                                comp_style_target = selected_curve
+                            if not (selection_submode == "curve" and comp_style_target is None):
+                                sel_list = sorted(selected_strokes)
+                                primary_i = sel_list[0]
+                                primary_obj = strokes[primary_i] if 0 <= primary_i < len(strokes) else None
+                                def _set_comp_stroke_color(si, ci, rgb, alpha):
+                                    comps = _stroke_components(strokes[si])
+                                    if 0 <= ci < len(comps):
+                                        comps[ci]["stroke_color"] = (rgb[0], rgb[1], rgb[2], alpha)
+                                        strokes[si]["components"] = comps
+                                if primary_obj is not None and state["tab_stroke_rect"].collidepoint(event.pos):
+                                    color_target = "stroke"
+                                    if comp_style_target is not None:
+                                        sc, _sw = _effective_component_style(primary_obj, comp_style_target[1])
+                                        sc = sc or (0.1, 0.1, 0.15)
+                                    else:
+                                        sc = primary_obj.get("stroke_color", (0.1, 0.1, 0.15)) or (0.1, 0.1, 0.15)
+                                    picker_h, picker_s, picker_v = rgb_to_hsv(*sc)
+                                    state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
+                                elif primary_obj is not None and state["tab_fill_rect"].collidepoint(event.pos) and comp_style_target is None:
+                                    color_target = "fill"
+                                    fc = primary_obj.get("fill_color", None) or (1.0, 1.0, 1.0)
+                                    picker_h, picker_s, picker_v = rgb_to_hsv(*fc)
+                                    state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
+                                elif primary_obj is not None and state.get("nofill_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos) and color_target == "fill" and comp_style_target is None:
+                                    for si in sel_list:
+                                        if 0 <= si < len(strokes):
+                                            strokes[si]["fill_color"] = None
+                                elif primary_obj is not None and state["sv_rect"].collidepoint(event.pos):
+                                    picker_drag_sv = True
+                                    sv = state["sv_rect"]
+                                    picker_s = clamp((event.pos[0] - sv.x) / max(1, sv.w - 1), 0.0, 1.0)
+                                    picker_v = clamp(1.0 - (event.pos[1] - sv.y) / max(1, sv.h - 1), 0.0, 1.0)
+                                    col = hsv_to_rgb(picker_h, picker_s, picker_v)
+                                    if comp_style_target is not None and color_target == "stroke":
+                                        si, ci = comp_style_target
+                                        if 0 <= si < len(strokes):
+                                            cur_sc, _ = _effective_component_style(strokes[si], ci)
+                                            alpha = color_alpha(cur_sc, 1.0)
+                                            _set_comp_stroke_color(si, ci, col, alpha)
+                                    else:
+                                        for si in sel_list:
+                                            if 0 <= si < len(strokes):
+                                                if color_target == "stroke":
+                                                    alpha = color_alpha(strokes[si].get("stroke_color"), 1.0)
+                                                    strokes[si]["stroke_color"] = (col[0], col[1], col[2], alpha)
+                                                else:
+                                                    alpha = color_alpha(strokes[si].get("fill_color"), 1.0)
+                                                    strokes[si]["fill_color"] = (col[0], col[1], col[2], alpha)
+                                    state["picker_drag_sv"] = True
+                                    state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
+                                elif primary_obj is not None and state["hue_rect"].collidepoint(event.pos):
+                                    picker_drag_hue = True
+                                    hr = state["hue_rect"]
+                                    picker_h = clamp((event.pos[0] - hr.x) / max(1, hr.w - 1), 0.0, 1.0) * 360.0
+                                    col = hsv_to_rgb(picker_h, picker_s, picker_v)
+                                    if comp_style_target is not None and color_target == "stroke":
+                                        si, ci = comp_style_target
+                                        if 0 <= si < len(strokes):
+                                            cur_sc, _ = _effective_component_style(strokes[si], ci)
+                                            alpha = color_alpha(cur_sc, 1.0)
+                                            _set_comp_stroke_color(si, ci, col, alpha)
+                                    else:
+                                        for si in sel_list:
+                                            if 0 <= si < len(strokes):
+                                                if color_target == "stroke":
+                                                    alpha = color_alpha(strokes[si].get("stroke_color"), 1.0)
+                                                    strokes[si]["stroke_color"] = (col[0], col[1], col[2], alpha)
+                                                else:
+                                                    alpha = color_alpha(strokes[si].get("fill_color"), 1.0)
+                                                    strokes[si]["fill_color"] = (col[0], col[1], col[2], alpha)
+                                    state["picker_drag_hue"] = True
+                                    state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
+                                elif primary_obj is not None and state.get("alpha_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
+                                    ar = state["alpha_rect"]
+                                    new_alpha = clamp((event.pos[0] - ar.x) / max(1, ar.w - 1), 0.0, 1.0)
+                                    if comp_style_target is not None and color_target == "stroke":
+                                        si, ci = comp_style_target
+                                        if 0 <= si < len(strokes):
+                                            cur_sc, _ = _effective_component_style(strokes[si], ci)
+                                            base = color_rgb(cur_sc, (0.1,0.1,0.15))
+                                            _set_comp_stroke_color(si, ci, base, new_alpha)
+                                    else:
+                                        for si in sel_list:
+                                            if 0 <= si < len(strokes):
+                                                if color_target == "stroke":
+                                                    strokes[si]["stroke_color"] = set_color_alpha(strokes[si].get("stroke_color", (0.1,0.1,0.15,1.0)), new_alpha)
+                                                elif strokes[si].get("fill_color") is not None:
+                                                    strokes[si]["fill_color"] = set_color_alpha(strokes[si].get("fill_color"), new_alpha)
+                                    picker_drag_alpha = True
+                                    state["picker_drag_alpha"] = True
+                                elif primary_obj is not None:
+                                    # preset swatches
+                                    rects = state["stroke_swatch_rects"] if color_target == "stroke" else state["fill_swatch_rects"]
+                                    for i, r in enumerate(rects):
+                                        if r.w > 0 and r.collidepoint(event.pos) and i < len(STROKE_SWATCHES):
+                                            col = STROKE_SWATCHES[i]
+                                            if comp_style_target is not None and color_target == "stroke":
+                                                si, ci = comp_style_target
+                                                if 0 <= si < len(strokes):
+                                                    cur_sc, _ = _effective_component_style(strokes[si], ci)
+                                                    alpha = color_alpha(cur_sc, 1.0)
+                                                    _set_comp_stroke_color(si, ci, col, alpha)
+                                            else:
+                                                for si in sel_list:
+                                                    if 0 <= si < len(strokes):
+                                                        if color_target == "stroke":
+                                                            alpha = color_alpha(strokes[si].get("stroke_color"), 1.0)
+                                                            strokes[si]["stroke_color"] = (col[0], col[1], col[2], alpha)
+                                                        else:
+                                                            alpha = color_alpha(strokes[si].get("fill_color"), 1.0)
+                                                            strokes[si]["fill_color"] = (col[0], col[1], col[2], alpha)
+                                            picker_h, picker_s, picker_v = rgb_to_hsv(*col)
+                                            state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
+                                            break
+                    elif tool_mode == "selection" and selected_strokes and selection_submode == "transform":
                         # Modern color picker interactions (shape-level in transform, stroke-level per selected curve in curve mode)
                         comp_style_target = None
                         if selection_submode == "curve" and selected_curve and len(selected_strokes) == 1 and selected_curve[0] in selected_strokes:
@@ -3042,6 +3937,26 @@ def main():
                     off = ref_drag.get("offset", (0, 0))
                     reference_image["x"] = cpos[0] - off[0]
                     reference_image["y"] = cpos[1] - off[1]
+                elif wave_slider_drag is not None and pygame.mouse.get_pressed()[0] and selected_curve and selected_curve[0] in selected_strokes:
+                    d = wave_slider_drag
+                    si, comp_i = d.get("si"), d.get("comp_i")
+                    key = d.get("key")
+                    r = d.get("rect")
+                    lo, hi = d.get("lo", 0.0), d.get("hi", 1.0)
+                    if 0 <= si < len(strokes) and 0 <= comp_i < len(_stroke_components(strokes[si])):
+                        comps = _stroke_components(strokes[si])
+                        comps[comp_i] = dict(comps[comp_i])
+                        w = _get_wave_style(comps[comp_i])
+                        t = (event.pos[0] - r.x) / max(1, r.w - 1)
+                        val = lo + clamp(t, 0.0, 1.0) * (hi - lo)
+                        if key in ("amplitude", "noise", "phase", "seed"):
+                            val = float(int(round(val)))
+                        else:
+                            val = float(val)
+                        w[key] = val
+                        w["enabled"] = True
+                        _set_wave_style(comps[comp_i], w)
+                        strokes[si]["components"] = comps
                 elif (picker_drag_sv or picker_drag_hue or picker_drag_alpha) and selected_strokes and (selection_submode == "transform" or (selection_submode == "curve" and selected_curve and color_target == "stroke")):
                     sel_list = sorted(selected_strokes)
                     comp_style_target = None
@@ -3312,6 +4227,7 @@ def main():
                     current_points = []
                 drag_last = None; selected_point = None; transform_drag = None
                 picker_drag_sv = False; picker_drag_hue = False; picker_drag_alpha = False; ref_opacity_drag = False
+                wave_slider_drag = None
                 state["picker_drag_sv"] = False; state["picker_drag_hue"] = False; state["picker_drag_alpha"] = False
                 ref_drag = None
                 max_points_per_curve = slider.value
@@ -3361,6 +4277,13 @@ def main():
         nodes_toggle_rect_cache = state.get("nodes_toggle_rect", nodes_toggle_rect_cache)
         curve_hide_rect_cache = state.get("curve_hide_rect", curve_hide_rect_cache)
         curve_redraw_rect_cache = state.get("curve_redraw_rect", curve_redraw_rect_cache)
+        wave_toggle_rect_cache = state.get("wave_toggle_rect", wave_toggle_rect_cache)
+        wave_add_rect_cache = state.get("wave_add_rect", wave_add_rect_cache)
+        wave_remove_rect_cache = state.get("wave_remove_rect", wave_remove_rect_cache)
+        wave_shape_rects_cache = state.get("wave_shape_rects", wave_shape_rects_cache)
+        wave_formula_rect_cache = state.get("wave_formula_rect", wave_formula_rect_cache)
+        wave_formula_focus = state.get("wave_formula_focus", wave_formula_focus)
+        wave_slider_rects_cache = state.get("wave_slider_rects", wave_slider_rects_cache)
         ref_load_rect_cache = state.get("ref_load_rect", ref_load_rect_cache)
         ref_vis_rect_cache = state.get("ref_vis_rect", ref_vis_rect_cache)
         ref_clear_rect_cache = state.get("ref_clear_rect", ref_clear_rect_cache)

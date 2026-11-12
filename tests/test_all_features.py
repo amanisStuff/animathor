@@ -14,7 +14,7 @@ def make_polyline(n=20, step=5.0, ybase=50.0):
     pts = []
     for i in range(n):
         pts.append((10.0 + i * step, ybase + (10.0 if i % 2 else 0.0)))
-    return pts
+    return pts  
 
 
 class TestBezierAndFitting(unittest.TestCase):
