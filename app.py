@@ -596,15 +596,20 @@ def redraw_stroke_component(stroke, comp_index, drawn_points):
     return out
 
 
-def hit_test_point(stroke, pos, radius=8.0):
+def hit_test_point(stroke, pos, radius=8.0, seg_indices=None):
     segs = segs_of(stroke)
     best = None
     best_d = radius
     names = ("p0", "c1", "c2", "p3")
+    allowed = set(seg_indices) if seg_indices is not None else None
     for i, seg in enumerate(segs):
+        if allowed is not None and i not in allowed:
+            continue
         for j, name in enumerate(names):
             if name == "p0" and i > 0:
-                continue
+                # allow selecting p0 of first segment in range/component
+                if allowed is None or i - 1 in allowed:
+                    continue
             pt = seg[j]
             d = math.hypot(pos[0] - pt[0], pos[1] - pt[1])
             if d <= best_d:
@@ -1181,7 +1186,9 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
                 ranges = _component_ranges(strokes[si])
                 if 0 <= comp_i < len(ranges):
                     s0, s1 = ranges[comp_i]
-                    for seg_i in range(s0, min(s1, len(segs))):
+                    comp_range = range(s0, min(s1, len(segs)))
+                    # highlight component curve
+                    for seg_i in comp_range:
                         p0, c1, c2, p3 = segs[seg_i]
                         ctx.new_path()
                         ctx.move_to(p0[0], p0[1])
@@ -1190,6 +1197,24 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
                         w = strokes[si].get("stroke_width", 3.0) if isinstance(strokes[si], dict) else 3.0
                         ctx.set_line_width(max(4.0, w + 2.0))
                         ctx.stroke()
+                    # draw nodes/handles for selected component only (edit separately)
+                    ctx.set_source_rgba(0.4, 0.5, 0.6, 0.8)
+                    ctx.set_line_width(1.0)
+                    for seg_i in comp_range:
+                        p0, c1, c2, p3 = segs[seg_i]
+                        ctx.move_to(p0[0], p0[1]); ctx.line_to(c1[0], c1[1])
+                        ctx.move_to(p3[0], p3[1]); ctx.line_to(c2[0], c2[1])
+                    ctx.stroke()
+                    for seg_i in comp_range:
+                        p0, c1, c2, p3 = segs[seg_i]
+                        if seg_i == s0:
+                            ctx.set_source_rgb(1, 1, 1); ctx.arc(p0[0], p0[1], 4.5, 0, 2*math.pi); ctx.fill()
+                            ctx.set_source_rgb(0.1, 0.45, 0.95); ctx.set_line_width(2.0); ctx.arc(p0[0], p0[1], 4.5, 0, 2*math.pi); ctx.stroke()
+                        ctx.set_source_rgb(1, 1, 1); ctx.arc(p3[0], p3[1], 4.5, 0, 2*math.pi); ctx.fill()
+                        ctx.set_source_rgb(0.1, 0.45, 0.95); ctx.set_line_width(2.0); ctx.arc(p3[0], p3[1], 4.5, 0, 2*math.pi); ctx.stroke()
+                        for pt in (c1, c2):
+                            ctx.set_source_rgb(1, 1, 1); ctx.rectangle(pt[0]-3.5, pt[1]-3.5, 7, 7); ctx.fill_preserve()
+                            ctx.set_source_rgb(0.85, 0.35, 0.2); ctx.set_line_width(1.5); ctx.stroke()
         if selection_submode == "nodes" and len(selected_in_range) == 1:
             idx = selected_in_range[0]
             segs = segs_of(strokes[idx])
@@ -1585,32 +1610,23 @@ def draw_panel(screen, fonts, mouse_pos, state):
             if sc and sc[0] in sel_strokes:
                 comp_i = sc[1]
                 comps = _stroke_components(sel_stroke)
-                ranges = _component_ranges(sel_stroke)
-                hidden = set(sel_stroke.get("hidden_segs", set()) or set()) if isinstance(sel_stroke, dict) else set()
-                if 0 <= comp_i < len(ranges):
-                    s0, s1 = ranges[comp_i]
-                    comp_hidden = all(i in hidden for i in range(s0, s1)) if s1 > s0 else False
-                else:
-                    comp_hidden = False
                 label_what = "stroke" if len(comps) > 1 else "curve"
                 screen.blit(font_small.render(f"Selected {label_what}: {comp_i + 1}/{max(1,len(comps))}", True, MUTED_COLOR), (x, y)); y += 22
                 if 0 <= comp_i < len(comps):
                     ci = comps[comp_i]
                     info = f"Settings: {ci.get('algorithm','fit')}, pts {ci.get('draw_max_points',4)}"
                     screen.blit(font_small.render(info, True, MUTED_COLOR), (x, y)); y += 18
-                hide_rect = pygame.Rect(x, y, (PANEL_W - 48) // 2, 30)
-                redraw_rect = pygame.Rect(hide_rect.right + 8, y, (PANEL_W - 48) - hide_rect.w, 30)
-                state["curve_hide_rect"] = hide_rect
+                redraw_rect = pygame.Rect(x, y, PANEL_W - 40, 30)
+                state["curve_hide_rect"] = pygame.Rect(0,0,0,0)
                 state["curve_redraw_rect"] = redraw_rect
-                for r, label in ((hide_rect, "Show" if comp_hidden else "Hide"), (redraw_rect, "Redraw")):
-                    bg = BUTTON_HOVER if r.collidepoint(mouse_pos) else BUTTON_BG
-                    pygame.draw.rect(screen, bg, r, border_radius=6)
-                    pygame.draw.rect(screen, BUTTON_BORDER, r, 1, border_radius=6)
-                    t = font_small.render(label, True, TEXT_COLOR)
-                    screen.blit(t, t.get_rect(center=r.center))
+                bg = BUTTON_HOVER if redraw_rect.collidepoint(mouse_pos) else BUTTON_BG
+                pygame.draw.rect(screen, bg, redraw_rect, border_radius=6)
+                pygame.draw.rect(screen, BUTTON_BORDER, redraw_rect, 1, border_radius=6)
+                t = font_small.render("Redraw stroke", True, TEXT_COLOR)
+                screen.blit(t, t.get_rect(center=redraw_rect.center))
                 y += 38
             else:
-                screen.blit(font_small.render("Click a stroke to edit", True, MUTED_COLOR), (x, y)); y += 24
+                screen.blit(font_small.render("Click a stroke to edit separately", True, MUTED_COLOR), (x, y)); y += 24
                 state["curve_hide_rect"] = pygame.Rect(0,0,0,0)
                 state["curve_redraw_rect"] = pygame.Rect(0,0,0,0)
         else:
@@ -1818,9 +1834,9 @@ def draw_panel(screen, fonts, mouse_pos, state):
             ]
         else:
             help_lines = [
-                "Click a curve segment to select.",
-                "Hide/Show or Redraw selected curve.",
-                "Redraw keeps same point count.",
+                "Click a stroke/component to select.",
+                "Drag its points/handles to edit separately.",
+                "Redraw replaces selected stroke/component.",
                 "N: cycle Transform/Nodes/Curve.",
             ]
 
@@ -2104,20 +2120,6 @@ def main():
                         else:
                             selection_submode = "curve"
                         selected_point = None; selected_curve = None; transform_drag = None; drag_last = None; redrawing_curve = None
-                    elif tool_mode == "selection" and selection_submode == "curve" and state.get("curve_hide_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
-                        if selected_curve and selected_curve[0] in selected_strokes:
-                            si, comp_i = selected_curve
-                            if 0 <= si < len(strokes) and isinstance(strokes[si], dict):
-                                ranges = _component_ranges(strokes[si])
-                                if 0 <= comp_i < len(ranges):
-                                    s0, s1 = ranges[comp_i]
-                                    hidden = set(strokes[si].get("hidden_segs", set()) or set())
-                                    comp_hidden = all(i in hidden for i in range(s0, s1)) if s1 > s0 else False
-                                    if comp_hidden:
-                                        for i in range(s0, s1): hidden.discard(i)
-                                    else:
-                                        for i in range(s0, s1): hidden.add(i)
-                                    strokes[si]["hidden_segs"] = hidden
                     elif tool_mode == "selection" and selection_submode == "curve" and state.get("curve_redraw_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
                         if selected_curve and selected_curve[0] in selected_strokes:
                             si, comp_i = selected_curve
@@ -2244,20 +2246,35 @@ def main():
                         mods = pygame.key.get_mods()
                         shift = bool(mods & pygame.KMOD_SHIFT)
                         if selection_submode == "curve":
-                            if len(selected_strokes) == 1:
-                                si = next(iter(selected_strokes))
-                                if 0 <= si < len(strokes):
-                                    comp_i = hit_test_component(strokes[si], cpos)
-                                    if comp_i is not None:
-                                        selected_curve = (si, comp_i)
-                            # allow selecting a different stroke
-                            hit = hit_test_stroke(cpos, strokes)
-                            if hit is not None and (len(selected_strokes) != 1 or hit != next(iter(selected_strokes))):
-                                selected_strokes = {hit}
-                                comp_i = hit_test_component(strokes[hit], cpos) if 0 <= hit < len(strokes) else None
-                                selected_curve = (hit, comp_i) if comp_i is not None else None
-                            elif hit is None and not shift:
-                                selected_strokes.clear(); selected_curve = None
+                            handled_curve = False
+                            # allow editing points/handles of selected component separately
+                            if len(selected_strokes) == 1 and selected_curve is not None:
+                                si, comp_i = selected_curve
+                                if si == next(iter(selected_strokes)) and 0 <= si < len(strokes):
+                                    ranges = _component_ranges(strokes[si])
+                                    if 0 <= comp_i < len(ranges):
+                                        s0, s1 = ranges[comp_i]
+                                        pt_hit = hit_test_point(strokes[si], cpos, seg_indices=range(s0, s1))
+                                        if pt_hit is not None:
+                                            selected_point = pt_hit
+                                            drag_last = cpos
+                                            handled_curve = True
+                            if not handled_curve:
+                                if len(selected_strokes) == 1:
+                                    si = next(iter(selected_strokes))
+                                    if 0 <= si < len(strokes):
+                                        comp_i = hit_test_component(strokes[si], cpos)
+                                        if comp_i is not None:
+                                            selected_curve = (si, comp_i)
+                                            handled_curve = True
+                                # allow selecting a different stroke/component
+                                hit = hit_test_stroke(cpos, strokes)
+                                if hit is not None and (len(selected_strokes) != 1 or hit != next(iter(selected_strokes))):
+                                    selected_strokes = {hit}
+                                    comp_i = hit_test_component(strokes[hit], cpos) if 0 <= hit < len(strokes) else None
+                                    selected_curve = (hit, comp_i) if comp_i is not None else None
+                                elif hit is None and not shift:
+                                    selected_strokes.clear(); selected_curve = None
                             if len(selected_strokes) != 1 or (selected_curve and selected_curve[0] not in selected_strokes):
                                 selected_curve = None
                         elif selection_submode == "transform":
