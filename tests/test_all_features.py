@@ -657,6 +657,20 @@ class TestStrokeComponentsRedraw(unittest.TestCase):
         surf = app.make_cairo_surface(120, 40)
         app.draw_scene(surf, [s])
 
+    def test_smooth_width_transition_render(self):
+        s1 = self._make_component_stroke([(0, 20), (50, 20), (100, 20)], max_points=2, algorithm="fit")
+        s2 = self._make_component_stroke([(100, 20), (150, 20), (200, 20)], max_points=2, algorithm="fit")
+        merged = app.merge_connected_strokes([s1, s2])[0]
+        comps = app._stroke_components(merged)
+        if len(comps) >= 2:
+            comps[0]["stroke_width"] = 2.0
+            comps[1]["stroke_width"] = 12.0
+            merged["components"] = comps
+        merged["smooth_width_transition"] = True
+        surf = app.make_cairo_surface(240, 60)
+        app.draw_scene(surf, [merged])  # should render without error
+        self.assertTrue(merged.get("smooth_width_transition"))
+
 
 class TestMultiSelectUI(unittest.TestCase):
     def setUp(self):

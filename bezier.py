@@ -348,3 +348,27 @@ def stroke_to_beziers(points, simplify_epsilon=2.0, tension=0.0, max_points=None
 
     # Default "fit": fit control points to the stroke for better replication
     return fit_polyline_to_beziers(smoothed, simplified)
+
+
+def cubic_bezier_point(p0, c1, c2, p3, t):
+    """Evaluate cubic Bezier at parameter t in [0,1]."""
+    mt = 1.0 - t
+    mt2 = mt * mt
+    t2 = t * t
+    a = mt2 * mt
+    b = 3.0 * mt2 * t
+    c = 3.0 * mt * t2
+    d = t * t2
+    return (a * p0[0] + b * c1[0] + c * c2[0] + d * p3[0],
+            a * p0[1] + b * c1[1] + c * c2[1] + d * p3[1])
+
+
+def cubic_bezier_derivative(p0, c1, c2, p3, t):
+    """First derivative of cubic Bezier at t."""
+    mt = 1.0 - t
+    a = 3.0 * mt * mt
+    b = 6.0 * mt * t
+    c = 3.0 * t * t
+    # derivative: 3(1-t)^2(c1-p0)+6(1-t)t(c2-c1)+3t^2(p3-c2)
+    return (a * (c1[0] - p0[0]) + b * (c2[0] - c1[0]) + c * (p3[0] - c2[0]),
+            a * (c1[1] - p0[1]) + b * (c2[1] - c1[1]) + c * (p3[1] - c2[1]))
