@@ -81,7 +81,6 @@ def new_stroke(segs, stroke_color=(0.1, 0.1, 0.15), stroke_width=3.0, fill_color
         "corner_anchors": set(corner_anchors or ()),
         "algorithm": algorithm or "fit",
         "hidden_segs": set(),
-        "smooth_width_transition": False,
     }
 
 
@@ -668,14 +667,13 @@ def _segment_endpoint_widths(stroke, seg_i):
 
 
 def _draw_variable_width_segments(ctx, stroke, seg_indices, base_color=None):
-    """Draw selected segments with smooth width transitions across boundaries and point widths."""
+    """Draw selected segments with variable width (e.g. per-point endpoint widths)."""
     segs = segs_of(stroke)
     if not seg_indices:
         return
     ordered = [i for i in sorted(seg_indices) if 0 <= i < len(segs)]
     if not ordered:
         return
-    smooth_components = bool(stroke.get("smooth_width_transition")) if isinstance(stroke, dict) else False
     seg_cs = []
     w_start = []
     w_end = []
@@ -686,21 +684,6 @@ def _draw_variable_width_segments(ctx, stroke, seg_indices, base_color=None):
         seg_cs.append(sc if base_color is None else base_color)
         w_start.append(max(0.5, float(ws)))
         w_end.append(max(0.5, float(we)))
-    n = len(ordered)
-    # Smooth width across adjacent component boundaries when option enabled (and not explicitly pinned by same point widths)
-    if smooth_components:
-        for k in range(n - 1):
-            i0, i1 = ordered[k], ordered[k + 1]
-            if i1 == i0 + 1:
-                ci0 = _component_index_for_seg(stroke, i0)
-                ci1 = _component_index_for_seg(stroke, i1)
-                if ci0 != ci1 and abs(w_end[k] - w_start[k + 1]) > 1e-6:
-                    # average boundary unless user explicitly set different point widths at shared anchor
-                    pw_shared = get_point_width(stroke, i1, "p0")
-                    if pw_shared is None:
-                        mid = (w_end[k] + w_start[k + 1]) * 0.5
-                        w_end[k] = mid
-                        w_start[k + 1] = mid
     ctx.save()
     steps = 8
     for k, i in enumerate(ordered):
@@ -737,8 +720,6 @@ def _draw_variable_width_segments(ctx, stroke, seg_indices, base_color=None):
 def _stroke_needs_variable_width(stroke, seg_indices=None):
     if not isinstance(stroke, dict):
         return False
-    if stroke.get("smooth_width_transition") and _stroke_has_varying_widths(stroke):
-        return True
     segs = segs_of(stroke)
     if seg_indices is None:
         seg_indices = range(len(segs))
@@ -747,7 +728,6 @@ def _stroke_needs_variable_width(stroke, seg_indices=None):
             ws, we = _segment_endpoint_widths(stroke, i)
             if abs(ws - we) > 1e-6:
                 return True
-    # if point widths exist, treat as variable (safe)
     if stroke.get("point_widths"):
         return True
     return False
@@ -1315,15 +1295,14 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
             pass
         ctx.restore()
 
-    def _draw_stroke_segments(ctx, stroke, seg_indices, stroke_color, stroke_width, use_smooth_width):
+    def _draw_stroke_segments(ctx, stroke, seg_indices, stroke_color, stroke_width):
         if not seg_indices:
             return
         seg_set = set(seg_indices)
-        need_var = use_smooth_width or _stroke_needs_variable_width(stroke, seg_set)
-        if need_var:
+        if _stroke_needs_variable_width(stroke, seg_set):
             _draw_variable_width_segments(ctx, stroke, seg_set, None)
             return
-        # non-smooth: draw by components if needed
+        # draw by components if needed
         if _stroke_has_component_styles(stroke):
             ranges = _component_ranges(stroke)
             for ci, (s0, s1) in enumerate(ranges):
@@ -1385,8 +1364,7 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
                     ctx.set_source_rgba(0.1, 0.45, 0.95, 0.35)
                     ctx.set_line_width(stroke_width + 4.0)
                     ctx.stroke()
-                use_smooth = bool(stroke.get("smooth_width_transition")) if isinstance(stroke, dict) else False
-                _draw_stroke_segments(ctx, stroke, normal_segs_set, stroke_color, stroke_width, use_smooth)
+                _draw_stroke_segments(ctx, stroke, normal_segs_set, stroke_color, stroke_width)
 
             # draw redrawn component as bright yellow low-opacity template
             if in_redraw:
@@ -1408,20 +1386,19 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
             ctx.set_line_width(stroke_width + 4.0)
             ctx.stroke()
 
-        use_smooth = bool(stroke.get("smooth_width_transition")) if isinstance(stroke, dict) else False
         visible_segs = [i for i in range(len(segs)) if i not in hidden]
         if fill_color is not None and draw_stroke_path(ctx, stroke):
             ctx.set_source_rgba(*color_rgba(fill_color, (0.0, 0.0, 0.0, 1.0)))
             if _stroke_needs_variable_width(stroke, visible_segs):
                 ctx.fill()
-                _draw_stroke_segments(ctx, stroke, visible_segs, stroke_color, stroke_width, use_smooth)
+                _draw_stroke_segments(ctx, stroke, visible_segs, stroke_color, stroke_width)
             else:
                 ctx.fill_preserve()
                 if _stroke_has_component_styles(stroke):
                     ctx.new_path()
-                _draw_stroke_segments(ctx, stroke, visible_segs, stroke_color, stroke_width, use_smooth)
+                _draw_stroke_segments(ctx, stroke, visible_segs, stroke_color, stroke_width)
         else:
-            _draw_stroke_segments(ctx, stroke, visible_segs, stroke_color, stroke_width, use_smooth)
+            _draw_stroke_segments(ctx, stroke, visible_segs, stroke_color, stroke_width)
 
         # Show hidden curves differently in edit curve/nodes modes for easier selection
         if show_hidden:
@@ -1877,7 +1854,6 @@ def draw_panel(screen, fonts, mouse_pos, state):
             state["hue_rect"] = pygame.Rect(0,0,0,0)
             state["nofill_rect"] = pygame.Rect(0,0,0,0)
             state["alpha_rect"] = pygame.Rect(0,0,0,0)
-            state["smooth_width_rect"] = pygame.Rect(0,0,0,0)
             for i in range(len(state["stroke_swatch_rects"])): state["stroke_swatch_rects"][i] = pygame.Rect(0,0,0,0)
             for i in range(len(state["fill_swatch_rects"])): state["fill_swatch_rects"][i] = pygame.Rect(0,0,0,0)
         else:
@@ -1945,25 +1921,6 @@ def draw_panel(screen, fonts, mouse_pos, state):
                 screen.blit(font_small.render("Select a curve to edit its stroke", True, MUTED_COLOR), (x, y)); y += 18
             elif submode == "curve" and component_stroke_enabled:
                 screen.blit(font_small.render("Stroke applies to selected curve", True, MUTED_COLOR), (x, y)); y += 18
-
-            # Smooth width transition option (shape-level, for varying component widths)
-            if submode == "transform":
-                smooth_on = bool(stroke.get("smooth_width_transition")) if stroke else False
-                strokes_list = state.get("strokes", [])
-                vary = any(_stroke_has_varying_widths(strokes_list[i]) for i in sel_strokes if 0 <= i < len(strokes_list))
-                sw_rect = pygame.Rect(x, y, PANEL_W - 40, 28)
-                state["smooth_width_rect"] = sw_rect
-                bg = TOOL_ACTIVE if smooth_on else (BUTTON_HOVER if sw_rect.collidepoint(mouse_pos) else BUTTON_BG)
-                pygame.draw.rect(screen, bg, sw_rect, border_radius=6)
-                pygame.draw.rect(screen, ACCENT if smooth_on else BUTTON_BORDER, sw_rect, 2 if smooth_on else 1, border_radius=6)
-                label = "Smooth width: ON" if smooth_on else "Smooth width: OFF"
-                t = font_small.render(label, True, ACCENT if smooth_on else TEXT_COLOR)
-                screen.blit(t, t.get_rect(center=sw_rect.center))
-                y += 32
-                if vary:
-                    screen.blit(font_small.render("Smooths transitions between widths", True, MUTED_COLOR), (x, y)); y += 16
-            else:
-                state["smooth_width_rect"] = pygame.Rect(0, 0, 0, 0)
 
             # --- Modern color picker ---
             screen.blit(font.render("Color", True, TEXT_COLOR if (stroke_color_enabled or fill_enabled) else MUTED_COLOR), (x, y)); y += 22
@@ -2246,7 +2203,6 @@ def main():
     nodes_toggle_rect_cache = pygame.Rect(0, 0, 0, 0)
     curve_hide_rect_cache = pygame.Rect(0, 0, 0, 0)
     curve_redraw_rect_cache = pygame.Rect(0, 0, 0, 0)
-    smooth_width_rect_cache = pygame.Rect(0, 0, 0, 0)
     ref_load_rect_cache = pygame.Rect(0, 0, 0, 0)
     ref_vis_rect_cache = pygame.Rect(0, 0, 0, 0)
     ref_clear_rect_cache = pygame.Rect(0, 0, 0, 0)
@@ -2332,7 +2288,6 @@ def main():
             "redrawing_curve": state_redrawing_curve,
             "curve_hide_rect": curve_hide_rect_cache,
             "curve_redraw_rect": curve_redraw_rect_cache,
-            "smooth_width_rect": smooth_width_rect_cache,
             "strokes": strokes,
             "reference_image": reference_image,
             "ref_load_rect": ref_load_rect_cache,
@@ -2498,14 +2453,6 @@ def main():
                                 "started": False, "fixed_start": fixed_start, "fixed_end": fixed_end,
                             }
                             selected_point = None; transform_drag = None; drag_last = None
-                    elif tool_mode == "selection" and selection_submode == "transform" and selected_strokes and state.get("smooth_width_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
-                        sel_list = sorted(selected_strokes)
-                        primary_i = sel_list[0] if sel_list else -1
-                        cur_on = bool(strokes[primary_i].get("smooth_width_transition")) if 0 <= primary_i < len(strokes) else False
-                        new_val = not cur_on
-                        for si in sel_list:
-                            if 0 <= si < len(strokes):
-                                strokes[si]["smooth_width_transition"] = new_val
                     elif tool_mode == "selection" and selected_strokes and (selection_submode == "transform" or (selection_submode == "curve" and selected_curve)):
                         # Modern color picker interactions (shape-level in transform, stroke-level per selected curve in curve mode)
                         comp_style_target = None
@@ -3057,7 +3004,6 @@ def main():
         nodes_toggle_rect_cache = state.get("nodes_toggle_rect", nodes_toggle_rect_cache)
         curve_hide_rect_cache = state.get("curve_hide_rect", curve_hide_rect_cache)
         curve_redraw_rect_cache = state.get("curve_redraw_rect", curve_redraw_rect_cache)
-        smooth_width_rect_cache = state.get("smooth_width_rect", smooth_width_rect_cache)
         ref_load_rect_cache = state.get("ref_load_rect", ref_load_rect_cache)
         ref_vis_rect_cache = state.get("ref_vis_rect", ref_vis_rect_cache)
         ref_clear_rect_cache = state.get("ref_clear_rect", ref_clear_rect_cache)
