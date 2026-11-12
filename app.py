@@ -1655,10 +1655,16 @@ def draw_icon(screen, kind, rect, active):
     cx, cy = rect.center
     color = ACCENT if active else (70, 80, 95)
     if kind == "draw":
-        # pencil
-        pygame.draw.line(screen, color, (cx - 8, cy + 8), (cx + 6, cy - 6), 3)
-        pygame.draw.line(screen, color, (cx + 6, cy - 6), (cx + 10, cy - 10), 3)
-        pygame.draw.polygon(screen, color, [(cx - 10, cy + 10), (cx - 4, cy + 9), (cx - 9, cy + 4)])
+        # pen nib
+        tip = (cx - 8, cy + 9)
+        left = (cx - 2, cy - 10)
+        right = (cx + 9, cy - 3)
+        pygame.draw.polygon(screen, color, [tip, left, right])
+        # slit
+        slit_color = (255, 255, 255) if active else TOOLBAR_BG
+        pygame.draw.line(screen, slit_color, (cx - 4, cy + 1), tip, 2)
+        # breather hole
+        pygame.draw.circle(screen, slit_color, (cx + 1, cy - 3), 2)
     elif kind == "selection":
         # cursor/arrow (same as former "edit")
         pts = [(cx - 7, cy - 10), (cx - 7, cy + 8), (cx - 2, cy + 3), (cx + 2, cy + 10), (cx + 5, cy + 8), (cx + 1, cy + 1), (cx + 7, cy + 1)]
