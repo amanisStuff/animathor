@@ -247,7 +247,8 @@ def _triangle_beziers(x1, y1, x2, y2):
 
 
 def shape_from_doodle(points, shape_kind):
-    """Generate standard shape beziers from doodled points. Returns (beziers, canonical_points)."""
+    """Generate standard shape as a list of bezier segments from doodled points.
+    Returns (segments, canonical_points). Each segment is intended as a separate stroke when possible."""
     if not points or len(points) < 2:
         return None, None
     bb = points_bbox(points)
@@ -265,12 +266,14 @@ def shape_from_doodle(points, shape_kind):
             p0, p3 = (x1, y1), (x2, y2)
         return [_line_bezier(p0, p3)], [p0, p3]
     if shape_kind == "rect":
-        return _rect_beziers(x1, y1, x2, y2), [(x1, y1), (x2, y1), (x2, y2), (x1, y2), (x1, y1)]
+        segs = _rect_beziers(x1, y1, x2, y2)
+        return segs, [(x1, y1), (x2, y1), (x2, y2), (x1, y2), (x1, y1)]
     if shape_kind == "square":
         s = min(w, h)
         sx1, sy1 = cx - s / 2.0, cy - s / 2.0
         sx2, sy2 = cx + s / 2.0, cy + s / 2.0
-        return _rect_beziers(sx1, sy1, sx2, sy2), [(sx1, sy1), (sx2, sy1), (sx2, sy2), (sx1, sy2), (sx1, sy1)]
+        segs = _rect_beziers(sx1, sy1, sx2, sy2)
+        return segs, [(sx1, sy1), (sx2, sy1), (sx2, sy2), (sx1, sy2), (sx1, sy1)]
     if shape_kind == "ellipse":
         return _ellipse_beziers(cx, cy, w / 2.0, h / 2.0), None
     if shape_kind == "circle":
@@ -3058,14 +3061,28 @@ def main():
                     current_points = finalize_drawing_points(current_points, cpos, strokes, SNAP_RADIUS, shift_held, straight_line)
                     if len(current_points) >= 2:
                         raw = list(current_points)
-                        shape_beziers = None
+                        shape_segs = None
                         shape_raw = None
                         if draw_shape != "freehand":
-                            shape_beziers, shape_raw = shape_from_doodle(current_points, draw_shape)
-                        if shape_beziers:
-                            beziers = shape_beziers
-                            raw = shape_raw if shape_raw is not None else list(current_points)
+                            shape_segs, shape_raw = shape_from_doodle(current_points, draw_shape)
+                        if shape_segs:
+                            # Create a collection of strokes (one per segment/edge) when possible
                             algo_name = f"shape:{draw_shape}"
+                            base_raw = shape_raw if shape_raw is not None else list(current_points)
+                            new_strokes = []
+                            for seg in shape_segs:
+                                st = new_stroke([seg], algorithm=algo_name)
+                                comp = {
+                                    "raw_points": [tuple(seg[0]), tuple(seg[3])],
+                                    "draw_max_points": int(max_points_per_curve),
+                                    "algorithm": algo_name,
+                                    "segs": [seg],
+                                }
+                                st["components"] = [comp]
+                                new_strokes.append(st)
+                            strokes.extend(new_strokes)
+                            # Do not merge shape edges together; keep as a collection of strokes
+                            selected_strokes.clear(); selected_point = None; selected_curve = None; redrawing_curve = None
                         elif straight_line:
                             p0 = tuple(current_points[0])
                             p3 = tuple(current_points[-1])
@@ -3074,13 +3091,6 @@ def main():
                             beziers = [(p0, c1, c2, p3)]
                             raw = [p0, p3]
                             algo_name = trace_algorithm
-                        else:
-                            beziers = stroke_to_beziers(
-                                current_points, simplify_epsilon=2.5, tension=0.0,
-                                max_points=max_points_per_curve, algorithm=trace_algorithm,
-                            )
-                            algo_name = trace_algorithm
-                        if beziers:
                             st = new_stroke(beziers, algorithm=algo_name)
                             comp = {
                                 "raw_points": [tuple(p) for p in raw],
@@ -3093,6 +3103,25 @@ def main():
                             strokes.append(st)
                             strokes = merge_connected_strokes(strokes)
                             selected_strokes.clear(); selected_point = None; selected_curve = None; redrawing_curve = None
+                        else:
+                            beziers = stroke_to_beziers(
+                                current_points, simplify_epsilon=2.5, tension=0.0,
+                                max_points=max_points_per_curve, algorithm=trace_algorithm,
+                            )
+                            algo_name = trace_algorithm
+                            if beziers:
+                                st = new_stroke(beziers, algorithm=algo_name)
+                                comp = {
+                                    "raw_points": [tuple(p) for p in raw],
+                                    "draw_max_points": int(max_points_per_curve),
+                                    "algorithm": algo_name,
+                                    "segs": list(beziers),
+                                }
+                                st["components"] = [comp]
+                                st = _close_path_if_needed(st)
+                                strokes.append(st)
+                                strokes = merge_connected_strokes(strokes)
+                                selected_strokes.clear(); selected_point = None; selected_curve = None; redrawing_curve = None
                     current_points = []
                 drag_last = None; selected_point = None; transform_drag = None
                 picker_drag_sv = False; picker_drag_hue = False; picker_drag_alpha = False; ref_opacity_drag = False
