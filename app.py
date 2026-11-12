@@ -1963,14 +1963,19 @@ def draw_panel(screen, fonts, mouse_pos, state):
 
         stats = font_small.render(f"Strokes: {state['stroke_count']} | Backend: {CAIRO_BACKEND}", True, MUTED_COLOR)
         screen.blit(stats, (x, y)); y += 24
-        help_lines = [
-            "Drag on canvas to draw.",
-            "Hover endpoints to snap.",
-            "Connected edges auto-merge.",
-            "Close shape: snap end to start.",
-            "Closed shapes can't be extended.",
-            "Shortcuts: Ctrl+Z, C, Esc",
-        ]
+        if state.get("draw_tool", "pen") == "eraser":
+            help_lines = [
+                "Eraser: click curve/edge to remove.",
+                "Switch to Pen to draw strokes/shapes.",
+                "Shortcuts: Ctrl+Z, C, Esc",
+            ]
+        else:
+            help_lines = [
+                "Pen: drag on canvas to draw.",
+                "Pick a Shape to create standard shapes.",
+                "Hover endpoints to snap / auto-merge.",
+                "Shortcuts: Ctrl+Z, C, Esc",
+            ]
     else:
         # Selection mode: transform operations and modern color selection
         sel_strokes = state.get("selected_strokes", set())
@@ -2574,7 +2579,7 @@ def main():
 
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 if btn_draw.hit(event.pos):
-                    tool_mode = "draw"; drawing = False; current_points = []; selected_strokes.clear(); selected_point = None; transform_drag = None
+                    tool_mode = "draw"; draw_tool = "pen"; drawing = False; current_points = []; selected_strokes.clear(); selected_point = None; transform_drag = None
                 elif btn_select.hit(event.pos):
                     tool_mode = "selection"; drawing = False; current_points = []; selected_point = None; drag_last = None; transform_drag = None; selection_submode = "transform"
                 elif event.pos[0] >= PANEL_X:
