@@ -1439,7 +1439,7 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
                 if 0 <= comp_i < len(ranges):
                     s0, s1 = ranges[comp_i]
                     comp_range = range(s0, min(s1, len(segs)))
-                    # highlight component curve
+                    # highlight component curve (node editing moved to Nodes mode)
                     for seg_i in comp_range:
                         p0, c1, c2, p3 = segs[seg_i]
                         ctx.new_path()
@@ -1449,24 +1449,6 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
                         w = strokes[si].get("stroke_width", 3.0) if isinstance(strokes[si], dict) else 3.0
                         ctx.set_line_width(max(4.0, w + 2.0))
                         ctx.stroke()
-                    # draw nodes/handles for selected component only (edit separately)
-                    ctx.set_source_rgba(0.4, 0.5, 0.6, 0.8)
-                    ctx.set_line_width(1.0)
-                    for seg_i in comp_range:
-                        p0, c1, c2, p3 = segs[seg_i]
-                        ctx.move_to(p0[0], p0[1]); ctx.line_to(c1[0], c1[1])
-                        ctx.move_to(p3[0], p3[1]); ctx.line_to(c2[0], c2[1])
-                    ctx.stroke()
-                    for seg_i in comp_range:
-                        p0, c1, c2, p3 = segs[seg_i]
-                        if seg_i == s0:
-                            ctx.set_source_rgb(1, 1, 1); ctx.arc(p0[0], p0[1], 4.5, 0, 2*math.pi); ctx.fill()
-                            ctx.set_source_rgb(0.1, 0.45, 0.95); ctx.set_line_width(2.0); ctx.arc(p0[0], p0[1], 4.5, 0, 2*math.pi); ctx.stroke()
-                        ctx.set_source_rgb(1, 1, 1); ctx.arc(p3[0], p3[1], 4.5, 0, 2*math.pi); ctx.fill()
-                        ctx.set_source_rgb(0.1, 0.45, 0.95); ctx.set_line_width(2.0); ctx.arc(p3[0], p3[1], 4.5, 0, 2*math.pi); ctx.stroke()
-                        for pt in (c1, c2):
-                            ctx.set_source_rgb(1, 1, 1); ctx.rectangle(pt[0]-3.5, pt[1]-3.5, 7, 7); ctx.fill_preserve()
-                            ctx.set_source_rgb(0.85, 0.35, 0.2); ctx.set_line_width(1.5); ctx.stroke()
         if selection_submode == "nodes" and len(selected_in_range) == 1:
             idx = selected_in_range[0]
             segs = segs_of(strokes[idx])
@@ -2677,18 +2659,8 @@ def main():
                         shift = bool(mods & pygame.KMOD_SHIFT)
                         if selection_submode == "curve":
                             handled_curve = False
-                            # allow editing points/handles of selected component separately
-                            if len(selected_strokes) == 1 and selected_curve is not None:
-                                si, comp_i = selected_curve
-                                if si == next(iter(selected_strokes)) and 0 <= si < len(strokes):
-                                    ranges = _component_ranges(strokes[si])
-                                    if 0 <= comp_i < len(ranges):
-                                        s0, s1 = ranges[comp_i]
-                                        pt_hit = hit_test_point(strokes[si], cpos, seg_indices=range(s0, s1))
-                                        if pt_hit is not None:
-                                            selected_point = pt_hit
-                                            drag_last = cpos
-                                            handled_curve = True
+                            # Curve mode: select/edit curves (components) only; node editing is in Nodes mode
+                            selected_point = None
                             if not handled_curve:
                                 if len(selected_strokes) == 1:
                                     si = next(iter(selected_strokes))
@@ -2939,19 +2911,25 @@ def main():
                                 strokes[i] = transform_stroke(st0, cx, cy, 0.0, sx, sy)
                 elif tool_mode == "selection" and drag_last is not None and selected_strokes and pygame.mouse.get_pressed()[0]:
                     cpos = clamp_to_canvas(event.pos)
-                    if selected_point is not None and len(selected_strokes) == 1:
+                    if selection_submode == "nodes" and selected_point is not None and len(selected_strokes) == 1:
                         only = next(iter(selected_strokes))
                         seg_i, pname = selected_point
                         if 0 <= only < len(strokes):
                             strokes[only] = set_stroke_point(strokes[only], seg_i, pname, cpos)
                         drag_last = cpos
+                    elif selection_submode in ("transform", "nodes"):
+                        # In nodes mode, dragging the stroke (not a point) moves it; curve mode has no drag-move here
+                        if selection_submode == "nodes" and selected_point is not None:
+                            pass
+                        else:
+                            dx = cpos[0] - drag_last[0]; dy = cpos[1] - drag_last[1]
+                            if dx != 0 or dy != 0:
+                                for si in list(selected_strokes):
+                                    if 0 <= si < len(strokes):
+                                        strokes[si] = translate_stroke(strokes[si], dx, dy)
+                                drag_last = cpos
                     else:
-                        dx = cpos[0] - drag_last[0]; dy = cpos[1] - drag_last[1]
-                        if dx != 0 or dy != 0:
-                            for si in list(selected_strokes):
-                                if 0 <= si < len(strokes):
-                                    strokes[si] = translate_stroke(strokes[si], dx, dy)
-                            drag_last = cpos
+                        drag_last = cpos
                 # (translation handled above when drag_last is set)
 
             elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
