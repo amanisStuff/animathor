@@ -630,6 +630,50 @@ def _component_ranges(stroke):
     return ranges
 
 
+def erase_curve_at(strokes, pos, threshold=10.0):
+    """Remove the curve/component (edge) clicked at pos. Returns (new_strokes, erased)."""
+    si = hit_test_stroke(pos, strokes, threshold=threshold)
+    if si is None or not (0 <= si < len(strokes)):
+        return strokes, False
+    stroke = strokes[si]
+    comps = _stroke_components(stroke)
+    if not comps:
+        new_list = list(strokes)
+        new_list.pop(si)
+        return new_list, True
+    ci = hit_test_component(stroke, pos, threshold=threshold)
+    if ci is None:
+        # fallback: remove whole stroke if clicked but component not resolved
+        new_list = list(strokes)
+        new_list.pop(si)
+        return new_list, True
+    if len(comps) <= 1:
+        new_list = list(strokes)
+        new_list.pop(si)
+        return new_list, True
+    # remove one component: replace stroke with remaining components as separate strokes
+    replacements = []
+    for j, comp in enumerate(comps):
+        if j == ci:
+            continue
+        segs = list(comp.get("segs") or [])
+        if not segs:
+            continue
+        sc, sw = _effective_component_style(stroke, j)
+        st = new_stroke(segs, stroke_color=sc, stroke_width=sw, fill_color=None, algorithm=comp.get("algorithm", stroke.get("algorithm", "fit")))
+        comp_copy = dict(comp)
+        comp_copy["segs"] = list(segs)
+        st["components"] = [comp_copy]
+        # keep per-component style on component too
+        if "stroke_color" in comp or sc is not None:
+            st["components"][0]["stroke_color"] = sc
+        if "stroke_width" in comp or sw is not None:
+            st["components"][0]["stroke_width"] = sw
+        replacements.append(st)
+    new_list = list(strokes[:si]) + replacements + list(strokes[si + 1:])
+    return new_list, True
+
+
 def _effective_component_style(stroke, comp_i):
     comps = _stroke_components(stroke)
     base_sc = stroke.get("stroke_color", (0.1, 0.1, 0.15)) if isinstance(stroke, dict) else (0.1, 0.1, 0.15)
@@ -1839,6 +1883,22 @@ def draw_panel(screen, fonts, mouse_pos, state):
         state["trace_algo_rects"] = rects
         y += 36
 
+        # Tool: Pen / Eraser
+        screen.blit(font.render("Tool", True, TEXT_COLOR), (x, y)); y += 22
+        draw_tool = state.get("draw_tool", "pen")
+        pen_r = pygame.Rect(x, y, (PANEL_W - 40 - 8) // 2, 28)
+        er_r = pygame.Rect(x + (PANEL_W - 40 - 8) // 2 + 8, y, (PANEL_W - 40 - 8) - ((PANEL_W - 40 - 8) // 2 + 8), 28)
+        state["draw_tool_pen_rect"] = pen_r
+        state["draw_tool_eraser_rect"] = er_r
+        for r, key, label in ((pen_r, "pen", "Pen"), (er_r, "eraser", "Eraser")):
+            active_t = (draw_tool == key)
+            bg = TOOL_ACTIVE if active_t else (BUTTON_HOVER if r.collidepoint(mouse_pos) else BUTTON_BG)
+            pygame.draw.rect(screen, bg, r, border_radius=6)
+            pygame.draw.rect(screen, ACCENT if active_t else BUTTON_BORDER, r, 2 if active_t else 1, border_radius=6)
+            t = font_small.render(label, True, ACCENT if active_t else TEXT_COLOR)
+            screen.blit(t, t.get_rect(center=r.center))
+        y += 36
+
         # Shape target (doodle -> standard shape)
         screen.blit(font.render("Shape", True, TEXT_COLOR), (x, y)); y += 22
         draw_shape = state.get("draw_shape", "freehand")
@@ -2296,6 +2356,7 @@ def main():
     BOOST_MAX_POINTS = 100
     trace_algorithm = "fit"  # "fit", "catmull-rom", "single" (per new stroke)
     draw_shape = "freehand"  # "freehand" or standard shape key from DRAW_SHAPES
+    draw_tool = "pen"  # "pen" or "eraser"
 
     font = pygame.font.SysFont(None, 24)
     font_small = pygame.font.SysFont(None, 20)
@@ -2322,6 +2383,8 @@ def main():
                     "nofill": pygame.Rect(0,0,0,0), "alpha": pygame.Rect(0,0,0,0)}
     trace_algo_rects_cache = {}
     draw_shape_rects_cache = {k: pygame.Rect(0, 0, 0, 0) for k, _ in DRAW_SHAPES}
+    draw_tool_pen_rect_cache = pygame.Rect(0, 0, 0, 0)
+    draw_tool_eraser_rect_cache = pygame.Rect(0, 0, 0, 0)
     nodes_toggle_rect_cache = pygame.Rect(0, 0, 0, 0)
     curve_hide_rect_cache = pygame.Rect(0, 0, 0, 0)
     curve_redraw_rect_cache = pygame.Rect(0, 0, 0, 0)
@@ -2407,6 +2470,9 @@ def main():
             "trace_algo_rects": trace_algo_rects_cache,
             "draw_shape": draw_shape,
             "draw_shape_rects": draw_shape_rects_cache,
+            "draw_tool": draw_tool,
+            "draw_tool_pen_rect": draw_tool_pen_rect_cache,
+            "draw_tool_eraser_rect": draw_tool_eraser_rect_cache,
             "selected_curve": state_selected_curve,
             "selected_point": selected_point,
             "redrawing_curve": state_redrawing_curve,
@@ -2546,17 +2612,22 @@ def main():
                             ref_opacity_drag = True
                             handled_draw_panel = True
                         if not handled_draw_panel:
-                            picked_shape = False
-                            for key, r in state.get("draw_shape_rects", {}).items():
-                                if r.collidepoint(event.pos):
-                                    draw_shape = key
-                                    picked_shape = True
-                                    break
-                            if not picked_shape:
-                                for key, r in state.get("trace_algo_rects", {}).items():
+                            if state.get("draw_tool_pen_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
+                                draw_tool = "pen"
+                            elif state.get("draw_tool_eraser_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
+                                draw_tool = "eraser"
+                            else:
+                                picked_shape = False
+                                for key, r in state.get("draw_shape_rects", {}).items():
                                     if r.collidepoint(event.pos):
-                                        trace_algorithm = key
+                                        draw_shape = key
+                                        picked_shape = True
                                         break
+                                if not picked_shape:
+                                    for key, r in state.get("trace_algo_rects", {}).items():
+                                        if r.collidepoint(event.pos):
+                                            trace_algorithm = key
+                                            break
                     elif tool_mode == "selection" and state.get("nodes_toggle_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
                         r = state["nodes_toggle_rect"]
                         rel = (event.pos[0] - r.x) / max(1, r.w)
@@ -2714,6 +2785,11 @@ def main():
                         if (mods & pygame.KMOD_ALT) and reference_image and reference_image.get("visible", True):
                             ref_drag = {"offset": (cpos[0] - reference_image.get("x", 0), cpos[1] - reference_image.get("y", 0))}
                             drawing = False
+                        elif draw_tool == "eraser":
+                            strokes, _ = erase_curve_at(strokes, cpos)
+                            drawing = False
+                            current_points = []
+                            selected_strokes.clear(); selected_point = None; selected_curve = None
                         else:
                             drawing = True
                             shift_held = bool(mods & pygame.KMOD_SHIFT)
@@ -2948,7 +3024,7 @@ def main():
                     redrawing_curve["points"] = pts
                 elif marquee_select is not None and tool_mode == "selection" and pygame.mouse.get_pressed()[0]:
                     marquee_select["current"] = clamp_to_canvas(event.pos)
-                elif drawing and tool_mode == "draw":
+                elif drawing and tool_mode == "draw" and draw_tool == "pen":
                     cpos = clamp_to_canvas(event.pos)
                     shift_held = bool(pygame.key.get_mods() & pygame.KMOD_SHIFT)
                     keys = pygame.key.get_pressed()
@@ -3052,13 +3128,16 @@ def main():
                     else:
                         # Redraw mode armed but drawing not started yet (e.g. released on button); wait for canvas drag
                         pass
-                elif drawing and tool_mode == "draw":
+                elif drawing and tool_mode == "draw" and draw_tool == "pen":
                     drawing = False
                     cpos = clamp_to_canvas(event.pos)
                     shift_held = bool(pygame.key.get_mods() & pygame.KMOD_SHIFT)
                     keys = pygame.key.get_pressed()
                     straight_line = bool(keys[pygame.K_v]) if keys else False
                     current_points = finalize_drawing_points(current_points, cpos, strokes, SNAP_RADIUS, shift_held, straight_line)
+                elif drawing and tool_mode == "draw" and draw_tool == "eraser":
+                    drawing = False
+                    current_points = []
                     if len(current_points) >= 2:
                         raw = list(current_points)
                         shape_segs = None
@@ -3174,6 +3253,8 @@ def main():
         picker_rects["alpha"] = state.get("alpha_rect", picker_rects["alpha"])
         trace_algo_rects_cache = state.get("trace_algo_rects", trace_algo_rects_cache)
         draw_shape_rects_cache = state.get("draw_shape_rects", draw_shape_rects_cache)
+        draw_tool_pen_rect_cache = state.get("draw_tool_pen_rect", draw_tool_pen_rect_cache)
+        draw_tool_eraser_rect_cache = state.get("draw_tool_eraser_rect", draw_tool_eraser_rect_cache)
         nodes_toggle_rect_cache = state.get("nodes_toggle_rect", nodes_toggle_rect_cache)
         curve_hide_rect_cache = state.get("curve_hide_rect", curve_hide_rect_cache)
         curve_redraw_rect_cache = state.get("curve_redraw_rect", curve_redraw_rect_cache)
