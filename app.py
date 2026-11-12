@@ -1636,38 +1636,62 @@ def draw_panel(screen, fonts, mouse_pos, state):
         if sel_count == 0:
             info = font_small.render("Select a stroke", True, MUTED_COLOR)
             screen.blit(info, (x, y)); y += 28
+            # clear style control rects
+            state["tab_stroke_rect"] = pygame.Rect(0,0,0,0)
+            state["tab_fill_rect"] = pygame.Rect(0,0,0,0)
+            state["sv_rect"] = pygame.Rect(0,0,0,0)
+            state["hue_rect"] = pygame.Rect(0,0,0,0)
+            state["nofill_rect"] = pygame.Rect(0,0,0,0)
+            state["alpha_rect"] = pygame.Rect(0,0,0,0)
+            for i in range(len(state["stroke_swatch_rects"])): state["stroke_swatch_rects"][i] = pygame.Rect(0,0,0,0)
+            for i in range(len(state["fill_swatch_rects"])): state["fill_swatch_rects"][i] = pygame.Rect(0,0,0,0)
         else:
             stroke = sel_stroke if sel_stroke is not None else state.get("selected_obj")
             if sel_count > 1:
                 screen.blit(font_small.render(f"Multiple selected ({sel_count})", True, MUTED_COLOR), (x, y)); y += 20
+            style_enabled = (submode == "transform")
+            label_color = TEXT_COLOR if style_enabled else MUTED_COLOR
+            value_color = ACCENT if style_enabled else MUTED_COLOR
             # Stroke width
-            screen.blit(font.render("Stroke width", True, TEXT_COLOR), (x, y)); y += 22
-            wv = font_title.render(str(int(round(stroke.get("stroke_width", 3)))), True, ACCENT)
+            screen.blit(font.render("Stroke width", True, label_color), (x, y)); y += 22
+            wv = font_title.render(str(int(round(stroke.get("stroke_width", 3)))), True, value_color)
             screen.blit(wv, (x, y - 2)); y += 30
             state["width_slider"].track.topleft = (x, y)
             state["width_slider"].track.width = PANEL_W - 40
-            state["width_slider"].draw(screen); y += 20
+            state["width_slider"].draw(screen)
+            state["style_controls_enabled"] = style_enabled
+            y += 20
             algo_label = next((lbl for k, lbl in TRACE_ALGORITHMS if k == stroke.get("algorithm", "fit")), stroke.get("algorithm", "fit"))
             if sel_count == 1:
                 screen.blit(font_small.render(f"Tracing: {algo_label}", True, MUTED_COLOR), (x, y)); y += 20
             else:
                 y += 4
+            if not style_enabled:
+                screen.blit(font_small.render("Stroke/color apply to shape in Transform mode", True, MUTED_COLOR), (x, y)); y += 18
 
             # --- Modern color picker ---
             color_target = state.get("color_target", "stroke")
-            screen.blit(font.render("Color", True, TEXT_COLOR), (x, y)); y += 22
+            screen.blit(font.render("Color", True, label_color), (x, y)); y += 22
             # target tabs
             tab_w = (PANEL_W - 40 - 8) // 2
             tab_stroke = pygame.Rect(x, y, tab_w, 26)
             tab_fill = pygame.Rect(x + tab_w + 8, y, tab_w, 26)
-            state["tab_stroke_rect"] = tab_stroke
-            state["tab_fill_rect"] = tab_fill
+            if style_enabled:
+                state["tab_stroke_rect"] = tab_stroke
+                state["tab_fill_rect"] = tab_fill
+            else:
+                state["tab_stroke_rect"] = pygame.Rect(0,0,0,0)
+                state["tab_fill_rect"] = pygame.Rect(0,0,0,0)
             for rect, label, key in ((tab_stroke, "Stroke", "stroke"), (tab_fill, "Fill", "fill")):
-                active = (color_target == key)
-                bg = TOOL_ACTIVE if active else (BUTTON_HOVER if rect.collidepoint(mouse_pos) else BUTTON_BG)
+                active = (color_target == key) and style_enabled
+                bg = TOOL_ACTIVE if active else (BUTTON_HOVER if (style_enabled and rect.collidepoint(mouse_pos)) else BUTTON_BG)
                 pygame.draw.rect(screen, bg, rect, border_radius=6)
-                pygame.draw.rect(screen, ACCENT if active else BUTTON_BORDER, rect, 2 if active else 1, border_radius=6)
-                t = font_small.render(label, True, ACCENT if active else TEXT_COLOR)
+                border_c = ACCENT if active else BUTTON_BORDER
+                if not style_enabled:
+                    border_c = BUTTON_BORDER
+                pygame.draw.rect(screen, border_c, rect, 2 if active else 1, border_radius=6)
+                tc = (ACCENT if active else TEXT_COLOR) if style_enabled else MUTED_COLOR
+                t = font_small.render(label, True, tc)
                 screen.blit(t, t.get_rect(center=rect.center))
             y += 32
 
@@ -1792,6 +1816,17 @@ def draw_panel(screen, fonts, mouse_pos, state):
                 sel_match = (cur_color == col) if cur_color is not None else False
                 draw_swatch(screen, r, col, sel_match, mouse_pos)
             y += sw + 10
+
+            # Disable style controls in curve/point (nodes) modes: can't apply to curve/point
+            if not style_enabled:
+                state["tab_stroke_rect"] = pygame.Rect(0,0,0,0)
+                state["tab_fill_rect"] = pygame.Rect(0,0,0,0)
+                state["sv_rect"] = pygame.Rect(0,0,0,0)
+                state["hue_rect"] = pygame.Rect(0,0,0,0)
+                state["nofill_rect"] = pygame.Rect(0,0,0,0)
+                state["alpha_rect"] = pygame.Rect(0,0,0,0)
+                state["stroke_swatch_rects"] = [pygame.Rect(0,0,0,0) for _ in STROKE_SWATCHES]
+                state["fill_swatch_rects"] = [pygame.Rect(0,0,0,0) for _ in STROKE_SWATCHES]
 
         sel_label = "-" if sel_count == 0 else (str(next(iter(sel_strokes)) + 1) if sel_count == 1 else f"{sel_count}")
         stats = font_small.render(f"Strokes: {state['stroke_count']} | Selected: {sel_label}", True, MUTED_COLOR)
@@ -2010,7 +2045,7 @@ def main():
 
             if slider.handle_event(event):
                 max_points_per_curve = slider.value
-            if tool_mode == "selection" and selected_strokes and width_slider.handle_event(event):
+            if tool_mode == "selection" and selection_submode == "transform" and selected_strokes and width_slider.handle_event(event):
                 for si in selected_strokes:
                     if 0 <= si < len(strokes):
                         strokes[si]["stroke_width"] = float(width_slider.value)
@@ -2137,8 +2172,8 @@ def main():
                                 "started": False, "fixed_start": fixed_start, "fixed_end": fixed_end,
                             }
                             selected_point = None; transform_drag = None; drag_last = None
-                    elif tool_mode == "selection" and selected_strokes:
-                        # Modern color picker interactions (apply to all selected strokes)
+                    elif tool_mode == "selection" and selection_submode == "transform" and selected_strokes:
+                        # Modern color picker interactions (apply to all selected strokes - shape level)
                         sel_list = sorted(selected_strokes)
                         primary_i = sel_list[0]
                         primary_obj = strokes[primary_i] if 0 <= primary_i < len(strokes) else None
@@ -2387,7 +2422,7 @@ def main():
                     off = ref_drag.get("offset", (0, 0))
                     reference_image["x"] = cpos[0] - off[0]
                     reference_image["y"] = cpos[1] - off[1]
-                elif (picker_drag_sv or picker_drag_hue or picker_drag_alpha) and selected_strokes:
+                elif (picker_drag_sv or picker_drag_hue or picker_drag_alpha) and selected_strokes and selection_submode == "transform":
                     sel_list = sorted(selected_strokes)
                     if picker_drag_sv:
                         sv = state["sv_rect"]
