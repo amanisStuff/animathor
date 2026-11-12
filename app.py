@@ -3066,7 +3066,7 @@ def main():
                         if draw_shape != "freehand":
                             shape_segs, shape_raw = shape_from_doodle(current_points, draw_shape)
                         if shape_segs:
-                            # Create a collection of strokes (one per segment/edge) when possible
+                            # Create a collection of connected curves/strokes (one per edge/segment) when possible
                             algo_name = f"shape:{draw_shape}"
                             base_raw = shape_raw if shape_raw is not None else list(current_points)
                             new_strokes = []
@@ -3080,8 +3080,13 @@ def main():
                                 }
                                 st["components"] = [comp]
                                 new_strokes.append(st)
-                            strokes.extend(new_strokes)
-                            # Do not merge shape edges together; keep as a collection of strokes
+                            if new_strokes:
+                                # connect edges together so they form one shape with sharp corners at joins
+                                shape_stroke = new_strokes[0]
+                                for extra in new_strokes[1:]:
+                                    shape_stroke = merge_connected_strokes([shape_stroke, extra])[0]
+                                shape_stroke = _close_path_if_needed(shape_stroke)
+                                strokes.append(shape_stroke)
                             selected_strokes.clear(); selected_point = None; selected_curve = None; redrawing_curve = None
                         elif straight_line:
                             p0 = tuple(current_points[0])
