@@ -657,6 +657,15 @@ class TestStrokeComponentsRedraw(unittest.TestCase):
         surf = app.make_cairo_surface(120, 40)
         app.draw_scene(surf, [s])
 
+    def test_shape_from_doodle_rect_circle(self):
+        pts = [(10, 20), (30, 20), (30, 40), (10, 40), (10, 20)]
+        beziers, raw = app.shape_from_doodle(pts, "rect")
+        self.assertIsNotNone(beziers)
+        self.assertEqual(len(beziers), 4)
+        beziers, raw = app.shape_from_doodle(pts, "circle")
+        self.assertIsNotNone(beziers)
+        self.assertEqual(len(beziers), 4)
+
 
 class TestMultiSelectUI(unittest.TestCase):
     def setUp(self):

@@ -69,6 +69,16 @@ TRACE_ALGORITHMS = [
     ("single", "Single"),
 ]
 
+DRAW_SHAPES = [
+    ("freehand", "Free"),
+    ("line", "Line"),
+    ("rect", "Rect"),
+    ("square", "Square"),
+    ("ellipse", "Ellipse"),
+    ("circle", "Circle"),
+    ("triangle", "Tri"),
+]
+
 
 def new_stroke(segs, stroke_color=(0.1, 0.1, 0.15), stroke_width=3.0, fill_color=None, corner_anchors=None, algorithm="fit"):
     return {
@@ -189,6 +199,86 @@ def stroke_start(stroke):
 def stroke_end(stroke):
     segs = segs_of(stroke)
     return segs[-1][3]
+
+
+def points_bbox(points):
+    if not points:
+        return None
+    xs = [p[0] for p in points]
+    ys = [p[1] for p in points]
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+def _line_bezier(p0, p3):
+    c1 = (p0[0] + (p3[0] - p0[0]) / 3.0, p0[1] + (p3[1] - p0[1]) / 3.0)
+    c2 = (p0[0] + 2.0 * (p3[0] - p0[0]) / 3.0, p0[1] + 2.0 * (p3[1] - p0[1]) / 3.0)
+    return (tuple(p0), c1, c2, tuple(p3))
+
+
+def _rect_beziers(x1, y1, x2, y2):
+    p1, p2, p3, p4 = (x1, y1), (x2, y1), (x2, y2), (x1, y2)
+    return [_line_bezier(p1, p2), _line_bezier(p2, p3), _line_bezier(p3, p4), _line_bezier(p4, p1)]
+
+
+def _ellipse_beziers(cx, cy, rx, ry):
+    if rx < 1e-3: rx = 1e-3
+    if ry < 1e-3: ry = 1e-3
+    k = 0.5522847498307936
+    ox, oy = rx * k, ry * k
+    # start at rightmost point, clockwise
+    p0 = (cx + rx, cy)
+    p1 = (cx, cy + ry)
+    p2 = (cx - rx, cy)
+    p3 = (cx, cy - ry)
+    return [
+        (p0, (cx + rx, cy + oy), (cx + ox, cy + ry), p1),
+        (p1, (cx - ox, cy + ry), (cx - rx, cy + oy), p2),
+        (p2, (cx - rx, cy - oy), (cx - ox, cy - ry), p3),
+        (p3, (cx + ox, cy - ry), (cx + rx, cy - oy), p0),
+    ]
+
+
+def _triangle_beziers(x1, y1, x2, y2):
+    # upward-pointing triangle inscribed in bbox
+    top = ((x1 + x2) / 2.0, y1)
+    br = (x2, y2)
+    bl = (x1, y2)
+    return [_line_bezier(top, br), _line_bezier(br, bl), _line_bezier(bl, top)]
+
+
+def shape_from_doodle(points, shape_kind):
+    """Generate standard shape beziers from doodled points. Returns (beziers, canonical_points)."""
+    if not points or len(points) < 2:
+        return None, None
+    bb = points_bbox(points)
+    if bb is None:
+        return None, None
+    x1, y1, x2, y2 = bb
+    w = max(1.0, x2 - x1)
+    h = max(1.0, y2 - y1)
+    cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+    if shape_kind == "line":
+        p0 = tuple(points[0])
+        p3 = tuple(points[-1])
+        # if doodle ended very close to start, use bbox diagonal-ish fallback
+        if math.hypot(p3[0] - p0[0], p3[1] - p0[1]) < 2.0:
+            p0, p3 = (x1, y1), (x2, y2)
+        return [_line_bezier(p0, p3)], [p0, p3]
+    if shape_kind == "rect":
+        return _rect_beziers(x1, y1, x2, y2), [(x1, y1), (x2, y1), (x2, y2), (x1, y2), (x1, y1)]
+    if shape_kind == "square":
+        s = min(w, h)
+        sx1, sy1 = cx - s / 2.0, cy - s / 2.0
+        sx2, sy2 = cx + s / 2.0, cy + s / 2.0
+        return _rect_beziers(sx1, sy1, sx2, sy2), [(sx1, sy1), (sx2, sy1), (sx2, sy2), (sx1, sy2), (sx1, sy1)]
+    if shape_kind == "ellipse":
+        return _ellipse_beziers(cx, cy, w / 2.0, h / 2.0), None
+    if shape_kind == "circle":
+        r = min(w, h) / 2.0
+        return _ellipse_beziers(cx, cy, r, r), None
+    if shape_kind == "triangle":
+        return _triangle_beziers(x1, y1, x2, y2), None
+    return None, None
 
 
 def _pt_key(pt, eps=6.0):
@@ -1746,6 +1836,27 @@ def draw_panel(screen, fonts, mouse_pos, state):
         state["trace_algo_rects"] = rects
         y += 36
 
+        # Shape target (doodle -> standard shape)
+        screen.blit(font.render("Shape", True, TEXT_COLOR), (x, y)); y += 22
+        draw_shape = state.get("draw_shape", "freehand")
+        shape_rects = {}
+        cols = 4
+        gap = 6
+        bw_s = (PANEL_W - 40 - gap * (cols - 1)) // cols
+        for i, (key, label) in enumerate(DRAW_SHAPES):
+            row, col = divmod(i, cols)
+            r = pygame.Rect(x + col * (bw_s + gap), y + row * 30, bw_s, 26)
+            shape_rects[key] = r
+            active_s = (draw_shape == key)
+            bg = TOOL_ACTIVE if active_s else (BUTTON_HOVER if r.collidepoint(mouse_pos) else BUTTON_BG)
+            pygame.draw.rect(screen, bg, r, border_radius=6)
+            pygame.draw.rect(screen, ACCENT if active_s else BUTTON_BORDER, r, 2 if active_s else 1, border_radius=6)
+            t = font_small.render(label, True, ACCENT if active_s else TEXT_COLOR)
+            screen.blit(t, t.get_rect(center=r.center))
+        state["draw_shape_rects"] = shape_rects
+        rows = (len(DRAW_SHAPES) + cols - 1) // cols
+        y += rows * 30 + 8
+
         # Reference image
         screen.blit(font.render("Reference image", True, TEXT_COLOR), (x, y)); y += 22
         ref = state.get("reference_image")
@@ -2181,6 +2292,7 @@ def main():
     NORMAL_MAX_POINTS = 5
     BOOST_MAX_POINTS = 100
     trace_algorithm = "fit"  # "fit", "catmull-rom", "single" (per new stroke)
+    draw_shape = "freehand"  # "freehand" or standard shape key from DRAW_SHAPES
 
     font = pygame.font.SysFont(None, 24)
     font_small = pygame.font.SysFont(None, 20)
@@ -2206,6 +2318,7 @@ def main():
                     "tab_stroke": pygame.Rect(0,0,0,0), "tab_fill": pygame.Rect(0,0,0,0),
                     "nofill": pygame.Rect(0,0,0,0), "alpha": pygame.Rect(0,0,0,0)}
     trace_algo_rects_cache = {}
+    draw_shape_rects_cache = {k: pygame.Rect(0, 0, 0, 0) for k, _ in DRAW_SHAPES}
     nodes_toggle_rect_cache = pygame.Rect(0, 0, 0, 0)
     curve_hide_rect_cache = pygame.Rect(0, 0, 0, 0)
     curve_redraw_rect_cache = pygame.Rect(0, 0, 0, 0)
@@ -2289,6 +2402,8 @@ def main():
             "nodes_toggle_rect": nodes_toggle_rect_cache,
             "trace_algorithm": trace_algorithm,
             "trace_algo_rects": trace_algo_rects_cache,
+            "draw_shape": draw_shape,
+            "draw_shape_rects": draw_shape_rects_cache,
             "selected_curve": state_selected_curve,
             "selected_point": selected_point,
             "redrawing_curve": state_redrawing_curve,
@@ -2428,10 +2543,17 @@ def main():
                             ref_opacity_drag = True
                             handled_draw_panel = True
                         if not handled_draw_panel:
-                            for key, r in state.get("trace_algo_rects", {}).items():
+                            picked_shape = False
+                            for key, r in state.get("draw_shape_rects", {}).items():
                                 if r.collidepoint(event.pos):
-                                    trace_algorithm = key
+                                    draw_shape = key
+                                    picked_shape = True
                                     break
+                            if not picked_shape:
+                                for key, r in state.get("trace_algo_rects", {}).items():
+                                    if r.collidepoint(event.pos):
+                                        trace_algorithm = key
+                                        break
                     elif tool_mode == "selection" and state.get("nodes_toggle_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
                         r = state["nodes_toggle_rect"]
                         rel = (event.pos[0] - r.x) / max(1, r.w)
@@ -2936,24 +3058,34 @@ def main():
                     current_points = finalize_drawing_points(current_points, cpos, strokes, SNAP_RADIUS, shift_held, straight_line)
                     if len(current_points) >= 2:
                         raw = list(current_points)
-                        if straight_line:
+                        shape_beziers = None
+                        shape_raw = None
+                        if draw_shape != "freehand":
+                            shape_beziers, shape_raw = shape_from_doodle(current_points, draw_shape)
+                        if shape_beziers:
+                            beziers = shape_beziers
+                            raw = shape_raw if shape_raw is not None else list(current_points)
+                            algo_name = f"shape:{draw_shape}"
+                        elif straight_line:
                             p0 = tuple(current_points[0])
                             p3 = tuple(current_points[-1])
                             c1 = (p0[0] + (p3[0] - p0[0]) / 3.0, p0[1] + (p3[1] - p0[1]) / 3.0)
                             c2 = (p0[0] + 2.0 * (p3[0] - p0[0]) / 3.0, p0[1] + 2.0 * (p3[1] - p0[1]) / 3.0)
                             beziers = [(p0, c1, c2, p3)]
                             raw = [p0, p3]
+                            algo_name = trace_algorithm
                         else:
                             beziers = stroke_to_beziers(
                                 current_points, simplify_epsilon=2.5, tension=0.0,
                                 max_points=max_points_per_curve, algorithm=trace_algorithm,
                             )
+                            algo_name = trace_algorithm
                         if beziers:
-                            st = new_stroke(beziers, algorithm=trace_algorithm)
+                            st = new_stroke(beziers, algorithm=algo_name)
                             comp = {
                                 "raw_points": [tuple(p) for p in raw],
                                 "draw_max_points": int(max_points_per_curve),
-                                "algorithm": trace_algorithm,
+                                "algorithm": algo_name,
                                 "segs": list(beziers),
                             }
                             st["components"] = [comp]
@@ -3007,6 +3139,7 @@ def main():
         picker_rects["nofill"] = state.get("nofill_rect", picker_rects["nofill"])
         picker_rects["alpha"] = state.get("alpha_rect", picker_rects["alpha"])
         trace_algo_rects_cache = state.get("trace_algo_rects", trace_algo_rects_cache)
+        draw_shape_rects_cache = state.get("draw_shape_rects", draw_shape_rects_cache)
         nodes_toggle_rect_cache = state.get("nodes_toggle_rect", nodes_toggle_rect_cache)
         curve_hide_rect_cache = state.get("curve_hide_rect", curve_hide_rect_cache)
         curve_redraw_rect_cache = state.get("curve_redraw_rect", curve_redraw_rect_cache)
