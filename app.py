@@ -1,5 +1,6 @@
 import math
 import sys
+import copy
 
 try:
     import cairo  # pycairo (often bundles Cairo on Windows)
@@ -2344,6 +2345,26 @@ def main():
 
     cairo_surface = make_cairo_surface(CANVAS_W, HEIGHT)
     strokes = []
+    undo_stack = []
+    MAX_UNDO = 100
+
+    def push_undo():
+        # snapshot strokes for undo (action-based)
+        try:
+            undo_stack.append(copy.deepcopy(strokes))
+        except Exception:
+            undo_stack.append(list(strokes))
+        if len(undo_stack) > MAX_UNDO:
+            del undo_stack[0:len(undo_stack) - MAX_UNDO]
+
+    def do_undo():
+        if undo_stack:
+            restored = undo_stack.pop()
+            strokes.clear()
+            strokes.extend(restored)
+            return True
+        return False
+
     current_points = []
     drawing = False
     tool_mode = "draw"
@@ -2544,17 +2565,20 @@ def main():
                             if snap is not None:
                                 redrawing_curve["points"][0] = snap
                 elif event.key == pygame.K_c:
+                    if strokes:
+                        push_undo()
                     strokes.clear(); selected_strokes.clear(); selected_point = None; transform_drag = None
                 elif event.key == pygame.K_z and (pygame.key.get_mods() & pygame.KMOD_CTRL):
-                    if strokes:
-                        strokes.pop()
-                    selected_strokes.clear(); selected_point = None; transform_drag = None
+                    if do_undo():
+                        selected_strokes = {i for i in selected_strokes if 0 <= i < len(strokes)}
+                    selected_strokes.clear(); selected_point = None; transform_drag = None; selected_curve = None; redrawing_curve = None
                 elif event.key in (pygame.K_DELETE, pygame.K_BACKSPACE) and tool_mode == "selection":
                     if selected_strokes:
+                        push_undo()
                         for i in sorted(selected_strokes, reverse=True):
                             if 0 <= i < len(strokes):
                                 strokes.pop(i)
-                        selected_strokes.clear(); selected_point = None; transform_drag = None
+                        selected_strokes.clear(); selected_point = None; transform_drag = None; selected_curve = None
                 elif event.key == pygame.K_n and tool_mode == "selection":
                     modes = ["transform", "nodes", "curve"]
                     selection_submode = modes[(modes.index(selection_submode) + 1) % len(modes)] if selection_submode in modes else "transform"
@@ -2591,10 +2615,13 @@ def main():
                             max_points_per_curve = min(max_points_per_curve, NORMAL_MAX_POINTS)
                         slider.value = max_points_per_curve
                     elif tool_mode == "draw" and btn_undo.hit(event.pos):
-                        if strokes: strokes.pop()
-                        selected_strokes.clear(); selected_point = None
+                        if do_undo():
+                            selected_strokes = {i for i in selected_strokes if 0 <= i < len(strokes)}
+                        selected_strokes.clear(); selected_point = None; selected_curve = None; redrawing_curve = None
                     elif tool_mode == "draw" and btn_clear.hit(event.pos):
-                        strokes.clear(); selected_strokes.clear(); selected_point = None
+                        if strokes:
+                            push_undo()
+                        strokes.clear(); selected_strokes.clear(); selected_point = None; selected_curve = None; redrawing_curve = None
                     elif tool_mode == "draw":
                         handled_draw_panel = False
                         if state.get("ref_load_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
@@ -2791,7 +2818,10 @@ def main():
                             ref_drag = {"offset": (cpos[0] - reference_image.get("x", 0), cpos[1] - reference_image.get("y", 0))}
                             drawing = False
                         elif draw_tool == "eraser":
-                            strokes, _ = erase_curve_at(strokes, cpos)
+                            hit_e = hit_test_stroke(cpos, strokes)
+                            if hit_e is not None:
+                                push_undo()
+                                strokes, _ = erase_curve_at(strokes, cpos)
                             drawing = False
                             current_points = []
                             selected_strokes.clear(); selected_point = None; selected_curve = None
@@ -2845,6 +2875,7 @@ def main():
                                 h = hit_test_bbox_handle(bb, cpos)
                                 if h is not None:
                                     cx, cy = ((bb[0] + bb[2]) / 2, (bb[1] + bb[3]) / 2)
+                                    push_undo()
                                     import copy as _copy
                                     start_strokes = {i: _copy.deepcopy(strokes[i]) for i in sorted(selected_strokes) if 0 <= i < len(strokes)}
                                     transform_drag = {
@@ -2857,9 +2888,13 @@ def main():
                                     handled = True
                                 elif bb and point_in_bbox(bb, cpos):
                                     # move all selected (keep multi-selection)
+                                    if drag_last is None:
+                                        push_undo()
                                     drag_last = cpos
                                     handled = True
                                 elif hit_test_stroke(cpos, strokes) in selected_strokes:
+                                    if drag_last is None:
+                                        push_undo()
                                     drag_last = cpos
                                     handled = True
                             if not handled:
@@ -2890,6 +2925,7 @@ def main():
                                 if 0 <= only < len(strokes):
                                     pt_hit = hit_test_point(strokes[only], cpos)
                                     if pt_hit is not None:
+                                        push_undo()
                                         selected_point = pt_hit; drag_last = cpos
                                     else:
                                         hit = hit_test_stroke(cpos, strokes)
@@ -3128,6 +3164,7 @@ def main():
                             elif pts:
                                 pts[-1] = tuple(fixed_end)
                         if si is not None and comp_i is not None and 0 <= si < len(strokes) and len(pts) >= 2:
+                            push_undo()
                             strokes[si] = redraw_stroke_component(strokes[si], comp_i, pts)
                         redrawing_curve = None
                     else:
@@ -3148,6 +3185,7 @@ def main():
                             shape_segs, shape_raw = shape_from_doodle(current_points, draw_shape)
                         if shape_segs:
                             # Create a collection of connected curves/strokes (one per edge/segment) when possible
+                            push_undo()
                             algo_name = f"shape:{draw_shape}"
                             base_raw = shape_raw if shape_raw is not None else list(current_points)
                             new_strokes = []
@@ -3170,6 +3208,7 @@ def main():
                                 strokes.append(shape_stroke)
                             selected_strokes.clear(); selected_point = None; selected_curve = None; redrawing_curve = None
                         elif straight_line:
+                            push_undo()
                             p0 = tuple(current_points[0])
                             p3 = tuple(current_points[-1])
                             c1 = (p0[0] + (p3[0] - p0[0]) / 3.0, p0[1] + (p3[1] - p0[1]) / 3.0)
@@ -3196,6 +3235,7 @@ def main():
                             )
                             algo_name = trace_algorithm
                             if beziers:
+                                push_undo()
                                 st = new_stroke(beziers, algorithm=algo_name)
                                 comp = {
                                     "raw_points": [tuple(p) for p in raw],
