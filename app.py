@@ -1070,6 +1070,30 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
     if redrawing_curve is not None:
         redraw_target = (redrawing_curve.get("stroke_idx"), redrawing_curve.get("comp_idx", redrawing_curve.get("seg_idx")))
 
+    def _draw_hidden_segments(ctx, stroke, segs, hidden_set, stroke_width):
+        if not hidden_set:
+            return
+        ctx.save()
+        try:
+            ctx.set_dash([6, 4])
+        except Exception:
+            pass
+        # distinct style for hidden curves in edit modes
+        ctx.set_source_rgba(0.95, 0.45, 0.2, 0.55)
+        ctx.set_line_width(max(1.5, float(stroke_width)))
+        ctx.new_path()
+        for i in sorted(hidden_set):
+            if 0 <= i < len(segs):
+                p0, c1, c2, p3 = segs[i]
+                ctx.move_to(p0[0], p0[1])
+                ctx.curve_to(c1[0], c1[1], c2[0], c2[1], p3[0], p3[1])
+        ctx.stroke()
+        try:
+            ctx.set_dash([])
+        except Exception:
+            pass
+        ctx.restore()
+
     for idx, stroke in enumerate(strokes):
         segs = segs_of(stroke)
         if not segs:
@@ -1077,7 +1101,9 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
         stroke_color = stroke.get("stroke_color", (0.1, 0.1, 0.15)) if isinstance(stroke, dict) else (0.1, 0.1, 0.15)
         stroke_width = stroke.get("stroke_width", 3.0) if isinstance(stroke, dict) else 3.0
         fill_color = stroke.get("fill_color") if isinstance(stroke, dict) else None
+        hidden = set(stroke.get("hidden_segs", set()) or set()) if isinstance(stroke, dict) else set()
         is_selected_stroke = (idx in sel_set and edit_mode)
+        show_hidden = edit_mode and selection_submode in ("curve", "nodes") and bool(hidden)
 
         if redraw_target and redraw_target[0] == idx:
             comp_i = redraw_target[1]
@@ -1086,7 +1112,6 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
             if 0 <= comp_i < len(ranges):
                 s0, s1 = ranges[comp_i]
                 in_redraw = set(range(s0, min(s1, len(segs))))
-            hidden = set(stroke.get("hidden_segs", set()) or set()) if isinstance(stroke, dict) else set()
 
             # draw non-redraw, non-hidden segments normally
             normal_segs = [i for i in range(len(segs)) if i not in in_redraw and i not in hidden]
@@ -1117,6 +1142,9 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
                 ctx.set_source_rgba(1.0, 1.0, 0.0, 0.35)
                 ctx.set_line_width(max(stroke_width, 2.0))
                 ctx.stroke()
+            # hidden segments styled (except those being redrawn template)
+            if show_hidden:
+                _draw_hidden_segments(ctx, stroke, segs, hidden - in_redraw, stroke_width)
             continue
 
         # Selection highlight behind the stroke so the actual stroke color stays visible
@@ -1137,6 +1165,10 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
                 ctx.set_source_rgba(*color_rgba(stroke_color, (0.1, 0.1, 0.15, 1.0)))
                 ctx.set_line_width(stroke_width)
                 ctx.stroke()
+
+        # Show hidden curves differently in edit curve/nodes modes for easier selection
+        if show_hidden:
+            _draw_hidden_segments(ctx, stroke, segs, hidden, stroke_width)
 
     # Draw selection overlays (nodes for single selection, combined bbox for transform)
     if edit_mode and sel_set:
