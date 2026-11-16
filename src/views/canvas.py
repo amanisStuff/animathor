@@ -420,27 +420,33 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
                     ctx.set_source_rgb(1, 1, 1); ctx.rectangle(pt[0]-3.5, pt[1]-3.5, 7, 7); ctx.fill_preserve()
                     ctx.set_source_rgb(0.85, 0.35, 0.2); ctx.set_line_width(1.5); ctx.stroke()
         elif selection_submode == "transform":
-            bbox = combined_bbox(strokes, selected_in_range)
-            if bbox:
-                x1, y1, x2, y2 = bbox
+            obb = combined_obb(strokes, selected_in_range)
+            if obb:
+                corners = obb.get("corners", [])
+                handles = bbox_handles(obb)
                 try:
                     ctx.set_dash([6, 4])
                 except Exception:
                     pass
                 ctx.set_source_rgb(0.1, 0.45, 0.95)
                 ctx.set_line_width(1.5)
-                ctx.rectangle(x1, y1, x2 - x1, y2 - y1)
-                ctx.stroke()
+                if corners:
+                    ctx.move_to(corners[0][0], corners[0][1])
+                    for cpt in corners[1:]:
+                        ctx.line_to(cpt[0], cpt[1])
+                    ctx.close_path()
+                    ctx.stroke()
                 try:
                     ctx.set_dash([])
                 except Exception:
                     pass
-                handles = bbox_handles(bbox)
-                mx = (x1 + x2) / 2
-                ctx.set_source_rgb(0.1, 0.45, 0.95)
-                ctx.set_line_width(1.0)
-                ctx.move_to(mx, y1); ctx.line_to(handles["rot"][0], handles["rot"][1])
-                ctx.stroke()
+                # rotation stem: from top-mid edge to rot handle
+                if "n" in handles and "rot" in handles:
+                    npt = handles["n"]; rpt = handles["rot"]
+                    ctx.set_source_rgb(0.1, 0.45, 0.95)
+                    ctx.set_line_width(1.0)
+                    ctx.move_to(npt[0], npt[1]); ctx.line_to(rpt[0], rpt[1])
+                    ctx.stroke()
                 for name, pt in handles.items():
                     if name == "rot":
                         ctx.set_source_rgb(1, 1, 1); ctx.arc(pt[0], pt[1], 5.0, 0, 2*math.pi); ctx.fill()
@@ -449,18 +455,22 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
                         ctx.set_source_rgb(1, 1, 1); ctx.rectangle(pt[0]-4, pt[1]-4, 8, 8); ctx.fill_preserve()
                         ctx.set_source_rgb(0.1, 0.45, 0.95); ctx.set_line_width(1.5); ctx.stroke()
         elif selection_submode == "nodes" and len(selected_in_range) > 1:
-            # Multi-selection: show combined bbox (node editing requires single selection)
-            bbox = combined_bbox(strokes, selected_in_range)
-            if bbox:
-                x1, y1, x2, y2 = bbox
+            # Multi-selection: show combined oriented bbox (node editing requires single selection)
+            obb = combined_obb(strokes, selected_in_range)
+            if obb:
+                corners = obb.get("corners", [])
                 try:
                     ctx.set_dash([4, 4])
                 except Exception:
                     pass
                 ctx.set_source_rgb(0.1, 0.45, 0.95)
                 ctx.set_line_width(1.2)
-                ctx.rectangle(x1, y1, x2 - x1, y2 - y1)
-                ctx.stroke()
+                if corners:
+                    ctx.move_to(corners[0][0], corners[0][1])
+                    for cpt in corners[1:]:
+                        ctx.line_to(cpt[0], cpt[1])
+                    ctx.close_path()
+                    ctx.stroke()
                 try:
                     ctx.set_dash([])
                 except Exception:

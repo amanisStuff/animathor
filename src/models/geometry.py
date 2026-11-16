@@ -167,6 +167,22 @@ def _cubic_point(p0, c1, c2, p3, t):
     y = (mt**3) * p0[1] + 3 * (mt**2) * t * c1[1] + 3 * mt * (t**2) * c2[1] + (t**3) * p3[1]
     return (x, y)
 
+def _sample_cubic(p0, c1, c2, p3, n=24):
+    return [_cubic_point(p0, c1, c2, p3, i / n) for i in range(n + 1)]
+
+def _stroke_outline_points(stroke, samples_per_seg=24):
+    """Points on the visible curve/lines (anchors + sampled curve). Excludes control handles."""
+    segs = segs_of(stroke)
+    pts = []
+    for i, (p0, c1, c2, p3) in enumerate(segs):
+        samp = _sample_cubic(p0, c1, c2, p3, samples_per_seg)
+        if i > 0 and samp:
+            samp = samp[1:]
+        pts.extend(samp)
+    for p0, c1, c2, p3 in segs:
+        pts.append(p0); pts.append(p3)
+    return pts
+
 def _mirror_handle(anchor, handle):
     return (2 * anchor[0] - handle[0], 2 * anchor[1] - handle[1])
 
@@ -175,18 +191,134 @@ def apply_affine(pt, cx, cy, ca, sa, sx, sy):
     x, y = (pt[0] - cx) * sx, (pt[1] - cy) * sy
     return (cx + x * ca - y * sa, cy + x * sa + y * ca)
 
-def stroke_bbox(stroke):
-    segs = segs_of(stroke)
-    if not segs:
+# ---- Bounding boxes ----
+
+def _aabb_of_points(pts):
+    if not pts:
         return None
-    xs, ys = [], []
-    for p0, c1, c2, p3 in segs:
-        for pt in (p0, c1, c2, p3):
-            xs.append(pt[0]); ys.append(pt[1])
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
     return (min(xs), min(ys), max(xs), max(ys))
 
+def stroke_bbox(stroke):
+    """Axis-aligned bbox of the visible curve/lines (excludes Bezier control handles)."""
+    return _aabb_of_points(_stroke_outline_points(stroke))
+
+def _convex_hull(points):
+    pts = sorted(set((float(x), float(y)) for x, y in points))
+    if len(pts) <= 1:
+        return pts
+    def cross(o, a, b):
+        return (a[0]-o[0])*(b[1]-o[1]) - (a[1]-o[1])*(b[0]-o[0])
+    lower = []
+    for p in pts:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], p) <= 0:
+            lower.pop()
+        lower.append(p)
+    upper = []
+    for p in reversed(pts):
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], p) <= 0:
+            upper.pop()
+        upper.append(p)
+    return lower[:-1] + upper[:-1]
+
+def _min_area_obb(points):
+    """Minimum-area oriented bounding box of points.
+    Returns dict {cx,cy,hw,hh,angle,corners} or None."""
+    if not points:
+        return None
+    if len(points) == 1:
+        x, y = float(points[0][0]), float(points[0][1])
+        c = [(x,y),(x,y),(x,y),(x,y)]
+        return {"cx": x, "cy": y, "hw": 0.0, "hh": 0.0, "angle": 0.0, "corners": c}
+    hull = _convex_hull(points)
+    if len(hull) < 2:
+        x, y = float(points[0][0]), float(points[0][1])
+        c = [(x,y),(x,y),(x,y),(x,y)]
+        return {"cx": x, "cy": y, "hw": 0.0, "hh": 0.0, "angle": 0.0, "corners": c}
+    best = None
+    for i in range(len(hull)):
+        x0, y0 = hull[i]
+        x1, y1 = hull[(i + 1) % len(hull)]
+        ex, ey = x1 - x0, y1 - y0
+        el = math.hypot(ex, ey)
+        if el < 1e-9:
+            continue
+        ux, uy = ex / el, ey / el
+        vx, vy = -uy, ux
+        min_u = min_v = 1e18
+        max_u = max_v = -1e18
+        for px, py in hull:
+            pu = px * ux + py * uy
+            pv = px * vx + py * vy
+            if pu < min_u: min_u = pu
+            if pu > max_u: max_u = pu
+            if pv < min_v: min_v = pv
+            if pv > max_v: max_v = pv
+        wu, wv = max_u - min_u, max_v - min_v
+        area = wu * wv
+        if best is None or area < best[0]:
+            cu = (min_u + max_u) / 2.0
+            cv = (min_v + max_v) / 2.0
+            cx = cu * ux + cv * vx
+            cy = cu * uy + cv * vy
+            angle = math.atan2(uy, ux)
+            best = (area, cx, cy, wu / 2.0, wv / 2.0, angle, ux, uy, vx, vy)
+    if best is None:
+        bb = _aabb_of_points(points)
+        if not bb:
+            return None
+        x1,y1,x2,y2 = bb
+        cx,cy = (x1+x2)/2,(y1+y2)/2
+        hw,hh = (x2-x1)/2,(y2-y1)/2
+        c = [(x1,y1),(x2,y1),(x2,y2),(x1,y2)]
+        return {"cx":cx,"cy":cy,"hw":hw,"hh":hh,"angle":0.0,"corners":c}
+    _, cx, cy, hw, hh, angle, ux, uy, vx, vy = best
+    corners = []
+    for su, sv in [(-hw,-hh),(hw,-hh),(hw,hh),(-hw,hh)]:
+        corners.append((cx + su*ux + sv*vx, cy + su*uy + sv*vy))
+    return {"cx": cx, "cy": cy, "hw": hw, "hh": hh, "angle": angle, "corners": corners}
+
+def _obb_to_aabb(obb):
+    if obb is None:
+        return None
+    if isinstance(obb, (tuple, list)):
+        return tuple(obb)
+    corners = obb.get("corners") or []
+    if not corners:
+        cx,cy,hw,hh,ang = obb["cx"],obb["cy"],obb["hw"],obb["hh"],obb.get("angle",0.0)
+        ca,sa = math.cos(ang), math.sin(ang)
+        corners = [(cx + dx*ca - dy*sa, cy + dx*sa + dy*ca)
+                   for dx,dy in [(-hw,-hh),(hw,-hh),(hw,hh),(-hw,hh)]]
+    xs = [p[0] for p in corners]; ys = [p[1] for p in corners]
+    return (min(xs), min(ys), max(xs), max(ys))
+
+def stroke_obb(stroke):
+    """Oriented bounding box of visible curve/lines (excludes control handles)."""
+    return _min_area_obb(_stroke_outline_points(stroke))
+
+def _obb_axes(obb):
+    ang = obb.get("angle", 0.0)
+    ca, sa = math.cos(ang), math.sin(ang)
+    return (ca, sa), (-sa, ca)
+
 def bbox_handles(bbox, rot_offset=22):
-    """Return dict of handle_name -> (x,y) for bbox (x1,y1,x2,y2)."""
+    """Handle positions for AABB tuple or OBB dict. OBB rotates with the shape."""
+    if bbox is None:
+        return {}
+    if isinstance(bbox, dict) and "angle" in bbox:
+        cx, cy = bbox["cx"], bbox["cy"]
+        hw, hh = bbox["hw"], bbox["hh"]
+        ang = bbox.get("angle", 0.0)
+        ca, sa = math.cos(ang), math.sin(ang)
+        def P(lx, ly):
+            return (cx + lx*ca - ly*sa, cy + lx*sa + ly*ca)
+        return {
+            "nw": P(-hw, -hh), "n": P(0, -hh), "ne": P(hw, -hh),
+            "e": P(hw, 0), "se": P(hw, hh), "s": P(0, hh),
+            "sw": P(-hw, hh), "w": P(-hw, 0),
+            "rot": P(0, -hh - rot_offset),
+        }
     x1, y1, x2, y2 = bbox
     mx, my = (x1 + x2) / 2, (y1 + y2) / 2
     return {
@@ -199,20 +331,34 @@ def bbox_handles(bbox, rot_offset=22):
 def hit_test_bbox_handle(bbox, pos, radius=8.0):
     if bbox is None:
         return None
-    for name, pt in bbox_handles(bbox).items():
-        if math.hypot(pos[0] - pt[0], pos[1] - pt[1]) <= radius:
+    handles = bbox_handles(bbox)
+    for name in ["rot", "nw", "ne", "se", "sw", "n", "e", "s", "w"]:
+        pt = handles.get(name)
+        if pt and math.hypot(pos[0] - pt[0], pos[1] - pt[1]) <= radius:
             return name
     return None
 
 def point_in_bbox(bbox, pos):
     if bbox is None:
         return False
+    if isinstance(bbox, dict) and "angle" in bbox:
+        cx, cy = bbox["cx"], bbox["cy"]
+        hw, hh = bbox["hw"], bbox["hh"]
+        ang = bbox.get("angle", 0.0)
+        dx, dy = pos[0] - cx, pos[1] - cy
+        ca, sa = math.cos(ang), math.sin(ang)
+        lx = dx*ca + dy*sa
+        ly = -dx*sa + dy*ca
+        return -hw <= lx <= hw and -hh <= ly <= hh
     x1, y1, x2, y2 = bbox
     return x1 <= pos[0] <= x2 and y1 <= pos[1] <= y2
 
 def rects_intersect(a, b):
+    """AABB intersection (tuples). OBB dicts are converted to their AABB."""
     if a is None or b is None:
         return False
+    if isinstance(a, dict): a = _obb_to_aabb(a)
+    if isinstance(b, dict): b = _obb_to_aabb(b)
     ax1, ay1, ax2, ay2 = a
     bx1, by1, bx2, by2 = b
     return not (ax2 < bx1 or bx2 < ax1 or ay2 < by1 or by2 < ay1)

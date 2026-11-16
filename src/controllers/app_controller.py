@@ -1101,10 +1101,10 @@ def main():
                         elif selection_submode == "transform":
                             handled = False
                             if selected_strokes:
-                                bb = combined_bbox(strokes, selected_strokes)
+                                bb = combined_obb(strokes, selected_strokes)
                                 h = hit_test_bbox_handle(bb, cpos)
                                 if h is not None:
-                                    cx, cy = ((bb[0] + bb[2]) / 2, (bb[1] + bb[3]) / 2)
+                                    cx, cy = bb["cx"], bb["cy"]
                                     push_undo()
                                     import copy as _copy
                                     start_strokes = {i: _copy.deepcopy(strokes[i]) for i in sorted(selected_strokes) if 0 <= i < len(strokes)}
@@ -1360,21 +1360,33 @@ def main():
                             if abs(start_d) < 1e-6:
                                 return 1.0
                             return cur_d / start_d
-                        sx = sy = 1.0
+                        # scale in the OBB's local axes so the box rotates with the shape
+                        bb0 = td.get("start_bbox")
+                        ang = bb0.get("angle", 0.0) if isinstance(bb0, dict) else 0.0
+                        ca0, sa0 = math.cos(ang), math.sin(ang)
+                        def _local(pt):
+                            dx, dy = pt[0] - cx, pt[1] - cy
+                            return (dx*ca0 + dy*sa0, -dx*sa0 + dy*ca0)
+                        lmx, lmy = _local(cpos)
+                        lsx, lsy = _local((sx0, sy0))
+                        su = sv = 1.0
                         if h in ("e", "w"):
-                            sx = _safe_ratio(cpos[0] - cx, sx0 - cx)
+                            su = _safe_ratio(lmx, lsx)
                         elif h in ("n", "s"):
-                            sy = _safe_ratio(cpos[1] - cy, sy0 - cy)
+                            sv = _safe_ratio(lmy, lsy)
                         else:
-                            d0 = math.hypot(sx0 - cx, sy0 - cy)
-                            d1 = math.hypot(cpos[0] - cx, cpos[1] - cy)
-                            s = _safe_ratio(d1, d0)
-                            sx = sy = s
-                        sx = clamp(sx, 0.05, 20.0)
-                        sy = clamp(sy, 0.05, 20.0)
+                            d0 = math.hypot(lsx, lsy)
+                            d1 = math.hypot(lmx, lmy)
+                            sratio = _safe_ratio(d1, d0)
+                            su = sv = sratio
+                        su = clamp(su, 0.05, 20.0)
+                        sv = clamp(sv, 0.05, 20.0)
+                        # local-axis scale: R(ang)*S(su,sv)*R(-ang)
                         for i, st0 in start_strokes.items():
                             if 0 <= i < len(strokes):
-                                strokes[i] = transform_stroke(st0, cx, cy, 0.0, sx, sy)
+                                tmp = transform_stroke(st0, cx, cy, -ang, 1.0)
+                                tmp = transform_stroke(tmp, cx, cy, 0.0, su, sv)
+                                strokes[i] = transform_stroke(tmp, cx, cy, ang, 1.0)
                 elif tool_mode == "selection" and drag_last is not None and selected_strokes and pygame.mouse.get_pressed()[0]:
                     cpos = clamp_to_canvas(event.pos)
                     if selection_submode == "nodes" and selected_point is not None and len(selected_strokes) == 1:

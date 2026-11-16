@@ -326,6 +326,7 @@ def _selection_set(selected_indices):
     return set(selected_indices)
 
 def combined_bbox(strokes, indices):
+    """Axis-aligned bbox of visible curve/lines for the given strokes."""
     xs, ys = [], []
     for i in indices:
         if 0 <= i < len(strokes):
@@ -336,3 +337,11 @@ def combined_bbox(strokes, indices):
     if not xs:
         return None
     return (min(xs), min(ys), max(xs), max(ys))
+
+def combined_obb(strokes, indices):
+    """Oriented bbox of visible curve/lines (rotates with the shape)."""
+    pts = []
+    for i in indices:
+        if 0 <= i < len(strokes):
+            pts.extend(_stroke_outline_points(strokes[i]))
+    return _min_area_obb(pts)

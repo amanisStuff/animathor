@@ -192,7 +192,11 @@ class TestTransformsAndGeometry(unittest.TestCase):
     def test_stroke_bbox(self):
         st = app.new_stroke([((10.0, 20.0), (15.0, 5.0), (25.0, 35.0), (30.0, 25.0))])
         bb = app.stroke_bbox(st)
-        self.assertEqual(bb, (10.0, 5.0, 30.0, 35.0))
+        # bbox covers visible curve/lines only (excludes Bezier control handles)
+        self.assertAlmostEqual(bb[0], 10.0, places=3)
+        self.assertAlmostEqual(bb[1], 15.716, places=2)
+        self.assertAlmostEqual(bb[2], 30.0, places=3)
+        self.assertAlmostEqual(bb[3], 27.060, places=2)
         self.assertIsNone(app.stroke_bbox(app.new_stroke([])))
 
     def test_bbox_handles_and_hit_test(self):
