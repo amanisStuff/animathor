@@ -1432,10 +1432,13 @@ class TestWaveStackUI(unittest.TestCase):
         # how the custom-wave box click broke: the box rendered (draw_panel
         # sets the key after events) but clicks saw a zero rect at event time.
         import io
+        import os
         import re
         path = app.__file__
         if path.endswith(".pyc"):
             path = path[:-1]
+        # MVC: the event loop lives in controller.py now
+        path = os.path.join(os.path.dirname(path), "controller.py")
         lines = io.open(path, encoding="utf-8").read().splitlines()
         lit_start = next(i for i, l in enumerate(lines) if l == "        state = {")
         lit_end = next(i for i in range(lit_start + 1, len(lines)) if lines[i] == "        }")
