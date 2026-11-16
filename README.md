@@ -58,6 +58,11 @@ The **points per curve** setting limits how many simplified points from each str
 
 ## Files
 
-- `app.py` — pygame UI, Cairo rendering, and input handling
+- `app.py` — entry point / MVC facade (re-exports all names for compatibility)
+- `models/` — `geometry.py`, `strokes.py`, `waves.py`, `interaction.py` (data & pure computation)
+- `views/` — `canvas.py`, `panel.py`, `toolbar.py`, `widgets.py`, `dialogs.py` (rendering/UI)
+- `controllers/` — `app_controller.py`, `coordinates.py` (event loop & app state)
+- `config.py` — layout and theme constants
 - `bezier.py` — stroke simplification (RDP) and conversion to cubic Bézier segments
+- `docs/ARCHITECTURE.md` — MVC structure overview
 - `requirements.txt` — Python dependencies

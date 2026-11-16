@@ -1,7 +1,4 @@
-"""MVC Controller: application state, event handling and the main loop.
-
-Wires View and Model together; owns the undo/redo stacks and window
-layout updates."""
+"""Controller: application state, event handling and the main loop."""
 
 import math
 import copy
@@ -9,29 +6,21 @@ import copy
 import pygame
 
 import config as cfg
-import model as _model
-import view as _view
+from config import *
 
-# Model and View names are available here under their bare names.
-_PLUMBING = {'_model', '_view', '_mod', '_name', 'cfg', 'pygame', 'math', 'copy'}
-for _mod in (_model, _view):
-    for _name in dir(_mod):
-        if _name.startswith('__') or _name in _PLUMBING:
-            continue
-        globals().setdefault(_name, getattr(_mod, _name))
+import models as _dep
+_PLUMBING = {'_m', '_n', '_mod', '_name', 'cfg', 'math', 'copy', 'pygame', 'cairo', '_models', '_views', '_m_geometry', '_m_strokes', '_m_waves', '_v_canvas', 'geometry', 'strokes', 'waves', 'interaction', 'canvas', 'panel', 'toolbar', 'widgets', 'dialogs', 'app_controller', 'coordinates'}
+for _n in dir(_dep):
+    if _n.startswith('__') or _n in _PLUMBING:
+        continue
+    globals().setdefault(_n, getattr(_dep, _n))
+import views as _dep
+_PLUMBING = {'_m', '_n', '_mod', '_name', 'cfg', 'math', 'copy', 'pygame', 'cairo', '_models', '_views', '_m_geometry', '_m_strokes', '_m_waves', '_v_canvas', 'geometry', 'strokes', 'waves', 'interaction', 'canvas', 'panel', 'toolbar', 'widgets', 'dialogs', 'app_controller', 'coordinates'}
+for _n in dir(_dep):
+    if _n.startswith('__') or _n in _PLUMBING:
+        continue
+    globals().setdefault(_n, getattr(_dep, _n))
 
-
-def to_canvas(pos):
-    return (pos[0] - cfg.CANVAS_X, pos[1])
-
-def in_canvas(pos):
-    return cfg.CANVAS_X <= pos[0] < cfg.CANVAS_X + cfg.CANVAS_W and 0 <= pos[1] < cfg.HEIGHT
-
-def clamp_to_canvas(pos):
-    """Map any window position to the nearest point inside the canvas."""
-    cx = clamp(pos[0] - cfg.CANVAS_X, 0, cfg.CANVAS_W - 1)
-    cy = clamp(pos[1], 0, cfg.HEIGHT - 1)
-    return (cx, cy)
 
 def main():
     pygame.init()
@@ -1478,7 +1467,3 @@ def main():
 
     pygame.quit()
     return 0
-
-if __name__ == "__main__":
-    main()
-

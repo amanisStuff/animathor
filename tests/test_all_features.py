@@ -1437,9 +1437,9 @@ class TestWaveStackUI(unittest.TestCase):
         path = app.__file__
         if path.endswith(".pyc"):
             path = path[:-1]
-        # MVC: the event loop lives in controller.py now
-        path = os.path.join(os.path.dirname(path), "controller.py")
-        lines = io.open(path, encoding="utf-8").read().splitlines()
+        # MVC: the event loop lives in controllers/app_controller.py
+        ctrl_path = os.path.join(os.path.dirname(path), "controllers", "app_controller.py")
+        lines = io.open(ctrl_path, encoding="utf-8").read().splitlines()
         lit_start = next(i for i, l in enumerate(lines) if l == "        state = {")
         lit_end = next(i for i in range(lit_start + 1, len(lines)) if lines[i] == "        }")
         literal_keys = set(re.findall(r'"([a-z_0-9]+)":', "\n".join(lines[lit_start:lit_end + 1])))
