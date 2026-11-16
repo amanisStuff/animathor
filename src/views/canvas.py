@@ -159,19 +159,33 @@ def draw_stroke_path_distorted(ctx, stroke):
         ctx.close_path()
     return True
 
-def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, selected_index=None, selected_indices=None, edit_mode=False, selection_submode="transform", selected_curve=None, snap_kind="connect", redrawing_curve=None, ref_img=None):
+def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, selected_index=None, selected_indices=None, edit_mode=False, selection_submode="transform", selected_curve=None, snap_kind="connect", redrawing_curve=None, ref_img=None, view_zoom=None, view_pan=None):
     # Backward compat: selected_index (single) or selected_indices (collection)
     if selected_indices is None and selected_index is not None:
         selected_indices = selected_index
     sel_set = _selection_set(selected_indices)
+
+    if view_zoom is None:
+        view_zoom = getattr(cfg, "VIEW_ZOOM", 1.0) or 1.0
+    if view_pan is None:
+        view_pan = (getattr(cfg, "VIEW_PAN_X", 0.0), getattr(cfg, "VIEW_PAN_Y", 0.0))
 
     ctx = cairo.Context(cairo_surface)
     try:
         ctx.set_antialias(cairo.ANTIALIAS_BEST)
     except Exception:
         pass
+    # background in screen/viewport space
+    ctx.save()
+    ctx.identity_matrix()
     ctx.set_source_rgb(*BG_COLOR)
     ctx.paint()
+    ctx.restore()
+
+    # world/view transform
+    ctx.save()
+    ctx.translate(float(view_pan[0]), float(view_pan[1]))
+    ctx.scale(float(view_zoom), float(view_zoom))
 
     # Reference image, behind strokes
     if ref_img and ref_img.get("visible", True) and ref_img.get("surface") is not None:
@@ -483,6 +497,7 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
             ctx.arc(x, y, 11.0, 0, 2 * math.pi); ctx.stroke()
             ctx.arc(x, y, 2.5, 0, 2 * math.pi); ctx.fill()
 
+    ctx.restore()  # view transform
     cairo_surface.flush()
 
 def surface_to_pygame(cairo_surface):
@@ -494,6 +509,14 @@ def surface_to_pygame(cairo_surface):
     except Exception:
         data = bytes(buf)
     return pygame.image.frombuffer(data, (width, height), "BGRA")
+
+
+def export_scene_png(path, strokes, ref_img=None, view_zoom=1.0, view_pan=(0.0, 0.0), size=None):
+    """Export the current scene to a PNG file (viewport-sized)."""
+    w, h = (int(size[0]), int(size[1])) if size else (int(cfg.CANVAS_W), int(cfg.HEIGHT))
+    surf = make_cairo_surface(w, h)
+    draw_scene(surf, strokes, ref_img=ref_img, view_zoom=view_zoom, view_pan=view_pan)
+    surf.write_to_png(path)
 
 def load_reference_image(path):
     """Load image file into a cairo ImageSurface (ARGB32) for reference drawing."""

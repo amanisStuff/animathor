@@ -141,6 +141,10 @@ def main():
     ref_opacity_rect_cache = pygame.Rect(0, 0, 0, 0)
     reference_image = None  # {"surface": cairo.ImageSurface, "w","h","x","y","opacity","visible","path"}
     ref_drag = None
+    space_panning = False
+    pan_drag = None  # {"start_mouse":(x,y),"start_pan":(x,y)}
+    document_path = None
+    clipboard_strokes = []
     swatch_rects_cache = {
         "stroke": [pygame.Rect(0, 0, 0, 0) for _ in STROKE_SWATCHES],
         "fill": [pygame.Rect(0, 0, 0, 0) for _ in STROKE_SWATCHES],  # presets sized to STROKE_SWATCHES in picker
@@ -269,11 +273,21 @@ def main():
                 cairo_surface = make_cairo_surface(cfg.CANVAS_W, cfg.HEIGHT)
 
             if event.type == pygame.MOUSEWHEEL:
-                # scroll the right panel when the pointer is over it
                 _mx, _my = pygame.mouse.get_pos()
                 if _mx >= cfg.PANEL_X:
+                    # scroll the right panel when the pointer is over it
                     panel_scroll = max(0, int(panel_scroll - event.y * 48))
                     state["panel_scroll"] = panel_scroll
+                elif in_canvas((_mx, _my)):
+                    # zoom canvas toward cursor
+                    old_z = float(getattr(cfg, "VIEW_ZOOM", 1.0) or 1.0)
+                    factor = 1.1 if event.y > 0 else (1 / 1.1)
+                    new_z = max(0.1, min(20.0, old_z * (factor ** abs(event.y))))
+                    if new_z != old_z:
+                        wx, wy = to_canvas((_mx, _my))
+                        cfg.VIEW_ZOOM = new_z
+                        cfg.VIEW_PAN_X = _mx - cfg.CANVAS_X - wx * new_z
+                        cfg.VIEW_PAN_Y = _my - wy * new_z
 
             if slider.handle_event(event):
                 max_points_per_curve = slider.value
@@ -340,68 +354,198 @@ def main():
                             if event.key == pygame.K_ESCAPE or event.key == pygame.K_RETURN or event.key == pygame.K_KP_ENTER:
                                 state["wave_custom_draw"] = False
                                 state["wave_custom_finished"] = True
-                elif event.key == pygame.K_ESCAPE:
-                    if redrawing_curve is not None:
-                        redrawing_curve = None
-                    else:
-                        running = False
-                elif event.key in (pygame.K_LSHIFT, pygame.K_RSHIFT):
-                    if drawing and tool_mode == "draw" and current_points:
-                        snap = nearest_snap_point(current_points[0], strokes, SNAP_RADIUS)
-                        if snap is not None:
-                            current_points[0] = snap
-                    elif redrawing_curve is not None and redrawing_curve.get("started") and redrawing_curve.get("points"):
-                        # keep start fixed for redraw; shift has no effect on fixed endpoints
-                        if redrawing_curve.get("fixed_start") is None:
-                            snap = nearest_snap_point(redrawing_curve["points"][0], strokes, SNAP_RADIUS)
-                            if snap is not None:
-                                redrawing_curve["points"][0] = snap
-                elif event.key == pygame.K_c:
-                    if strokes:
-                        push_undo()
-                    strokes.clear(); selected_strokes.clear(); selected_point = None; transform_drag = None
-                elif event.key == pygame.K_z and (pygame.key.get_mods() & pygame.KMOD_CTRL):
-                    if pygame.key.get_mods() & pygame.KMOD_SHIFT:
+                else:
+                    mods = pygame.key.get_mods()
+                    ctrl = bool(mods & pygame.KMOD_CTRL)
+                    shift = bool(mods & pygame.KMOD_SHIFT)
+                    # --- Esc: cancel/deselect first, quit only as fallback ---
+                    if event.key == pygame.K_ESCAPE:
+                        if redrawing_curve is not None:
+                            redrawing_curve = None
+                        elif marquee_select is not None:
+                            marquee_select = None
+                        elif drawing:
+                            drawing = False; current_points = []
+                        elif transform_drag is not None or drag_last is not None or selected_strokes or selected_point or selected_curve:
+                            selected_strokes.clear(); selected_point = None; selected_curve = None
+                            transform_drag = None; drag_last = None
+                        elif space_panning:
+                            space_panning = False; pan_drag = None
+                        else:
+                            running = False
+                    # --- File: Save / Open / Export ---
+                    elif ctrl and event.key == pygame.K_s and not shift:
+                        try:
+                            if document_path is None:
+                                document_path = pick_save_document_path()
+                            if document_path:
+                                save_document(document_path, strokes, {"view": {"zoom": cfg.VIEW_ZOOM, "pan": [cfg.VIEW_PAN_X, cfg.VIEW_PAN_Y]}})
+                        except Exception:
+                            pass
+                    elif ctrl and event.key == pygame.K_s and shift:
+                        try:
+                            path = pick_save_document_path()
+                            if path:
+                                document_path = path
+                                save_document(document_path, strokes, {"view": {"zoom": cfg.VIEW_ZOOM, "pan": [cfg.VIEW_PAN_X, cfg.VIEW_PAN_Y]}})
+                        except Exception:
+                            pass
+                    elif ctrl and event.key == pygame.K_o:
+                        try:
+                            path = pick_open_document_path()
+                            if path:
+                                loaded = load_document(path)
+                                push_undo()
+                                strokes.clear(); strokes.extend(loaded)
+                                selected_strokes.clear(); selected_point = None; selected_curve = None
+                                transform_drag = None; drag_last = None; redrawing_curve = None
+                                document_path = path
+                        except Exception:
+                            pass
+                    elif ctrl and shift and event.key == pygame.K_e:
+                        try:
+                            path = pick_export_png_path()
+                            if path:
+                                export_scene_png(path, strokes, ref_img=reference_image,
+                                                 view_zoom=getattr(cfg, "VIEW_ZOOM", 1.0),
+                                                 view_pan=(getattr(cfg, "VIEW_PAN_X", 0.0), getattr(cfg, "VIEW_PAN_Y", 0.0)),
+                                                 size=(cfg.CANVAS_W, cfg.HEIGHT))
+                        except Exception:
+                            pass
+                    # --- Select / clipboard / duplicate ---
+                    elif ctrl and event.key == pygame.K_a:
+                        selected_strokes = set(range(len(strokes)))
+                        selected_point = None; selected_curve = None
+                    elif ctrl and event.key == pygame.K_d:
+                        if selected_strokes:
+                            push_undo()
+                            new_sel = set()
+                            for i in sorted(selected_strokes):
+                                if 0 <= i < len(strokes):
+                                    dup = _copy_stroke(strokes[i])
+                                    translate_stroke(dup, 16, 16)
+                                    strokes.append(dup)
+                                    new_sel.add(len(strokes) - 1)
+                            if new_sel:
+                                selected_strokes = new_sel
+                                selected_point = None; selected_curve = None
+                    elif ctrl and event.key == pygame.K_c and not shift:
+                        # copy selected strokes (Ctrl+C)
+                        if selected_strokes:
+                            clipboard_strokes = [_copy_stroke(strokes[i]) for i in sorted(selected_strokes) if 0 <= i < len(strokes)]
+                    elif ctrl and event.key == pygame.K_x:
+                        if selected_strokes:
+                            clipboard_strokes = [_copy_stroke(strokes[i]) for i in sorted(selected_strokes) if 0 <= i < len(strokes)]
+                            push_undo()
+                            for i in sorted(selected_strokes, reverse=True):
+                                if 0 <= i < len(strokes):
+                                    strokes.pop(i)
+                            selected_strokes.clear(); selected_point = None; selected_curve = None
+                    elif ctrl and event.key == pygame.K_v:
+                        if clipboard_strokes:
+                            push_undo()
+                            new_sel = set()
+                            for st in clipboard_strokes:
+                                dup = _copy_stroke(st)
+                                translate_stroke(dup, 16, 16)
+                                strokes.append(dup)
+                                new_sel.add(len(strokes) - 1)
+                            if new_sel:
+                                selected_strokes = new_sel
+                                selected_point = None; selected_curve = None
+                    # --- View ---
+                    elif ctrl and event.key == pygame.K_0:
+                        if strokes:
+                            bb = combined_bbox(strokes, list(range(len(strokes))))
+                            if bb is not None:
+                                bw = max(1.0, bb[2] - bb[0]); bh = max(1.0, bb[3] - bb[1])
+                                z = min((cfg.CANVAS_W - 40) / bw, (cfg.HEIGHT - 40) / bh)
+                                cfg.VIEW_ZOOM = max(0.1, min(20.0, z))
+                                cfg.VIEW_PAN_X = (cfg.CANVAS_W - bw * cfg.VIEW_ZOOM) / 2 - bb[0] * cfg.VIEW_ZOOM
+                                cfg.VIEW_PAN_Y = (cfg.HEIGHT - bh * cfg.VIEW_ZOOM) / 2 - bb[1] * cfg.VIEW_ZOOM
+                        else:
+                            cfg.VIEW_ZOOM = 1.0; cfg.VIEW_PAN_X = 0.0; cfg.VIEW_PAN_Y = 0.0
+                    elif ctrl and event.key == pygame.K_1:
+                        cfg.VIEW_ZOOM = 1.0; cfg.VIEW_PAN_X = 0.0; cfg.VIEW_PAN_Y = 0.0
+                    # --- Undo / Redo ---
+                    elif ctrl and event.key == pygame.K_z:
+                        if shift:
+                            if do_redo():
+                                selected_strokes = {i for i in selected_strokes if 0 <= i < len(strokes)}
+                        else:
+                            if do_undo():
+                                selected_strokes = {i for i in selected_strokes if 0 <= i < len(strokes)}
+                        selected_strokes.clear(); selected_point = None; transform_drag = None; selected_curve = None; redrawing_curve = None
+                    elif ctrl and event.key == pygame.K_y:
                         if do_redo():
                             selected_strokes = {i for i in selected_strokes if 0 <= i < len(strokes)}
-                    else:
-                        if do_undo():
-                            selected_strokes = {i for i in selected_strokes if 0 <= i < len(strokes)}
-                    selected_strokes.clear(); selected_point = None; transform_drag = None; selected_curve = None; redrawing_curve = None
-                elif event.key == pygame.K_y and (pygame.key.get_mods() & pygame.KMOD_CTRL):
-                    if do_redo():
-                        selected_strokes = {i for i in selected_strokes if 0 <= i < len(strokes)}
-                    selected_strokes.clear(); selected_point = None; transform_drag = None; selected_curve = None; redrawing_curve = None
-                elif event.key in (pygame.K_DELETE, pygame.K_BACKSPACE) and tool_mode == "selection":
-                    if selected_strokes:
-                        push_undo()
-                        for i in sorted(selected_strokes, reverse=True):
-                            if 0 <= i < len(strokes):
-                                strokes.pop(i)
-                        selected_strokes.clear(); selected_point = None; transform_drag = None; selected_curve = None
-                elif event.key == pygame.K_n and tool_mode == "selection":
-                    modes = ["transform", "nodes", "curve"]
-                    selection_submode = modes[(modes.index(selection_submode) + 1) % len(modes)] if selection_submode in modes else "transform"
-                    selected_point = None; selected_curve = None; transform_drag = None; drag_last = None; redrawing_curve = None
-                elif event.key in (pygame.K_LEFTBRACKET, pygame.K_MINUS, pygame.K_KP_MINUS):
-                    max_points_per_curve = max(2, max_points_per_curve - 1); slider.value = max_points_per_curve
-                elif event.key in (pygame.K_RIGHTBRACKET, pygame.K_EQUALS, pygame.K_PLUS, pygame.K_KP_PLUS):
-                    limit = BOOST_MAX_POINTS if boost_points else NORMAL_MAX_POINTS
-                    max_points_per_curve = min(limit, max_points_per_curve + 1); slider.value = max_points_per_curve
+                        selected_strokes.clear(); selected_point = None; transform_drag = None; selected_curve = None; redrawing_curve = None
+                    # --- Tool switching (single-key, no modifiers) ---
+                    elif not ctrl and event.key == pygame.K_v:
+                        tool_mode = "selection"; drawing = False; current_points = []
+                        selected_point = None; drag_last = None; transform_drag = None
+                    elif not ctrl and event.key == pygame.K_b:
+                        tool_mode = "draw"; draw_tool = "pen"; drawing = False; current_points = []
+                        selected_strokes.clear(); selected_point = None; transform_drag = None
+                    elif not ctrl and event.key == pygame.K_e:
+                        tool_mode = "draw"; draw_tool = "eraser"; drawing = False; current_points = []
+                        selected_strokes.clear(); selected_point = None; transform_drag = None
+                    elif event.key == pygame.K_SPACE:
+                        space_panning = True
+                    # --- Editing ---
+                    elif not ctrl and event.key == pygame.K_c:
+                        # legacy: clear canvas (destructive) when not using Ctrl+C copy
+                        if strokes:
+                            push_undo()
+                        strokes.clear(); selected_strokes.clear(); selected_point = None; transform_drag = None
+                    elif event.key in (pygame.K_DELETE, pygame.K_BACKSPACE) and tool_mode == "selection":
+                        if selected_strokes:
+                            push_undo()
+                            for i in sorted(selected_strokes, reverse=True):
+                                if 0 <= i < len(strokes):
+                                    strokes.pop(i)
+                            selected_strokes.clear(); selected_point = None; transform_drag = None; selected_curve = None
+                    elif event.key == pygame.K_n and tool_mode == "selection":
+                        modes = ["transform", "nodes", "curve"]
+                        selection_submode = modes[(modes.index(selection_submode) + 1) % len(modes)] if selection_submode in modes else "transform"
+                        selected_point = None; selected_curve = None; transform_drag = None; drag_last = None; redrawing_curve = None
+                    elif event.key in (pygame.K_LEFTBRACKET, pygame.K_MINUS, pygame.K_KP_MINUS):
+                        max_points_per_curve = max(2, max_points_per_curve - 1); slider.value = max_points_per_curve
+                    elif event.key in (pygame.K_RIGHTBRACKET, pygame.K_EQUALS, pygame.K_PLUS, pygame.K_KP_PLUS):
+                        limit = BOOST_MAX_POINTS if boost_points else NORMAL_MAX_POINTS
+                        max_points_per_curve = min(limit, max_points_per_curve + 1); slider.value = max_points_per_curve
+                    elif event.key in (pygame.K_LSHIFT, pygame.K_RSHIFT):
+                        if drawing and tool_mode == "draw" and current_points:
+                            snap = nearest_snap_point(current_points[0], strokes, SNAP_RADIUS)
+                            if snap is not None:
+                                current_points[0] = snap
+                        elif redrawing_curve is not None and redrawing_curve.get("started") and redrawing_curve.get("points"):
+                            if redrawing_curve.get("fixed_start") is None:
+                                snap = nearest_snap_point(redrawing_curve["points"][0], strokes, SNAP_RADIUS)
+                                if snap is not None:
+                                    redrawing_curve["points"][0] = snap
             elif event.type == pygame.KEYUP:
+                if event.key == pygame.K_SPACE:
+                    space_panning = False
+                    pan_drag = None
                 if event.key in (pygame.K_LSHIFT, pygame.K_RSHIFT):
                     if drawing and tool_mode == "draw" and current_points:
                         snap = nearest_snap_point(current_points[-1], strokes, SNAP_RADIUS)
                         if snap is not None:
                             current_points[-1] = snap
                     elif redrawing_curve is not None and redrawing_curve.get("started") and redrawing_curve.get("points"):
-                        # keep end fixed for redraw
                         if redrawing_curve.get("fixed_end") is None:
                             snap = nearest_snap_point(redrawing_curve["points"][-1], strokes, SNAP_RADIUS)
                             if snap is not None:
                                 redrawing_curve["points"][-1] = snap
 
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 2:
+                pan_drag = {"start_mouse": event.pos, "start_pan": (getattr(cfg, "VIEW_PAN_X", 0.0), getattr(cfg, "VIEW_PAN_Y", 0.0))}
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                # space+LMB -> pan
+                if space_panning and in_canvas(event.pos):
+                    pan_drag = {"start_mouse": event.pos, "start_pan": (getattr(cfg, "VIEW_PAN_X", 0.0), getattr(cfg, "VIEW_PAN_Y", 0.0))}
+                    continue
                 if wave_formula_focus and not state.get("wave_formula_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
                     wave_formula_focus = False
                     state["wave_formula_focus"] = False
@@ -1063,6 +1207,11 @@ def main():
                     pass
 
             elif event.type == pygame.MOUSEMOTION:
+                if pan_drag is not None:
+                    sm = pan_drag["start_mouse"]; sp = pan_drag["start_pan"]
+                    cfg.VIEW_PAN_X = sp[0] + (event.pos[0] - sm[0])
+                    cfg.VIEW_PAN_Y = sp[1] + (event.pos[1] - sm[1])
+                    continue
                 if ref_opacity_drag and reference_image is not None:
                     bar = state.get("ref_opacity_rect", pygame.Rect(0,0,0,0))
                     if bar.w > 0:
@@ -1183,7 +1332,7 @@ def main():
                     if fixed_start is not None and pts:
                         pts[0] = tuple(fixed_start)
                     keys = pygame.key.get_pressed()
-                    straight_line = bool(keys[pygame.K_v]) if keys else False
+                    straight_line = bool(keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]) if keys else False
                     shift_held = bool(pygame.key.get_mods() & pygame.KMOD_SHIFT)
                     pts = advance_drawing_points(pts, cpos, strokes, SNAP_RADIUS, shift_held, straight_line, fixed_end=fixed_end)
                     redrawing_curve["points"] = pts
@@ -1193,7 +1342,7 @@ def main():
                     cpos = clamp_to_canvas(event.pos)
                     shift_held = bool(pygame.key.get_mods() & pygame.KMOD_SHIFT)
                     keys = pygame.key.get_pressed()
-                    straight_line = bool(keys[pygame.K_v]) if keys else False
+                    straight_line = bool(keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]) if keys else False
                     current_points = advance_drawing_points(current_points, cpos, strokes, SNAP_RADIUS, shift_held, straight_line)
                 elif tool_mode == "selection" and transform_drag is not None and selected_strokes and pygame.mouse.get_pressed()[0]:
                     cpos = clamp_to_canvas(event.pos)
@@ -1251,7 +1400,12 @@ def main():
                         drag_last = cpos
                 # (translation handled above when drag_last is set)
 
+            elif event.type == pygame.MOUSEBUTTONUP and event.button == 2:
+                if pan_drag is not None and not space_panning:
+                    pan_drag = None
             elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                if pan_drag is not None and space_panning:
+                    pan_drag = None
                 if marquee_select is not None and tool_mode == "selection":
                     r = normalize_rect(marquee_select["start"], marquee_select.get("current", marquee_select["start"]))
                     if abs(r[2]-r[0]) >= 3 or abs(r[3]-r[1]) >= 3:
@@ -1275,7 +1429,7 @@ def main():
                         cpos = clamp_to_canvas(event.pos)
                         shift_held = bool(pygame.key.get_mods() & pygame.KMOD_SHIFT)
                         keys = pygame.key.get_pressed()
-                        straight_line = bool(keys[pygame.K_v]) if keys else False
+                        straight_line = bool(keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]) if keys else False
                         pts = finalize_drawing_points(pts, cpos, strokes, SNAP_RADIUS, shift_held, straight_line, fixed_end=fixed_end)
                         if fixed_start is not None:
                             if pts:
@@ -1299,7 +1453,7 @@ def main():
                     cpos = clamp_to_canvas(event.pos)
                     shift_held = bool(pygame.key.get_mods() & pygame.KMOD_SHIFT)
                     keys = pygame.key.get_pressed()
-                    straight_line = bool(keys[pygame.K_v]) if keys else False
+                    straight_line = bool(keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]) if keys else False
                     current_points = finalize_drawing_points(current_points, cpos, strokes, SNAP_RADIUS, shift_held, straight_line)
                     if len(current_points) >= 2:
                         raw = list(current_points)
@@ -1402,11 +1556,12 @@ def main():
         if marquee_select is not None and tool_mode == "selection":
             r = normalize_rect(marquee_select["start"], marquee_select.get("current", marquee_select["start"]))
             rx1, ry1, rx2, ry2 = r
-            rect = pygame.Rect(int(rx1 + cfg.CANVAS_X), int(ry1), int(rx2 - rx1), int(ry2 - ry1))
-            if rect.w > 0 or rect.h > 0:
-                surf = pygame.Surface((max(1, rect.w), max(1, rect.h)), pygame.SRCALPHA)
-                surf.fill((60, 120, 220, 40))
-                screen.blit(surf, rect.topleft)
+            s1 = to_screen((rx1, ry1)); s2 = to_screen((rx2, ry2))
+            rect = pygame.Rect(int(min(s1[0],s2[0])), int(min(s1[1],s2[1])), int(abs(s2[0]-s1[0])), int(abs(s2[1]-s1[1])))
+            if rect.w > 0 and rect.h > 0:
+                overlay = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
+                overlay.fill((80, 140, 240, 35))
+                screen.blit(overlay, rect.topleft)
                 pygame.draw.rect(screen, (60, 120, 220), rect, 1)
 
         # Need swatch rects for this frame's layout - draw panel and capture by recomputing? we passed refs in state but draw_panel fills them during draw

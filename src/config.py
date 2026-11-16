@@ -39,6 +39,11 @@ CANVAS_X = LEFT_BAR_W
 
 PANEL_X = LEFT_BAR_W + CANVAS_W
 
+# View/camera transform (world <-> screen). Mutated by the Controller.
+VIEW_ZOOM = 1.0
+VIEW_PAN_X = 0.0
+VIEW_PAN_Y = 0.0
+
 BG_COLOR = (1.0, 1.0, 1.0)
 
 ACTIVE_COLOR = (0.2, 0.4, 0.9)
