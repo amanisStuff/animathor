@@ -1,5 +1,7 @@
 """View: left tool toolbar."""
 
+import math
+
 import pygame
 
 import config as cfg
