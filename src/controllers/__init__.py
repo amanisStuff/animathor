@@ -12,6 +12,14 @@ for _m in _SUBS:
 import models as _models
 import views as _views
 for _m in _SUBS:
+    # sibling controller submodules (e.g. coordinates helpers into app_controller)
+    for _sib in _SUBS:
+        if _sib is _m:
+            continue
+        for _n in dir(_sib):
+            if _n.startswith('__') or _n in _PLUMBING:
+                continue
+            _m.__dict__.setdefault(_n, getattr(_sib, _n))
     for _src in (_models, _views):
         for _n in dir(_src):
             if _n.startswith('__') or _n in _PLUMBING:

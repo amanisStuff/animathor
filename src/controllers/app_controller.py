@@ -21,6 +21,9 @@ for _n in dir(_dep):
         continue
     globals().setdefault(_n, getattr(_dep, _n))
 
+# Coordinate helpers (own controller submodule)
+from controllers.coordinates import in_canvas, to_canvas, clamp_to_canvas, to_screen  # noqa: E402,F401
+
 
 def main():
     pygame.init()
