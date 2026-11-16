@@ -421,7 +421,7 @@ def main():
                                 export_scene_image(path, strokes, ref_img=reference_image,
                                                  view_zoom=getattr(cfg, "VIEW_ZOOM", 1.0),
                                                  view_pan=(getattr(cfg, "VIEW_PAN_X", 0.0), getattr(cfg, "VIEW_PAN_Y", 0.0)),
-                                                 size=(cfg.CANVAS_W, cfg.HEIGHT))
+                                                 size=(cfg.CANVAS_W, max(1, cfg.HEIGHT - TOP_BAR_H)))
                         except Exception:
                             pass
                     # --- Select / clipboard / duplicate ---
