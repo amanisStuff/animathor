@@ -81,6 +81,9 @@ def main():
     drag_last = None
     selection_submode = "transform"  # "transform", "nodes", or "curve"
     transform_drag = None  # {"handle": name, "start_mouse": (x,y), "start_strokes": {i: copy}, "center": (cx,cy), "start_bbox": bbox}
+    pivot_pos = None  # custom rotation/scale pivot (world coords); None = bbox center
+    pivot_drag = None  # {"offset": (dx,dy)} while dragging pivot
+    prev_selection_set = set()
     marquee_select = None  # {"start": (x,y), "current": (x,y), "add": bool}
     max_points_per_curve = 4
     boost_points = False
@@ -193,6 +196,10 @@ def main():
         sel_list = sorted(selected_strokes)
         primary = sel_list[0] if len(sel_list) == 1 else (sel_list[0] if sel_list else None)
         sel_obj = strokes[primary] if primary is not None else None
+        # reset custom pivot when selection is cleared or membership changes
+        if not selected_strokes or selected_strokes != prev_selection_set:
+            pivot_pos = None
+        prev_selection_set = set(selected_strokes)
         if selected_curve is not None:
             si, comp_i = selected_curve
             comps = _stroke_components(strokes[si]) if 0 <= si < len(strokes) else []
@@ -1102,26 +1109,33 @@ def main():
                             handled = False
                             if selected_strokes:
                                 bb = combined_obb(strokes, selected_strokes)
-                                h = hit_test_bbox_handle(bb, cpos)
-                                if h is not None:
-                                    cx, cy = bb["cx"], bb["cy"]
-                                    push_undo()
-                                    import copy as _copy
-                                    start_strokes = {i: _copy.deepcopy(strokes[i]) for i in sorted(selected_strokes) if 0 <= i < len(strokes)}
-                                    transform_drag = {
-                                        "handle": h,
-                                        "start_mouse": cpos,
-                                        "start_strokes": start_strokes,
-                                        "center": (cx, cy),
-                                        "start_bbox": bb,
-                                    }
-                                    handled = True
-                                elif bb and point_in_bbox(bb, cpos):
-                                    # move all selected (keep multi-selection)
-                                    if drag_last is None:
-                                        push_undo()
-                                    drag_last = cpos
-                                    handled = True
+                                if bb:
+                                    eff_pivot = pivot_pos if pivot_pos is not None else (bb["cx"], bb["cy"])
+                                    # hit pivot marker first (draggable rotation/scale center)
+                                    if math.hypot(cpos[0] - eff_pivot[0], cpos[1] - eff_pivot[1]) <= 10.0:
+                                        pivot_drag = {"start": cpos, "start_pivot": eff_pivot}
+                                        handled = True
+                                    if not handled:
+                                        h = hit_test_bbox_handle(bb, cpos)
+                                        if h is not None:
+                                            cx, cy = eff_pivot
+                                            push_undo()
+                                            import copy as _copy
+                                            start_strokes = {i: _copy.deepcopy(strokes[i]) for i in sorted(selected_strokes) if 0 <= i < len(strokes)}
+                                            transform_drag = {
+                                                "handle": h,
+                                                "start_mouse": cpos,
+                                                "start_strokes": start_strokes,
+                                                "center": (cx, cy),
+                                                "start_bbox": bb,
+                                            }
+                                            handled = True
+                                        elif point_in_bbox(bb, cpos):
+                                            # move all selected (keep multi-selection)
+                                            if drag_last is None:
+                                                push_undo()
+                                            drag_last = cpos
+                                            handled = True
                                 elif hit_test_stroke(cpos, strokes) in selected_strokes:
                                     if drag_last is None:
                                         push_undo()
@@ -1209,6 +1223,14 @@ def main():
                     sm = pan_drag["start_mouse"]; sp = pan_drag["start_pan"]
                     cfg.VIEW_PAN_X = sp[0] + (event.pos[0] - sm[0])
                     cfg.VIEW_PAN_Y = sp[1] + (event.pos[1] - sm[1])
+                    continue
+                if pivot_drag is not None and pygame.mouse.get_pressed()[0]:
+                    cpos = clamp_to_canvas(event.pos)
+                    sp0 = pivot_drag.get("start_pivot", cpos)
+                    sm = pivot_drag.get("start", event.pos)
+                    dx = cpos[0] - clamp_to_canvas(sm)[0]
+                    dy = cpos[1] - clamp_to_canvas(sm)[1]
+                    pivot_pos = (sp0[0] + dx, sp0[1] + dy)
                     continue
                 if ref_opacity_drag and reference_image is not None:
                     bar = state.get("ref_opacity_rect", pygame.Rect(0,0,0,0))
@@ -1416,6 +1438,7 @@ def main():
             elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
                 if pan_drag is not None and space_panning:
                     pan_drag = None
+                pivot_drag = None
                 if marquee_select is not None and tool_mode == "selection":
                     r = normalize_rect(marquee_select["start"], marquee_select.get("current", marquee_select["start"]))
                     if abs(r[2]-r[0]) >= 3 or abs(r[3]-r[1]) >= 3:
@@ -1541,7 +1564,7 @@ def main():
                 elif drawing and tool_mode == "draw" and draw_tool == "eraser":
                     drawing = False
                     current_points = []
-                drag_last = None; selected_point = None; transform_drag = None
+                drag_last = None; selected_point = None; transform_drag = None; pivot_drag = None
                 picker_drag_sv = False; picker_drag_hue = False; picker_drag_alpha = False; ref_opacity_drag = False
                 wave_slider_drag = None
                 wave_custom_drag = None
@@ -1552,12 +1575,18 @@ def main():
 
         # Draw scene (Cairo) and blit at canvas offset
         active = current_points if (drawing and tool_mode == "draw") else (redrawing_curve.get("points") if redrawing_curve else None)
+        _eff_pivot = None
+        if tool_mode == "selection" and selection_submode == "transform" and selected_strokes:
+            _pobb = combined_obb(strokes, selected_strokes)
+            if _pobb:
+                _eff_pivot = pivot_pos if pivot_pos is not None else (_pobb["cx"], _pobb["cy"])
         draw_scene(
             cairo_surface, strokes, active, snap_point=hover_snap,
             selected_indices=selected_strokes, edit_mode=(tool_mode == "selection"),
             selection_submode=selection_submode, selected_curve=selected_curve,
             snap_kind=hover_snap_kind, redrawing_curve=redrawing_curve,
             ref_img=reference_image,
+            pivot_pos=_eff_pivot,
         )
         frame = surface_to_pygame(cairo_surface)
         screen.fill((230, 233, 238))

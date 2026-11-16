@@ -159,7 +159,7 @@ def draw_stroke_path_distorted(ctx, stroke):
         ctx.close_path()
     return True
 
-def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, selected_index=None, selected_indices=None, edit_mode=False, selection_submode="transform", selected_curve=None, snap_kind="connect", redrawing_curve=None, ref_img=None, view_zoom=None, view_pan=None):
+def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, selected_index=None, selected_indices=None, edit_mode=False, selection_submode="transform", selected_curve=None, snap_kind="connect", redrawing_curve=None, ref_img=None, view_zoom=None, view_pan=None, pivot_pos=None):
     # Backward compat: selected_index (single) or selected_indices (collection)
     if selected_indices is None and selected_index is not None:
         selected_indices = selected_index
@@ -454,6 +454,22 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
                     else:
                         ctx.set_source_rgb(1, 1, 1); ctx.rectangle(pt[0]-4, pt[1]-4, 8, 8); ctx.fill_preserve()
                         ctx.set_source_rgb(0.1, 0.45, 0.95); ctx.set_line_width(1.5); ctx.stroke()
+                # Pivot point (rotation/scale center) - draggable
+                pv = pivot_pos if pivot_pos is not None else (obb["cx"], obb["cy"])
+                if pv is not None:
+                    px, py = pv
+                    r_out, r_in = 7.0, 2.5
+                    ctx.set_source_rgba(1.0, 1.0, 1.0, 0.95)
+                    ctx.arc(px, py, r_out, 0, 2*math.pi); ctx.fill()
+                    ctx.set_source_rgb(0.95, 0.45, 0.1)
+                    ctx.set_line_width(1.6)
+                    ctx.arc(px, py, r_out, 0, 2*math.pi); ctx.stroke()
+                    ctx.move_to(px - r_out, py); ctx.line_to(px - r_in, py)
+                    ctx.move_to(px + r_in, py); ctx.line_to(px + r_out, py)
+                    ctx.move_to(px, py - r_out); ctx.line_to(px, py - r_in)
+                    ctx.move_to(px, py + r_in); ctx.line_to(px, py + r_out)
+                    ctx.stroke()
+                    ctx.arc(px, py, r_in, 0, 2*math.pi); ctx.fill()
         elif selection_submode == "nodes" and len(selected_in_range) > 1:
             # Multi-selection: show combined oriented bbox (node editing requires single selection)
             obb = combined_obb(strokes, selected_in_range)
