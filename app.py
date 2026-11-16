@@ -484,7 +484,12 @@ def _cubic_point(p0, c1, c2, p3, t):
     return (x, y)
 
 
-WAVE_SHAPES = ["sine", "triangle", "square", "sawtooth", "circular", "half_circle", "formula"]
+WAVE_SHAPES = ["sine", "triangle", "square", "sawtooth", "circular", "half_circle", "formula", "custom", "sine_bezier", "noise"]
+# short labels shown under each shape thumbnail button
+WAVE_SHAPE_LABELS = [("sine", "Sine"), ("triangle", "Tri"), ("square", "Sq"), ("sawtooth", "Saw"),
+                     ("circular", "Circ"), ("half_circle", "Half"), ("formula", "Formula"),
+                     ("custom", "Custom"), ("sine_bezier", "Sine Béz"), ("noise", "Noise")]
+WAVE_SHAPE_LABEL_DICT = dict(WAVE_SHAPE_LABELS)
 
 
 def default_wave_params():
@@ -493,12 +498,14 @@ def default_wave_params():
         "enabled": False,
         "shape": "sine",
         "amplitude": 8.0,
-        "frequency": 3.0,
+        "frequency": 0.25,
         "phase": 0.0,
         "noise": 0.0,
         "seed": 0,
         "noise_scale": 2.0,
+        "reverse": False,
         "formula": "sin(x)",
+        "custom_points": [],
     }
 
 
@@ -517,52 +524,86 @@ def _component_styles(component):
     return []
 
 
-def _get_wave_style(component):
+def _wave_style_raw_list(component):
+    """Raw wave style dicts stored on a component, in stack order."""
+    out = []
     for s0 in _component_styles(component):
         if isinstance(s0, dict) and s0.get("type") == "wave":
-            d = default_wave_params()
-            d.update({k: s0.get(k, d[k]) for k in d.keys() if k != "type"})
-            d["type"] = "wave"
-            return d
-    if isinstance(component, dict) and isinstance(component.get("wave"), dict):
+            out.append(s0)
+    if not out and isinstance(component, dict) and isinstance(component.get("wave"), dict):
+        out.append(component["wave"])
+    return out
+
+
+def _get_wave_styles(component):
+    """All wave styles on a component (defaults merged), in stack order."""
+    out = []
+    for s0 in _wave_style_raw_list(component):
         d = default_wave_params()
-        d.update({k: component["wave"].get(k, d[k]) for k in d.keys() if k != "type"})
+        d.update({k: s0.get(k, d[k]) for k in d.keys() if k != "type"})
         d["type"] = "wave"
-        return d
+        out.append(d)
+    return out
+
+
+def _get_wave_style(component, index=0):
+    styles = _get_wave_styles(component)
+    if 0 <= index < len(styles):
+        return styles[index]
     return default_wave_params()
 
 
-def _set_wave_style(component, wave_style):
+def _set_wave_style(component, wave_style, index=0):
     if not isinstance(component, dict):
         return
     d = default_wave_params()
     if isinstance(wave_style, dict):
         d.update({k: wave_style.get(k, d[k]) for k in d.keys() if k != "type"})
     d["type"] = "wave"
-    styles = [dict(s0) for s0 in _component_styles(component) if not (isinstance(s0, dict) and s0.get("type") == "wave")]
-    styles.append(d)
-    component["styles"] = styles
-    component["wave"] = {k: d[k] for k in d.keys() if k != "type"}
+    others = [dict(s0) for s0 in _component_styles(component) if not (isinstance(s0, dict) and s0.get("type") == "wave")]
+    waves = [dict(s0) for s0 in _wave_style_raw_list(component)]
+    while len(waves) <= index:
+        waves.append(default_wave_params())
+    waves[index] = d
+    component["styles"] = others + waves
+    # legacy single-wave key mirrors the first style for backward compatibility
+    component["wave"] = {k: waves[0][k] for k in waves[0].keys() if k != "type"}
 
 
-def _remove_wave_style(component):
+def _remove_wave_style(component, index=0):
     if not isinstance(component, dict):
         return
-    styles = [dict(s0) for s0 in _component_styles(component) if not (isinstance(s0, dict) and s0.get("type") == "wave")]
-    component["styles"] = styles
-    component.pop("wave", None)
+    others = [dict(s0) for s0 in _component_styles(component) if not (isinstance(s0, dict) and s0.get("type") == "wave")]
+    waves = [dict(s0) for s0 in _wave_style_raw_list(component)]
+    if waves:
+        if 0 <= index < len(waves):
+            del waves[index]
+        else:
+            waves.pop()
+    component["styles"] = others + waves
+    if waves:
+        component["wave"] = {k: waves[0][k] for k in waves[0].keys() if k != "type"}
+    else:
+        component.pop("wave", None)
 
 
 def _wave_params(component):
     return _get_wave_style(component)
 
 
-def _component_wave_enabled(component):
-    w = _get_wave_style(component)
+def _wave_style_active(wv):
+    """True when a single wave style actually contributes a visible offset."""
     try:
-        return bool(w.get("enabled")) and (abs(float(w.get("amplitude", 0))) > 1e-6 or abs(float(w.get("noise", 0))) > 1e-6)
+        return bool(wv.get("enabled")) and (
+            abs(float(wv.get("amplitude", 0) or 0)) > 1e-6
+            or abs(float(wv.get("noise", 0) or 0)) > 1e-6
+        )
     except Exception:
         return False
+
+
+def _component_wave_enabled(component):
+    return any(_wave_style_active(wv) for wv in _get_wave_styles(component))
 
 
 def _pseudo_noise01(i, seed=0):
@@ -681,6 +722,344 @@ def _latex_to_python_expr(expr):
     s=re.sub(r'^[A-Za-z]\s*\([^)]*\)\s*=\s*', '', s)
     return s.strip() or "sin(x)"
 
+
+def _generate_sine_deriv_template(amp, freq):
+    """Generate wave key/control points for a sine shape using derivative analysis.
+
+    For a sine wave with angular frequency (per template period) = period, the
+    wave value is v(t) = amp * sin(period * t) over normalized phase t in [0, 1].
+    The derivative is dv/dt = amp * period * cos(period * t).
+    Key positions where the derivative is zero (extrema) or at 45-degree tangent
+    angles become the control points; y values come from the sine function.
+
+    Returns a sorted list of (t, y) key points forming one smooth template period.
+    """
+    freq = max(0.05, float(freq))
+    period = 2.0 * math.pi * freq  # angular frequency per template period
+    # derivative zeros: period * t = pi/2 + k*pi  ->  t = (pi/2 + k*pi) / period
+    key_ts = [0.0]
+    k = 0
+    while True:
+        p_ang = math.pi / 2.0 + k * math.pi
+        if p_ang > period - 1e-9:
+            break
+        t_val = p_ang / period
+        if t_val < 1.0 - 1e-9 and t_val > 0.0:
+            key_ts.append(t_val)
+        k += 1
+    key_ts.append(1.0)
+    # Build unique sorted key points with y = amp * sin(period * t)
+    seen = []
+    for t_val in sorted(key_ts):
+        if any(abs(t_val - existing) < 1e-6 for existing in seen):
+            continue
+        seen.append(t_val)
+    points = []
+    for t_val in seen:
+        y_val = amp * math.sin(period * t_val)
+        points.append((float(t_val), float(y_val)))
+    # ensure endpoints exist
+    if points[0][0] > 0:
+        points.insert(0, (0.0, 0.0))
+    if points[-1][0] < 1.0:
+        points.append((1.0, float(amp * math.sin(period))))
+    return points
+
+
+def _formula_env_for(w):
+    """Build the sandboxed evaluation environment for a formula wave style."""
+    allowed_base = {k: getattr(math, k) for k in dir(math) if not k.startswith("_")}
+    allowed_base.update({"pi": math.pi, "tau": math.tau, "e": math.e,
+                         "abs": abs, "min": min, "max": max, "pow": pow, "round": round,
+                         "sign": lambda v: (1.0 if v > 0 else (-1.0 if v < 0 else 0.0)),
+                         "r": max(1.0, float(w.get("amplitude", 8.0) or 8.0)),
+                         "n": 0.0,
+                         "a": float(w.get("amplitude", 8.0) or 8.0),
+                         "f": float(w.get("frequency", 0.25) or 0.25),
+                         "phi": float(w.get("phase", 0.0) or 0.0)})
+    formula = str(w.get("formula", "sin(x)") or "sin(x)")
+    try:
+        expr = _latex_to_python_expr(formula)
+    except Exception:
+        expr = "sin(x)"
+    return (expr, allowed_base)
+
+
+def _prepare_wave_evaluator(w, geom=None):
+    """Precompute everything needed to evaluate one wave style along a curve.
+
+    `geom` is {"diag": bbox diagonal, "length": curve length} in canvas units
+    (defaults to 1.0/1.0 for previews and icons). Frequency semantics:
+    0.01..1.0 means the cycle length equals freq * bbox diagonal (1.0 = one
+    cycle spans the diagonal); values above 1.0 keep the legacy meaning of
+    "N cycles across the curve" so old saved files still render the same.
+    Amplitude is relative to the shape: amp/100 * diagonal/2 canvas units."""
+    shape = str(w.get("shape", "sine") or "sine").lower()
+    ev = {
+        "shape": shape,
+        "amp": float(w.get("amplitude", 0.0) or 0.0),
+        "freq": float(w.get("frequency", 0.0) or 0.0),
+        "phase": float(w.get("phase", 0.0) or 0.0),
+        "noise": float(w.get("noise", 0.0) or 0.0),
+        "seed": int(w.get("seed", 0) or 0),
+        "noise_scale": float(w.get("noise_scale", 2.0) or 2.0),
+        "formula_env": None,
+        "custom_points": None,
+        "cycles": 0.0,
+        "amp_px": 0.0,
+        "noise_px": 0.0,
+        "reverse": False,
+    }
+    ev["reverse"] = bool(w.get("reverse"))
+    diag = 1.0
+    length = 1.0
+    if isinstance(geom, dict):
+        try:
+            diag = max(1e-6, float(geom.get("diag", 1.0) or 1.0))
+        except Exception:
+            diag = 1.0
+        try:
+            length = max(1e-6, float(geom.get("length", 1.0) or 1.0))
+        except Exception:
+            length = 1.0
+    freq = ev["freq"]
+    if freq <= 0.0:
+        ev["cycles"] = 0.0
+    elif freq > 1.0:
+        # legacy saved files: frequency was "cycles across the curve"
+        ev["cycles"] = freq
+    else:
+        ev["cycles"] = length / (freq * diag)
+    # amplitude (and legacy per-wave noise amount) scale with the shape size
+    ev["amp_px"] = ev["amp"] / 100.0 * diag * 0.5
+    ev["noise_px"] = ev["noise"] / 100.0 * diag * 0.5
+    if shape == "formula":
+        ev["formula_env"] = _formula_env_for(w)
+    if shape == "sine_bezier":
+        # derivative-generated template; values stay in [-1,1] (amp scales later)
+        periods = freq if freq > 1.0 else 1.0
+        ev["custom_points"] = _generate_sine_deriv_template(1.0, periods)
+        ev["shape"] = "custom"
+    else:
+        ev["custom_points"] = w.get("custom_points", None)
+    return ev
+
+
+def _custom_wave_at(f, cps):
+    """Catmull-Rom/Hermite interpolation of custom wave points at phase f in [0,1].
+    Tangents come from neighbouring control points (normalised by pi/4 to match
+    ideal sine derivatives), so few-point sine templates stay smooth."""
+    if not cps or len(cps) < 2:
+        return 0.0
+    cps = sorted(cps, key=lambda cp: (cp[0], cp[1]))
+    npts = len(cps)
+    seg_idx = -1
+    for j in range(npts - 1):
+        if cps[j][0] <= f <= cps[j + 1][0]:
+            seg_idx = j
+            break
+    if seg_idx < 0:
+        # f outside the point x-range: clamp to nearest endpoint value
+        return cps[0][1] if f < cps[0][0] else cps[-1][1]
+    x0, y0 = cps[seg_idx]
+    x1, y1 = cps[seg_idx + 1]
+    dx = x1 - x0
+    if abs(dx) < 1e-9:
+        return y0
+    t = (f - x0) / dx
+    # Catmull-Rom tangents from neighbouring points
+    if seg_idx > 0:
+        tan_left_x = x0 - cps[seg_idx - 1][0]
+        tan_left_y = y0 - cps[seg_idx - 1][1]
+    else:
+        tan_left_x = dx
+        tan_left_y = y1 - y0
+    if seg_idx + 2 < npts:
+        tan_right_x = cps[seg_idx + 2][0] - x1
+        tan_right_y = cps[seg_idx + 2][1] - y1
+    else:
+        tan_right_x = dx
+        tan_right_y = y1 - y0
+    # normalised slopes (dy/dx), scaled to ideal sine derivatives
+    norm_factor = math.pi / 4.0
+    m0 = (tan_left_y / tan_left_x if abs(tan_left_x) > 1e-9 else 0.0) * norm_factor
+    m1 = (tan_right_y / tan_right_x if abs(tan_right_x) > 1e-9 else 0.0) * norm_factor
+    # cubic Hermite basis
+    t2 = t * t
+    t3 = t2 * t
+    h00 = 2 * t3 - 3 * t2 + 1
+    h10 = t3 - 2 * t2 + t
+    h01 = -2 * t3 + 3 * t2
+    h11 = t3 - t2
+    return h00 * y0 + h10 * m0 * dx + h01 * y1 + h11 * m1 * dx
+
+
+# Custom wave drawing (LMMS Bit Invader style): the waveform is stored as a
+# fixed-length array of samples; the user paints it by holding and dragging
+# inside the box, then optionally presses Smooth to relax it.
+CUSTOM_WAVE_SAMPLES = 128
+
+
+def _custom_uniform_samples(cps, n=None):
+    """Resample any point set onto the fixed uniform sample grid (t in [0,1])."""
+    if n is None:
+        n = CUSTOM_WAVE_SAMPLES
+    n = max(2, int(n))
+    if cps and len(cps) >= 2:
+        return [(i / (n - 1.0), _custom_wave_at(i / (n - 1.0), cps)) for i in range(n)]
+    return [(i / (n - 1.0), 0.0) for i in range(n)]
+
+
+def _custom_wave_paint(w, box, pos, drag):
+    """Paint the waveform under the cursor (click-hold-drag inside the box).
+
+    `drag` is [last_index, last_amplitude], or None when starting a stroke.
+    Every sample between the previous and current column is filled so fast
+    horizontal moves stay continuous, exactly like LMMS Bit Invader."""
+    if not box or box.w <= 0 or box.h <= 0:
+        return drag
+    t = clamp((pos[0] - box.x) / max(1, box.w - 1), 0.0, 1.0)
+    amp = clamp((pos[1] - (box.y + box.h / 2.0)) / max(1, box.h / 2.0), -1.0, 1.0)
+    n = CUSTOM_WAVE_SAMPLES
+    pts = w.get("custom_points")
+    if not pts or len(pts) != n:
+        # convert legacy sparse points (or empty) onto the uniform grid first
+        pts = _custom_uniform_samples(pts)
+        w["custom_points"] = pts
+    idx = int(round(t * (n - 1)))
+    if drag is None or len(drag) < 2:
+        drag = [idx, amp]
+    i0, i1 = min(drag[0], idx), max(drag[0], idx)
+    for i in range(i0, i1 + 1):
+        f = 0.0 if i1 == i0 else (i - i0) / (i1 - i0)
+        pts[i] = (i / (n - 1.0), drag[1] + (amp - drag[1]) * f)
+    return [idx, amp]
+
+
+def _custom_smooth_samples(cps, passes=2, window=5):
+    """Wrap-around moving average over the fixed sample grid (the wave loops,
+    so smoothing wraps across the ends and stays seamless)."""
+    pts = _custom_uniform_samples(cps)
+    n = len(pts)
+    vals = [a for _t, a in pts]
+    half = max(1, window // 2)
+    for _ in range(max(0, passes)):
+        vals = [sum(vals[(i + j) % n] for j in range(-half, half + 1)) / (2 * half + 1)
+                for i in range(n)]
+    return [(i / (n - 1.0), v) for i, v in enumerate(vals)]
+
+
+def _wave_value_for(ev, s):
+    """Evaluate one prepared wave style at normalized arc position s in [0,1].
+    With the reverse flag set, the result is inverted: -f(x)."""
+    v = _wave_value_raw(ev, s)
+    return -v if ev["reverse"] else v
+
+
+def _wave_value_raw(ev, s):
+    """Raw wave shape value in [-1,1] (direction inversion not applied)."""
+    freq = ev["freq"]
+    if freq == 0:
+        return 0.0
+    # phase slider is in degrees (0..360) and maps to a full cycle; the number
+    # of cycles across the curve comes from the geometry (cycle length is
+    # freq * bbox diagonal for the 0.01..1.0 range)
+    p = (s * ev["cycles"] * math.tau) + math.radians(ev["phase"])
+    shape = ev["shape"]
+    if shape == "noise":
+        # standalone noise distortion: smooth pseudo-random profile in [-1,1]
+        # so amplitude scales it exactly like every other shape. Phase does not
+        # apply to noise (grayed out in the panel).
+        return _smooth_noise1d(s * ev["cycles"] * 4.0, seed=ev["seed"], scale=ev["noise_scale"])
+    if shape == "formula" and ev["formula_env"] is not None:
+        fstr, abase = ev["formula_env"]
+        try:
+            env = dict(abase)
+            frac = (p / math.tau) - math.floor(p / math.tau)
+            env.update({"x": p, "p": p, "t": frac, "s": s, "frac": frac})
+            return float(eval(fstr, {"__builtins__": {}}, env))
+        except Exception:
+            return math.sin(p)
+    cps = ev["custom_points"]
+    if shape == "custom" and cps and len(cps) >= 2:
+        frac = max(0.0, min(1.0, (p / math.tau) - math.floor(p / math.tau)))
+        return _custom_wave_at(frac, cps)
+    # built-in shapes
+    tval = p / math.tau
+    frac = tval - math.floor(tval)
+    if shape == "triangle":
+        return 4.0 * abs(frac - 0.5) - 1.0
+    if shape == "square":
+        return 1.0 if frac < 0.5 else -1.0
+    if shape == "sawtooth":
+        return 2.0 * frac - 1.0
+    if shape == "circular":
+        if frac < 0.5:
+            q = 4.0 * frac - 1.0
+            return math.sqrt(max(0.0, 1.0 - q * q))
+        q = 4.0 * (frac - 0.5) - 1.0
+        return -math.sqrt(max(0.0, 1.0 - q * q))
+    if shape == "half_circle":
+        q = 2.0 * frac - 1.0
+        return math.sqrt(max(0.0, 1.0 - q * q))
+    return math.sin(p)
+
+
+def _wave_icon_polyline(wave, n=20):
+    """One normalized cycle of a wave style, for drawing shape thumbnail icons."""
+    w = dict(wave) if isinstance(wave, dict) else {}
+    w["frequency"] = 1.0
+    w["phase"] = 0.0
+    w["noise"] = 0.0
+    ev = _prepare_wave_evaluator(w)
+    pts = []
+    for i in range(n + 1):
+        s = i / n
+        pts.append((s, _wave_value_for(ev, s)))
+    return pts
+
+
+def _wave_preview_polyline(wave, n=None):
+    """Composed wave (amplitude/frequency/phase/noise) over the whole stroke,
+    normalized to roughly [-1,1] for the live preview box."""
+    ev = _prepare_wave_evaluator(wave if isinstance(wave, dict) else {})
+    if n is None:
+        # enough points to render every cycle and noise lattice cell smoothly
+        cycles = abs(ev["cycles"])
+        n = int(min(2400, max(240, cycles * 24)))
+        if ev["shape"] == "noise" or ev["noise"] != 0.0:
+            # noise needs several samples per lattice cell to look smooth
+            noise_cells = max(1.0, cycles) * 4.0 * max(0.1, ev["noise_scale"])
+            n = int(min(2400, max(n, noise_cells * 6)))
+    pts = []
+    for i in range(n + 1):
+        s = i / n
+        total = ev["amp"] * _wave_value_for(ev, s)
+        if ev["noise"] != 0.0:
+            nz = _smooth_noise1d(s * ev["cycles"] * 4.0, seed=ev["seed"], scale=ev["noise_scale"])
+            total += ev["noise"] * nz
+        pts.append((s, total / 100.0))
+    return pts
+
+
+def _draw_wave_graph(screen, rect, poly, color, bg=(24, 26, 34), line_w=2, mid=True):
+    """Draw a normalized waveform polyline inside rect (x in [0,1], y in [-1,1])."""
+    pygame.draw.rect(screen, bg, rect, border_radius=4)
+    if mid:
+        pygame.draw.line(screen, (66, 70, 82), (rect.x + 3, rect.centery), (rect.right - 3, rect.centery), 1)
+    if not poly or len(poly) < 2:
+        return
+    pad = 3
+    hw = max(1, rect.w - 2 * pad)
+    hh = max(1, rect.h - 2 * pad)
+    pts = []
+    for vx, vy in poly:
+        px = rect.x + pad + clamp(vx, 0.0, 1.0) * hw
+        py = rect.centery - clamp(vy, -1.15, 1.15) * (hh / 2.0)
+        pts.append((px, py))
+    pygame.draw.lines(screen, color, False, pts, line_w)
+
+
 def sample_distorted_component(stroke, comp_index, samples_per_seg=24):
     """Return sampled polyline points for a component with wave distortion applied.
     Distortion is for rendering only; base geometry remains unchanged."""
@@ -698,9 +1077,9 @@ def sample_distorted_component(stroke, comp_index, samples_per_seg=24):
         segs = list(comp.get("segs") or [])
     if not segs:
         return []
-    w = _wave_params(comp)
-    if not _component_wave_enabled(comp):
-        # return dense samples of base for consistency? caller can choose; but return base polyline
+    waves = [wv for wv in _get_wave_styles(comp) if _wave_style_active(wv)]
+    if not waves:
+        # no visible distortion: return dense samples of base for consistency? caller can choose; but return base polyline
         pts = []
         for si, (p0, c1, c2, p3) in enumerate(segs):
             if si == 0:
@@ -709,13 +1088,6 @@ def sample_distorted_component(stroke, comp_index, samples_per_seg=24):
             for i in range(1, steps + 1):
                 pts.append(cubic_bezier_point(p0, c1, c2, p3, i / steps))
         return pts
-    amp = float(w.get("amplitude", 0.0) or 0.0)
-    freq = float(w.get("frequency", 0.0) or 0.0)
-    phase = float(w.get("phase", 0.0) or 0.0)
-    noise_amt = float(w.get("noise", 0.0) or 0.0)
-    seed = int(w.get("seed", 0) or 0)
-    noise_scale = float(w.get("noise_scale", 2.0) or 2.0)
-
     # approximate arc-length parameter for stable waves across segments
     # precompute cumulative lengths
     seg_samples = max(4, int(samples_per_seg))
@@ -733,6 +1105,44 @@ def sample_distorted_component(stroke, comp_index, samples_per_seg=24):
     if total <= 1e-6:
         total = 1.0
 
+    # bounding box diagonal: frequency/amplitude are relative to the shape size
+    xs = []
+    ys = []
+    for (p0, c1, c2, p3) in segs:
+        for pt in (p0, c1, c2, p3):
+            xs.append(pt[0])
+            ys.append(pt[1])
+    diag = math.hypot(max(xs) - min(xs), max(ys) - min(ys))
+    if diag <= 1e-6:
+        diag = total
+    geom = {"diag": diag, "length": total}
+
+    # prepare each stacked wave style once; offsets are summed per sample
+    evaluators = [_prepare_wave_evaluator(wv, geom) for wv in waves]
+    # Per-evaluator sample requirements: 32 samples per wave cycle, plus 8
+    # samples per noise lattice cell (cells = cycles * 4 * smoothing scale) for
+    # the standalone noise shape and any legacy per-wave noise. The hungriest
+    # style in the stack dictates the sample density.
+    SAMPLES_PER_CYCLE = 32
+    SAMPLES_PER_NOISE_CELL = 8
+    needed = 8
+    for ev in evaluators:
+        needed = max(needed, int(math.ceil(abs(ev["cycles"]) * SAMPLES_PER_CYCLE)) + 8)
+        if ev["shape"] == "noise" or ev["noise"] != 0.0:
+            noise_cells = max(1.0, abs(ev["cycles"])) * 4.0 * max(0.1, ev["noise_scale"])
+            needed = max(needed, int(math.ceil(noise_cells * SAMPLES_PER_NOISE_CELL)) + 8)
+
+    # Adaptive sampling density: the wave phase advances cycles*tau across the
+    # whole component, so a fixed samples_per_seg aliases into jagged zigzags
+    # at high frequency. 'needed' (computed above) covers both cycles and
+    # noise lattice cells for every style in the stack.
+    fixed_total = seg_samples * max(1, len(segs))
+    needed_total = min(max(fixed_total, needed), 8192)
+    steps_list = []
+    for _l in lengths:
+        frac = (_l / total) if total > 0 else (1.0 / max(1, len(lengths)))
+        steps_list.append(max(4, int(round(needed_total * frac))))
+
     # sample base points and tangents along whole component for stable normals
     base_pts = []
     base_s = []
@@ -741,7 +1151,7 @@ def sample_distorted_component(stroke, comp_index, samples_per_seg=24):
         seg_len = lengths[si] if si < len(lengths) else 0.0
         start_s = cum / total
         end_s = (cum + seg_len) / total if total > 0 else start_s
-        steps = seg_samples
+        steps = steps_list[si] if si < len(steps_list) else seg_samples
         for i in range(0 if si == 0 else 1, steps + 1):
             t = i / steps
             x, y = cubic_bezier_point(p0, c1, c2, p3, t)
@@ -782,103 +1192,17 @@ def sample_distorted_component(stroke, comp_index, samples_per_seg=24):
         if px * nx + py * ny < 0:
             normals[i] = (-nx, -ny)
 
-    def _wave_value(shape, p):
-        # p in radians-like phase
-        t = p / math.tau
-        frac = t - math.floor(t)  # 0..1
-        if shape == "triangle":
-            # -1..1 triangle
-            return 4.0 * abs(frac - 0.5) - 1.0
-        if shape == "square":
-            return 1.0 if frac < 0.5 else -1.0
-        if shape == "sawtooth":
-            return 2.0 * frac - 1.0
-        if shape == "circular":
-            # semicircular/arc wave alternating up and down
-            if frac < 0.5:
-                q = 4.0 * frac - 1.0  # -1..1
-                return math.sqrt(max(0.0, 1.0 - q * q))
-            q = 4.0 * (frac - 0.5) - 1.0
-            return -math.sqrt(max(0.0, 1.0 - q * q))
-        if shape == "half_circle":
-            # half-circle bump per period (0..1..0)
-            q = 2.0 * frac - 1.0  # -1..1
-            return math.sqrt(max(0.0, 1.0 - q * q))
-        if shape == "formula":
-            formula = str(w.get("formula", "sin(x)") or "sin(x)")
-            # evaluate safely with math functions; x = phase angle p
-            try:
-                allowed = {k: getattr(math, k) for k in dir(math) if not k.startswith("_")}
-                allowed.update({
-                    "x": p, "p": p, "t": frac, "s": s, "frac": frac,
-                    "pi": math.pi, "tau": math.tau, "e": math.e,
-                    "abs": abs, "min": min, "max": max, "pow": pow, "round": round,
-                })
-                val = eval(formula, {"__builtins__": {}}, allowed)
-                return float(val)
-            except Exception:
-                return math.sin(p)
-        # sine default
-        return math.sin(p)
 
-    shape = str(w.get("shape", "sine") or "sine").lower()
-    formula = str(w.get("formula", "sin(x)") or "sin(x)")
-    formula_env = None
-    if shape == "formula":
-        allowed_base = {k: getattr(math, k) for k in dir(math) if not k.startswith("_")}
-        allowed_base.update({"pi": math.pi, "tau": math.tau, "e": math.e,
-                             "abs": abs, "min": min, "max": max, "pow": pow, "round": round,
-                             "sign": lambda v: (1.0 if v > 0 else (-1.0 if v < 0 else 0.0)),
-                             "r": max(1.0, float(w.get("amplitude", 8.0) or 8.0)),
-                             "n": 0.0,
-                             "a": float(w.get("amplitude", 8.0) or 8.0),
-                             "f": float(w.get("frequency", 3.0) or 3.0),
-                             "phi": float(w.get("phase", 0.0) or 0.0)})
-        try:
-            expr = _latex_to_python_expr(formula)
-        except Exception:
-            expr = "sin(x)"
-        formula_env = (expr, allowed_base)
     out = []
     for i, (pt, s, nrmv) in enumerate(zip(base_pts, base_s, normals)):
         x, y = pt
         nx, ny = nrmv
-        p = (s * freq * math.tau) + phase
-        if freq != 0:
-            if shape == "formula" and formula_env is not None:
-                fstr, abase = formula_env
-                try:
-                    env = dict(abase)
-                    frac = (p / math.tau) - math.floor(p / math.tau)
-                    env.update({"x": p, "p": p, "t": frac, "s": s, "frac": frac})
-                    wave = float(eval(fstr, {"__builtins__": {}}, env))
-                except Exception:
-                    wave = math.sin(p)
-            else:
-                tval = p / math.tau
-                frac = tval - math.floor(tval)
-                if shape == "triangle":
-                    wave = 4.0 * abs(frac - 0.5) - 1.0
-                elif shape == "square":
-                    wave = 1.0 if frac < 0.5 else -1.0
-                elif shape == "sawtooth":
-                    wave = 2.0 * frac - 1.0
-                elif shape == "circular":
-                    if frac < 0.5:
-                        q = 4.0 * frac - 1.0
-                        wave = math.sqrt(max(0.0, 1.0 - q * q))
-                    else:
-                        q = 4.0 * (frac - 0.5) - 1.0
-                        wave = -math.sqrt(max(0.0, 1.0 - q * q))
-                elif shape == "half_circle":
-                    q = 2.0 * frac - 1.0
-                    wave = math.sqrt(max(0.0, 1.0 - q * q))
-                else:
-                    wave = math.sin(p)
-        else:
-            wave = 0.0
-        nz = _smooth_noise1d(s * max(1.0, freq) * 4.0, seed=seed, scale=noise_scale) if noise_amt != 0 else 0.0
-        offset = amp * wave + noise_amt * nz
+        offset = 0.0
+        for ev in evaluators:
+            offset += ev["amp_px"] * _wave_value_for(ev, s)
+            if ev["noise"] != 0.0:
+                nz = _smooth_noise1d(s * ev["cycles"] * 4.0, seed=ev["seed"], scale=ev["noise_scale"])
+                offset += ev["noise_px"] * nz
         out.append((x + nx * offset, y + ny * offset))
 
     # Keep distorted curve endpoints exactly on the base/guide curve endpoints
@@ -2387,7 +2711,7 @@ def draw_panel(screen, fonts, mouse_pos, state):
     pygame.draw.line(screen, PANEL_BORDER, (PANEL_X, 0), (PANEL_X, HEIGHT), 2)
 
     x = PANEL_X + 20
-    y = 18
+    y = 18 - int(state.get("panel_scroll", 0) or 0)
     title = font_title.render("Draw" if state["tool_mode"] == "draw" else "Selection", True, TEXT_COLOR)
     screen.blit(title, (x, y))
     y += 36
@@ -2585,46 +2909,110 @@ def draw_panel(screen, fonts, mouse_pos, state):
                 state["wave_slider_rects"] = {}
 
                 if has_wave:
-                    wave = _get_wave_style(comp)
+                    waves_all = _get_wave_styles(comp)
+                    n_waves = len(waves_all)
+                    # active (expanded) wave index, clamped to the current stack
+                    wi = int(state.get("wave_active_index", 0) or 0)
+                    if not (0 <= wi < n_waves):
+                        wi = max(0, n_waves - 1)
+                    wave = waves_all[wi]
                     enabled = bool(wave.get("enabled"))
-                    row = pygame.Rect(x, y, PANEL_W - 40, 28)
-                    rem_w = 28
-                    tog_rect = pygame.Rect(row.x, row.y, row.w - rem_w - 4, row.h)
-                    rem_rect = pygame.Rect(row.right - rem_w, row.y, rem_w, row.h)
-                    state["wave_toggle_rect"] = tog_rect
-                    state["wave_remove_rect"] = rem_rect
-                    bg = TOOL_ACTIVE if enabled else (BUTTON_HOVER if tog_rect.collidepoint(mouse_pos) else BUTTON_BG)
-                    pygame.draw.rect(screen, bg, tog_rect, border_radius=6)
-                    pygame.draw.rect(screen, ACCENT if enabled else BUTTON_BORDER, tog_rect, 2 if enabled else 1, border_radius=6)
-                    t = font_small.render(f"Wave distortion: {'ON' if enabled else 'OFF'}", True, ACCENT if enabled else TEXT_COLOR)
-                    screen.blit(t, (tog_rect.x + 8, tog_rect.y + 6))
-                    rbg = BUTTON_HOVER if rem_rect.collidepoint(mouse_pos) else BUTTON_BG
-                    pygame.draw.rect(screen, rbg, rem_rect, border_radius=6)
-                    pygame.draw.rect(screen, BUTTON_BORDER, rem_rect, 1, border_radius=6)
-                    xt = font_small.render("×", True, (140, 60, 60))
-                    screen.blit(xt, xt.get_rect(center=rem_rect.center))
-                    y += 34
-
-                    # Wave shape selector
-                    screen.blit(font_small.render("Shape", True, TEXT_COLOR), (x, y)); y += 20
                     shape = str(wave.get("shape", "sine") or "sine").lower()
-                    shape_labels = [("sine", "Sine"), ("triangle", "Tri"), ("square", "Sq"), ("sawtooth", "Saw"), ("circular", "Circ"), ("half_circle", "Half"), ("formula", "Formula")]
+
+                    # ---- modifier stack rows: click a row to edit that wave ----
+                    state["wave_row_rects"] = []
+                    row_h = 26
+                    for i, wv in enumerate(waves_all):
+                        row = pygame.Rect(x, y, PANEL_W - 40, row_h)
+                        is_active = (i == wi)
+                        wv_on = bool(wv.get("enabled"))
+                        rbg = (44, 52, 76) if is_active else (BUTTON_HOVER if row.collidepoint(mouse_pos) else BUTTON_BG)
+                        pygame.draw.rect(screen, rbg, row, border_radius=6)
+                        pygame.draw.rect(screen, ACCENT if is_active else BUTTON_BORDER, row, 2 if is_active else 1, border_radius=6)
+                        wshape_i = str(wv.get("shape", "sine") or "sine").lower()
+                        if wshape_i == "noise":
+                            lbl = f"Noise {i + 1}"
+                        else:
+                            wlabel = WAVE_SHAPE_LABEL_DICT.get(wshape_i, "Wave")
+                            lbl = f"Wave {i + 1} \u00b7 {wlabel}"
+                        t = font_small.render(lbl, True, TEXT_COLOR if is_active else MUTED_COLOR)
+                        screen.blit(t, (row.x + 8, row.y + 5))
+                        if is_active:
+                            tog_rect = pygame.Rect(row.right - 74, row.y + 3, 46, row_h - 6)
+                            rem_rect = pygame.Rect(row.right - 26, row.y + 3, 22, row_h - 6)
+                            state["wave_toggle_rect"] = tog_rect
+                            state["wave_remove_rect"] = rem_rect
+                            tbg = TOOL_ACTIVE if wv_on else (BUTTON_HOVER if tog_rect.collidepoint(mouse_pos) else BUTTON_BG)
+                            pygame.draw.rect(screen, tbg, tog_rect, border_radius=5)
+                            pygame.draw.rect(screen, ACCENT if wv_on else BUTTON_BORDER, tog_rect, 1, border_radius=5)
+                            tt = font_small.render("ON" if wv_on else "OFF", True, ACCENT if wv_on else MUTED_COLOR)
+                            screen.blit(tt, tt.get_rect(center=tog_rect.center))
+                            xbg = BUTTON_HOVER if rem_rect.collidepoint(mouse_pos) else BUTTON_BG
+                            pygame.draw.rect(screen, xbg, rem_rect, border_radius=5)
+                            pygame.draw.rect(screen, BUTTON_BORDER, rem_rect, 1, border_radius=5)
+                            xt = font_small.render("\u00d7", True, (205, 115, 115))
+                            screen.blit(xt, xt.get_rect(center=rem_rect.center))
+                        else:
+                            stt = font_small.render("ON" if wv_on else "OFF", True, ACCENT if wv_on else MUTED_COLOR)
+                            screen.blit(stt, (row.right - 8 - stt.get_width(), row.y + 5))
+                        state["wave_row_rects"].append((i, row))
+                        y += row_h + 2
+                    y += 4
+
+                    # ---- live preview of the composed wave (instant feedback) ----
+                    screen.blit(font_small.render("Preview", True, TEXT_COLOR), (x, y))
+                    fval = float(wave.get("frequency", 0.0))
+                    if fval > 1.0:
+                        # legacy files: frequency meant "N cycles across the curve"
+                        cap_txt = f"density {fval:.1f}" if shape == "noise" else f"{fval:.1f} cycles"
+                    else:
+                        # new semantics: cycle length = freq * bbox diagonal
+                        cap_txt = f"cycle {fval:.2f}x diag"
+                    cyc_t = font_small.render(cap_txt, True, MUTED_COLOR)
+                    screen.blit(cyc_t, (x + PANEL_W - 40 - cyc_t.get_width(), y))
+                    y += 18
+                    prev_rect = pygame.Rect(x, y, PANEL_W - 40, 36)
+                    _draw_wave_graph(screen, prev_rect, _wave_preview_polyline(wave), ACCENT if enabled else (128, 134, 148))
+                    if not enabled:
+                        hint = font_small.render("disabled - click ON to apply", True, (178, 182, 194))
+                        screen.blit(hint, hint.get_rect(center=prev_rect.center))
+                    y += 36 + 6
+
+                    # ---- add another wave on top of the stack ----
+                    add_rect = pygame.Rect(x, y, PANEL_W - 40, 24)
+                    state["wave_add_rect"] = add_rect
+                    abg = BUTTON_HOVER if add_rect.collidepoint(mouse_pos) else BUTTON_BG
+                    pygame.draw.rect(screen, abg, add_rect, border_radius=5)
+                    pygame.draw.rect(screen, BUTTON_BORDER, add_rect, 1, border_radius=5)
+                    at = font_small.render("+ Add Wave distortion", True, TEXT_COLOR)
+                    screen.blit(at, at.get_rect(center=add_rect.center))
+                    y += 24 + 6
+
+                    # ---- shape selector: waveform thumbnail icons ----
+                    screen.blit(font_small.render("Shape", True, TEXT_COLOR), (x, y)); y += 20
                     shape_rects = {}
                     bw = (PANEL_W - 40 - 8) // 3
-                    for i, (key, label) in enumerate(shape_labels):
+                    for i, (key, label) in enumerate(WAVE_SHAPE_LABELS):
                         rowi, coli = divmod(i, 3)
-                        r = pygame.Rect(x + coli * (bw + 4), y + rowi * 28, bw, 24)
+                        r = pygame.Rect(x + coli * (bw + 4), y + rowi * 38, bw, 34)
                         shape_rects[key] = r
                         active = (shape == key)
                         bg = TOOL_ACTIVE if active else (BUTTON_HOVER if r.collidepoint(mouse_pos) else BUTTON_BG)
                         pygame.draw.rect(screen, bg, r, border_radius=5)
                         pygame.draw.rect(screen, ACCENT if active else BUTTON_BORDER, r, 2 if active else 1, border_radius=5)
+                        # miniature waveform preview of THIS shape
+                        icon_wave = dict(wave)
+                        icon_wave["shape"] = key
+                        icon_rect = pygame.Rect(r.x + 4, r.y + 4, r.w - 8, 13)
+                        _draw_wave_graph(screen, icon_rect, _wave_icon_polyline(icon_wave),
+                                         ACCENT if active else (176, 182, 196),
+                                         bg=(40, 46, 66) if active else (34, 37, 48), line_w=1)
                         t = font_small.render(label, True, ACCENT if active else TEXT_COLOR)
-                        screen.blit(t, t.get_rect(center=r.center))
+                        screen.blit(t, t.get_rect(center=(r.centerx, r.y + 25)))
                     state["wave_shape_rects"] = shape_rects
-                    y += ((len(shape_labels) + 2) // 3) * 28 + 6
+                    y += ((len(WAVE_SHAPE_LABELS) + 2) // 3) * 38 + 4
 
-                    # Formula input (for formula shape)
+                    # Formula input (contextual: only for the formula shape)
                     state["wave_formula_rect"] = pygame.Rect(0,0,0,0)
                     if shape == "formula":
                         screen.blit(font_small.render("Formula (x=p, t,s)", True, TEXT_COLOR), (x, y)); y += 18
@@ -2645,27 +3033,110 @@ def draw_panel(screen, fonts, mouse_pos, state):
                         tt = font_small.render(ftxt_disp, True, TEXT_COLOR)
                         screen.blit(tt, (frect.x + 6, frect.y + 5))
                         y += 32
+                    else:
+                        state["wave_formula_focus"] = False
 
-                    def _wave_slider(label, key, val, lo, hi, fmt=None):
+                    # Custom wave drawing mode - dedicated preview box (contextual)
+                    BOX_W = 180
+                    BOX_H = 80
+                    state["wave_custom_draw"] = False
+                    if shape != "custom":
+                        state["wave_custom_finished"] = False
+                    state["wave_custom_box_rect"] = pygame.Rect(0, 0, 0, 0)
+                    if shape == "custom":
+                        # dedicated box for the custom wave (Bit Invader style:
+                        # hold and drag inside to paint the waveform)
+                        bx = x + 8
+                        by = y + 8
+                        # draw box background
+                        box_rect = pygame.Rect(bx, by, BOX_W, BOX_H)
+                        state["wave_custom_box_rect"] = box_rect
+                        cp = wave.get("custom_points", None)
+                        if cp and len(cp) >= 2:
+                            bg_col = (30, 30, 40)
+                        else:
+                            bg_col = (50, 50, 60)
+                        pygame.draw.rect(screen, bg_col, box_rect, border_radius=4)
+                        pygame.draw.rect(screen, (100, 100, 120), box_rect, 2, border_radius=4)
+
+                        # draw the waveform as one continuous polyline
+                        # (no per-point vertex handles: painting is the only edit)
+                        if cp and len(cp) >= 2:
+                            # scale samples to fit inside the box
+                            # cx in [0,1], cy in [-1,1]
+                            prev_px, prev_py = None, None
+                            for cx, cy in cp:
+                                px = bx + 6 + cx * (BOX_W - 12)
+                                py = by + BOX_H//2 + cy * (BOX_H//2 - 4)  # map -1..1 to box height
+                                if prev_px is not None:
+                                    pygame.draw.line(screen, (100, 150, 255), (prev_px, prev_py), (int(px), int(py)), 2)
+                                prev_px, prev_py = int(px), int(py)
+
+                            # close the path by connecting last to first
+                            if len(cp) > 2:
+                                pygame.draw.line(screen, (100, 150, 255), (int(prev_px), int(prev_py)), (int(bx+6), int(by+BOX_H//2)), 1)
+
+                        # grid lines inside box (subtle)
+                        pygame.draw.line(screen, (70, 70, 80), (bx + 6, by + 4), (bx + BOX_W - 6, by + 4), 1)
+                        pygame.draw.line(screen, (70, 70, 80), (bx + 6, by + BOX_H - 4), (bx + BOX_W - 6, by + BOX_H - 4), 1)
+
+                        # Smooth button next to the box (relaxes painted samples)
+                        has_wave_pts = bool(cp and len(cp) >= 2)
+                        smooth_rect = pygame.Rect(bx, by + BOX_H + 6, 74, 20)
+                        state["wave_smooth_rect"] = smooth_rect
+                        sbg = BUTTON_HOVER if smooth_rect.collidepoint(mouse_pos) else BUTTON_BG
+                        pygame.draw.rect(screen, sbg, smooth_rect, border_radius=5)
+                        pygame.draw.rect(screen, BUTTON_BORDER if has_wave_pts else (70, 70, 80), smooth_rect, 1, border_radius=5)
+                        st_text = font_small.render("Smooth", True, TEXT_COLOR if has_wave_pts else MUTED_COLOR)
+                        screen.blit(st_text, st_text.get_rect(center=smooth_rect.center))
+
+                        if has_wave_pts:
+                            pt_count = f"{len(cp)} samples"
+                        else:
+                            pt_count = "hold & drag to draw"
+                        instr = font_small.render(f"Custom: {pt_count}", True, (200, 200, 200))
+                        screen.blit(instr, (smooth_rect.right + 8, smooth_rect.y + 3))
+
+                        # finish instruction
+                        finish_instr = font_small.render("Esc to finish", True, (180, 180, 180))
+                        screen.blit(finish_instr, (smooth_rect.right + 8, smooth_rect.y + 18))
+
+                        # advance past the box, its button and instructions
+                        y = by + BOX_H + 34
+
+                        # set custom_draw state (Esc/Enter finishes editing until
+                        # the box or the Custom shape button is clicked again)
+                        state["wave_custom_draw"] = not bool(state.get("wave_custom_finished", False))
+                    # NOTE: when switching away from "custom", keep the stored
+                    # custom_points so they are restored if the user switches back.
+
+                    # ---- parameters (contextual: grayed out when inapplicable) ----
+                    screen.blit(font_small.render("Parameters", True, TEXT_COLOR), (x, y)); y += 20
+
+                    def _wave_slider(label, key, val, lo, hi, fmt=None, enabled=True):
                         nonlocal y
-                        screen.blit(font_small.render(label, True, TEXT_COLOR), (x, y))
+                        col = TEXT_COLOR if enabled else MUTED_COLOR
+                        screen.blit(font_small.render(label, True, col), (x, y))
                         txt = fmt(val) if fmt else str(val)
-                        vt = font_small.render(txt, True, ACCENT)
+                        vt = font_small.render(txt, True, ACCENT if enabled else MUTED_COLOR)
                         screen.blit(vt, (x + PANEL_W - 40 - vt.get_width(), y))
                         y += 18
                         track = pygame.Rect(x, y, PANEL_W - 40, 6)
-                        pygame.draw.rect(screen, (220, 225, 235), track, border_radius=3)
+                        track_col = (220, 225, 235) if enabled else (208, 212, 220)
+                        pygame.draw.rect(screen, track_col, track, border_radius=3)
                         if hi == lo:
                             tx = track.x
                         else:
                             tx = int(track.x + (clamp(val, lo, hi) - lo) / (hi - lo) * track.w)
                         filled = pygame.Rect(track.x, track.y, max(0, tx - track.x), track.h)
-                        pygame.draw.rect(screen, ACCENT, filled, border_radius=3)
-                        pygame.draw.circle(screen, (255, 255, 255), (tx, track.centery), 7)
-                        pygame.draw.circle(screen, ACCENT, (tx, track.centery), 7, width=2)
-                        hit = track.inflate(0, 16)
-                        state.setdefault("wave_slider_rects", {})[key] = (hit, lo, hi)
-                        y += 16
+                        pygame.draw.rect(screen, ACCENT if enabled else (180, 186, 198), filled, border_radius=3)
+                        pygame.draw.circle(screen, (255, 255, 255) if enabled else (226, 229, 234), (tx, track.centery), 7)
+                        pygame.draw.circle(screen, ACCENT if enabled else (180, 186, 198), (tx, track.centery), 7, width=2)
+                        if enabled:
+                            # grayed-out sliders are not interactive
+                            hit = track.inflate(0, 16)
+                            state.setdefault("wave_slider_rects", {})[key] = (hit, lo, hi)
+                        y += 8
 
                     amp_v = float(wave.get("amplitude", 0.0))
                     freq_v = float(wave.get("frequency", 0.0))
@@ -2673,17 +3144,39 @@ def draw_panel(screen, fonts, mouse_pos, state):
                     noise_v = float(wave.get("noise", 0.0))
                     seed_v = int(wave.get("seed", 0) or 0)
                     nscale_v = float(wave.get("noise_scale", 2.0))
+                    noise_on = abs(noise_v) > 1e-6
                     _wave_slider("Amplitude", "amplitude", amp_v, 0.0, 100.0, fmt=lambda v: str(int(round(v))))
-                    _wave_slider("Frequency", "frequency", freq_v, 0.0, 20.0, fmt=lambda v: f"{v:.1f}")
-                    _wave_slider("Phase", "phase", phase_v, 0.0, 360.0, fmt=lambda v: str(int(round(v))))
-                    _wave_slider("Noise", "noise", noise_v, 0.0, 100.0, fmt=lambda v: str(int(round(v))))
-                    _wave_slider("Noise scale", "noise_scale", nscale_v, 0.2, 10.0, fmt=lambda v: f"{v:.1f}")
-                    _wave_slider("Seed", "seed", seed_v, 0.0, 999.0, fmt=lambda v: str(int(round(v))))
+                    _wave_slider("Frequency", "frequency", freq_v, 0.01, 1.0, fmt=lambda v: f"{v:.2f}")
+                    if shape == "noise":
+                        # standalone noise layer: amplitude (amount) and frequency
+                        # (density) drive it; phase does not apply to random noise
+                        _wave_slider("Phase", "phase", phase_v, 0.0, 360.0, fmt=lambda v: str(int(round(v))), enabled=False)
+                        _wave_slider("Noise scale", "noise_scale", nscale_v, 0.2, 10.0, fmt=lambda v: f"{v:.1f}")
+                        _wave_slider("Seed", "seed", seed_v, 0.0, 999.0, fmt=lambda v: str(int(round(v))))
+                    else:
+                        _wave_slider("Phase", "phase", phase_v, 0.0, 360.0, fmt=lambda v: str(int(round(v))))
+                        if noise_on:
+                            # legacy per-wave noise (saved by older versions) stays
+                            # adjustable here; new noise belongs in its own row
+                            _wave_slider("Noise", "noise", noise_v, 0.0, 100.0, fmt=lambda v: str(int(round(v))))
+                            _wave_slider("Noise scale", "noise_scale", nscale_v, 0.2, 10.0, fmt=lambda v: f"{v:.1f}")
+                            _wave_slider("Seed", "seed", seed_v, 0.0, 999.0, fmt=lambda v: str(int(round(v))))
+                    # Reverse toggle: invert the wave (-f(x))
+                    rev = bool(wave.get("reverse"))
+                    rev_rect = pygame.Rect(x, y, PANEL_W - 40, 22)
+                    state["wave_reverse_rect"] = rev_rect
+                    rbg = TOOL_ACTIVE if rev else (BUTTON_HOVER if rev_rect.collidepoint(mouse_pos) else BUTTON_BG)
+                    pygame.draw.rect(screen, rbg, rev_rect, border_radius=5)
+                    pygame.draw.rect(screen, ACCENT if rev else BUTTON_BORDER, rev_rect, 1, border_radius=5)
+                    rt = font_small.render(f"Reverse wave -f(x): {'ON' if rev else 'OFF'}", True, TEXT_COLOR)
+                    screen.blit(rt, (rev_rect.x + 8, rev_rect.y + 4))
+                    y += 26
                     y += 4
                 else:
                     add_rect = pygame.Rect(x, y, PANEL_W - 40, 28)
                     state["wave_add_rect"] = add_rect
                     state["wave_shape_rects"] = {}
+                    state["wave_row_rects"] = []
                     bg = BUTTON_HOVER if add_rect.collidepoint(mouse_pos) else BUTTON_BG
                     pygame.draw.rect(screen, bg, add_rect, border_radius=6)
                     pygame.draw.rect(screen, BUTTON_BORDER, add_rect, 1, border_radius=6)
@@ -2699,6 +3192,8 @@ def draw_panel(screen, fonts, mouse_pos, state):
                 state["wave_add_rect"] = pygame.Rect(0,0,0,0)
                 state["wave_remove_rect"] = pygame.Rect(0,0,0,0)
                 state["wave_slider_rects"] = {}
+                state["wave_shape_rects"] = {}
+                state["wave_row_rects"] = []
         else:
             state["curve_hide_rect"] = pygame.Rect(0,0,0,0)
             state["curve_redraw_rect"] = pygame.Rect(0,0,0,0)
@@ -2706,6 +3201,8 @@ def draw_panel(screen, fonts, mouse_pos, state):
             state["wave_add_rect"] = pygame.Rect(0,0,0,0)
             state["wave_remove_rect"] = pygame.Rect(0,0,0,0)
             state["wave_slider_rects"] = {}
+            state["wave_shape_rects"] = {}
+            state["wave_row_rects"] = []
 
         if sel_count == 0:
             info = font_small.render("Select a stroke", True, MUTED_COLOR)
@@ -2998,6 +3495,20 @@ def draw_panel(screen, fonts, mouse_pos, state):
         txt = font_small.render(line, True, MUTED_COLOR)
         screen.blit(txt, (x, y)); y += 18
 
+    # Track total (unscrolled) content height so the main loop can clamp scrolling.
+    _scroll = int(state.get("panel_scroll", 0) or 0)
+    content_bottom = y + _scroll
+    state["panel_content_bottom"] = content_bottom
+    max_scroll = max(0, content_bottom + 24 - HEIGHT)
+    if max_scroll > 0:
+        # simple scrollbar on the panel's right edge
+        track = pygame.Rect(PANEL_X + PANEL_W - 7, 6, 5, HEIGHT - 12)
+        pygame.draw.rect(screen, (58, 62, 74), track, border_radius=3)
+        frac = min(1.0, (HEIGHT - 40) / max(1, content_bottom))
+        thumb_h = max(30, int(track.h * frac))
+        thumb_y = track.y + int((track.h - thumb_h) * (clamp(_scroll, 0, max_scroll) / max_scroll))
+        pygame.draw.rect(screen, (148, 154, 168), pygame.Rect(track.x, thumb_y, track.w, thumb_h), border_radius=3)
+
 
 def to_canvas(pos):
     return (pos[0] - CANVAS_X, pos[1])
@@ -3015,8 +3526,9 @@ def clamp_to_canvas(pos):
 
 
 def main():
+    global WIDTH, HEIGHT, CANVAS_W, CANVAS_X, PANEL_X
     pygame.init()
-    screen = pygame.display.set_mode((WIDTH, HEIGHT))
+    screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.RESIZABLE)
     pygame.display.set_caption("Cairo Vector Draw - strokes to Bezier curves")
     clock = pygame.time.Clock()
 
@@ -3116,8 +3628,17 @@ def main():
     wave_shape_rects_cache = {}
     wave_formula_rect_cache = pygame.Rect(0, 0, 0, 0)
     wave_formula_focus = False
+    wave_custom_draw = False
+    wave_custom_box_rect_cache = pygame.Rect(0, 0, 0, 0)
+    wave_smooth_rect_cache = pygame.Rect(0, 0, 0, 0)
+    wave_reverse_rect_cache = pygame.Rect(0, 0, 0, 0)
+    wave_custom_drag = None
+    wave_active_index = 0
+    wave_row_rects_cache = []
+    wave_custom_finished = False
     wave_slider_rects_cache = {}
     wave_slider_drag = None
+    panel_scroll = 0
     ref_load_rect_cache = pygame.Rect(0, 0, 0, 0)
     ref_vis_rect_cache = pygame.Rect(0, 0, 0, 0)
     ref_clear_rect_cache = pygame.Rect(0, 0, 0, 0)
@@ -3214,6 +3735,15 @@ def main():
             "wave_shape_rects": wave_shape_rects_cache,
             "wave_formula_rect": wave_formula_rect_cache,
             "wave_formula_focus": wave_formula_focus,
+            "wave_custom_draw": wave_custom_draw,
+            "wave_custom_box_rect": wave_custom_box_rect_cache,
+            "wave_smooth_rect": wave_smooth_rect_cache,
+            "wave_reverse_rect": wave_reverse_rect_cache,
+            "wave_custom_drag": wave_custom_drag,
+            "wave_active_index": wave_active_index,
+            "wave_row_rects": wave_row_rects_cache,
+            "wave_custom_finished": wave_custom_finished,
+            "panel_scroll": panel_scroll,
             "wave_slider_rects": wave_slider_rects_cache,
             "strokes": strokes,
             "reference_image": reference_image,
@@ -3227,6 +3757,27 @@ def main():
             if event.type == pygame.QUIT:
                 running = False
                 break
+            if event.type == pygame.VIDEORESIZE:
+                # Handle window resize - maintain layout
+                new_w = max(800, event.w)
+                new_h = max(400, event.h)
+                # Recreate screen surface with new size
+                screen = pygame.display.set_mode((new_w, new_h), pygame.RESIZABLE)
+                # Recalculate canvas geometry based on new size
+                WIDTH = new_w
+                HEIGHT = new_h
+                CANVAS_W = new_w - LEFT_BAR_W - PANEL_W
+                CANVAS_X = LEFT_BAR_W
+                PANEL_X = LEFT_BAR_W + CANVAS_W
+                # Recreate the Cairo drawing surface to match the new canvas size
+                cairo_surface = make_cairo_surface(CANVAS_W, HEIGHT)
+
+            if event.type == pygame.MOUSEWHEEL:
+                # scroll the right panel when the pointer is over it
+                _mx, _my = pygame.mouse.get_pos()
+                if _mx >= PANEL_X:
+                    panel_scroll = max(0, int(panel_scroll - event.y * 48))
+                    state["panel_scroll"] = panel_scroll
 
             if slider.handle_event(event):
                 max_points_per_curve = slider.value
@@ -3265,7 +3816,8 @@ def main():
                         comps = _stroke_components(strokes[si])
                         if 0 <= comp_i < len(comps):
                             comps[comp_i] = dict(comps[comp_i])
-                            w = _get_wave_style(comps[comp_i])
+                            wi = int(state.get("wave_active_index", 0) or 0)
+                            w = _get_wave_style(comps[comp_i], wi)
                             formula = str(w.get("formula", "sin(x)") or "")
                             if event.key == pygame.K_ESCAPE or event.key == pygame.K_RETURN or event.key == pygame.K_KP_ENTER:
                                 wave_formula_focus = False
@@ -3273,20 +3825,25 @@ def main():
                             elif event.key == pygame.K_BACKSPACE:
                                 formula = formula[:-1]
                                 w["formula"] = formula
-                                _set_wave_style(comps[comp_i], w)
+                                _set_wave_style(comps[comp_i], w, wi)
                                 strokes[si]["components"] = comps
                             elif event.unicode and event.unicode.isprintable():
                                 formula += event.unicode
                                 w["formula"] = formula
-                                _set_wave_style(comps[comp_i], w)
+                                _set_wave_style(comps[comp_i], w, wi)
                                 strokes[si]["components"] = comps
                     # consume key while editing formula (except we already handled)
                     if wave_formula_focus or event.key in (pygame.K_ESCAPE, pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_BACKSPACE) or (event.unicode and event.unicode.isprintable()):
                         pass
-                    # prevent other shortcuts while typing formula
-                    if wave_formula_focus:
-                        # still allow continuing event loop; skip other handlers below
-                        pass
+                elif state.get("wave_custom_draw") and tool_mode == "selection" and selection_submode == "curve" and selected_curve and selected_curve[0] in selected_strokes:
+                    # custom wave draw mode key handling: Esc/Enter finishes
+                    si, comp_i = selected_curve
+                    if 0 <= si < len(strokes):
+                        comps = _stroke_components(strokes[si])
+                        if 0 <= comp_i < len(comps):
+                            if event.key == pygame.K_ESCAPE or event.key == pygame.K_RETURN or event.key == pygame.K_KP_ENTER:
+                                state["wave_custom_draw"] = False
+                                state["wave_custom_finished"] = True
                 elif event.key == pygame.K_ESCAPE:
                     if redrawing_curve is not None:
                         redrawing_curve = None
@@ -3447,43 +4004,113 @@ def main():
                             comps = _stroke_components(strokes[si])
                             if 0 <= comp_i < len(comps):
                                 comps[comp_i] = dict(comps[comp_i])
-                                w = _get_wave_style(comps[comp_i])
+                                # append a new wave style to the stack and edit it
+                                n = len(_get_wave_styles(comps[comp_i]))
+                                w = default_wave_params()
                                 w["enabled"] = True
-                                _set_wave_style(comps[comp_i], w)
+                                _set_wave_style(comps[comp_i], w, n)
                                 strokes[si]["components"] = comps
+                                state["wave_active_index"] = n
+                                state["wave_custom_finished"] = False
                         wave_formula_focus = False
                         state["wave_formula_focus"] = False
+                        state["wave_custom_draw"] = False
                     elif tool_mode == "selection" and selection_submode == "curve" and selected_curve and selected_curve[0] in selected_strokes and state.get("wave_remove_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
                         si, comp_i = selected_curve
                         if 0 <= si < len(strokes):
                             comps = _stroke_components(strokes[si])
                             if 0 <= comp_i < len(comps):
                                 comps[comp_i] = dict(comps[comp_i])
-                                _remove_wave_style(comps[comp_i])
+                                wi = int(state.get("wave_active_index", 0) or 0)
+                                _remove_wave_style(comps[comp_i], wi)
                                 strokes[si]["components"] = comps
+                                n = len(_get_wave_styles(comps[comp_i]))
+                                state["wave_active_index"] = (max(0, min(wi, n - 1)) if n else 0)
                         wave_formula_focus = False
                         state["wave_formula_focus"] = False
+                        state["wave_custom_draw"] = False
+                        state["wave_custom_finished"] = False
                     elif tool_mode == "selection" and selection_submode == "curve" and selected_curve and selected_curve[0] in selected_strokes and state.get("wave_toggle_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
                         si, comp_i = selected_curve
                         if 0 <= si < len(strokes):
                             comps = _stroke_components(strokes[si])
                             if 0 <= comp_i < len(comps):
                                 comps[comp_i] = dict(comps[comp_i])
-                                w = _get_wave_style(comps[comp_i])
+                                wi = int(state.get("wave_active_index", 0) or 0)
+                                w = _get_wave_style(comps[comp_i], wi)
                                 w["enabled"] = not bool(w.get("enabled"))
-                                _set_wave_style(comps[comp_i], w)
+                                _set_wave_style(comps[comp_i], w, wi)
                                 strokes[si]["components"] = comps
                         wave_formula_focus = False
                         state["wave_formula_focus"] = False
+                    elif tool_mode == "selection" and selection_submode == "curve" and selected_curve and selected_curve[0] in selected_strokes and any(_rr.collidepoint(event.pos) for _ri, _rr in (state.get("wave_row_rects") or [])):
+                        # click a stack row to make that wave the active/edited one
+                        for _ri, _rr in (state.get("wave_row_rects") or []):
+                            if _rr.collidepoint(event.pos):
+                                if _ri != int(state.get("wave_active_index", 0) or 0):
+                                    state["wave_active_index"] = _ri
+                                    state["wave_formula_focus"] = False
+                                    state["wave_custom_draw"] = False
+                                    state["wave_custom_finished"] = False
+                                    wave_formula_focus = False
+                                break
                     elif tool_mode == "selection" and selection_submode == "curve" and selected_curve and selected_curve[0] in selected_strokes:
                         _w_hit = False
+                        wi = int(state.get("wave_active_index", 0) or 0)
                         # formula input focus
                         f_rect = state.get("wave_formula_rect", pygame.Rect(0,0,0,0))
                         if f_rect.collidepoint(event.pos) and f_rect.w > 0 and f_rect.h > 0:
                             wave_formula_focus = True
                             state["wave_formula_focus"] = True
                             _w_hit = True
-                        # add/remove handled above; check sliders
+                        # Reverse direction toggle for the active wave layer
+                        rev_r = state.get("wave_reverse_rect", pygame.Rect(0, 0, 0, 0))
+                        if rev_r.w > 0 and rev_r.h > 0 and rev_r.collidepoint(event.pos):
+                            si, comp_i = selected_curve
+                            if 0 <= si < len(strokes):
+                                comps = _stroke_components(strokes[si])
+                                if 0 <= comp_i < len(comps):
+                                    comps[comp_i] = dict(comps[comp_i])
+                                    w = _get_wave_style(comps[comp_i], wi)
+                                    w["reverse"] = not bool(w.get("reverse"))
+                                    w["enabled"] = True
+                                    _set_wave_style(comps[comp_i], w, wi)
+                                    strokes[si]["components"] = comps
+                            _w_hit = True
+                        # Smooth button: relax the painted custom samples
+                        smooth_r = state.get("wave_smooth_rect", pygame.Rect(0, 0, 0, 0))
+                        if smooth_r.w > 0 and smooth_r.h > 0 and smooth_r.collidepoint(event.pos):
+                            si, comp_i = selected_curve
+                            if 0 <= si < len(strokes):
+                                comps = _stroke_components(strokes[si])
+                                if 0 <= comp_i < len(comps):
+                                    comps[comp_i] = dict(comps[comp_i])
+                                    w = _get_wave_style(comps[comp_i], wi)
+                                    w["custom_points"] = _custom_smooth_samples(w.get("custom_points"))
+                                    w["enabled"] = True
+                                    _set_wave_style(comps[comp_i], w, wi)
+                                    strokes[si]["components"] = comps
+                            _w_hit = True
+                        # custom wave draw mode: pressing inside the box starts
+                        # a paint stroke (LMMS Bit Invader style)
+                        box = state.get("wave_custom_box_rect", pygame.Rect(0, 0, 0, 0))
+                        if box.w > 0 and box.h > 0 and box.collidepoint(event.pos):
+                            si, comp_i = selected_curve
+                            if 0 <= si < len(strokes):
+                                comps = _stroke_components(strokes[si])
+                                if 0 <= comp_i < len(comps):
+                                    comps[comp_i] = dict(comps[comp_i])
+                                    w = _get_wave_style(comps[comp_i], wi)
+                                    # resume editing if it was finished with Esc
+                                    state["wave_custom_finished"] = False
+                                    state["wave_custom_draw"] = True
+                                    # painting implies wanting it visible
+                                    w["enabled"] = True
+                                    wave_custom_drag = _custom_wave_paint(w, box, event.pos, None)
+                                    state["wave_custom_drag"] = wave_custom_drag
+                                    _set_wave_style(comps[comp_i], w, wi)
+                                    strokes[si]["components"] = comps
+                            _w_hit = True
                         if not _w_hit:
                             for key, (r, lo, hi) in (state.get("wave_slider_rects") or {}).items():
                                 if r.collidepoint(event.pos):
@@ -3492,7 +4119,7 @@ def main():
                                         comps = _stroke_components(strokes[si])
                                         if 0 <= comp_i < len(comps):
                                             comps[comp_i] = dict(comps[comp_i])
-                                            w = _get_wave_style(comps[comp_i])
+                                            w = _get_wave_style(comps[comp_i], wi)
                                             t = (event.pos[0] - r.x) / max(1, r.w - 1)
                                             val = lo + clamp(t, 0.0, 1.0) * (hi - lo)
                                             if key in ("amplitude", "noise", "phase", "seed"):
@@ -3501,9 +4128,9 @@ def main():
                                                 val = float(val)
                                             w[key] = val
                                             w["enabled"] = True
-                                            _set_wave_style(comps[comp_i], w)
+                                            _set_wave_style(comps[comp_i], w, wi)
                                             strokes[si]["components"] = comps
-                                            wave_slider_drag = {"key": key, "rect": r, "lo": lo, "hi": hi, "si": si, "comp_i": comp_i}
+                                            wave_slider_drag = {"key": key, "rect": r, "lo": lo, "hi": hi, "si": si, "comp_i": comp_i, "wi": wi}
                                     _w_hit = True
                                     break
                         if not _w_hit:
@@ -3514,11 +4141,23 @@ def main():
                                         comps = _stroke_components(strokes[si])
                                         if 0 <= comp_i < len(comps):
                                             comps[comp_i] = dict(comps[comp_i])
-                                            w = _get_wave_style(comps[comp_i])
+                                            w = _get_wave_style(comps[comp_i], wi)
                                             w["shape"] = key
                                             w["enabled"] = True
-                                            _set_wave_style(comps[comp_i], w)
+                                            if key == "custom":
+                                                # enter custom wave draw mode
+                                                w["shape"] = "custom"
+                                                if "custom_points" not in w:
+                                                    w["custom_points"] = []
+                                            _set_wave_style(comps[comp_i], w, wi)
                                             strokes[si]["components"] = comps
+                                            if key == "custom":
+                                                state["wave_custom_draw"] = True
+                                                state["wave_custom_finished"] = False
+                                                state["wave_formula_focus"] = False
+                                            else:
+                                                state["wave_custom_draw"] = False
+                                                state["wave_custom_finished"] = False
                                     _w_hit = True
                                     break
                         if not _w_hit and selected_strokes and (selection_submode == "transform" or (selection_submode == "curve" and selected_curve)):
@@ -3937,16 +4576,32 @@ def main():
                     off = ref_drag.get("offset", (0, 0))
                     reference_image["x"] = cpos[0] - off[0]
                     reference_image["y"] = cpos[1] - off[1]
+                elif wave_custom_drag is not None and pygame.mouse.get_pressed()[0] and selected_curve and selected_curve[0] in selected_strokes:
+                    # hold-drag painting inside the custom wave box
+                    box = state.get("wave_custom_box_rect", pygame.Rect(0, 0, 0, 0))
+                    if box.w > 0 and box.h > 0:
+                        si, comp_i = selected_curve
+                        if 0 <= si < len(strokes):
+                            comps = _stroke_components(strokes[si])
+                            if 0 <= comp_i < len(comps):
+                                comps[comp_i] = dict(comps[comp_i])
+                                wi = int(state.get("wave_active_index", 0) or 0)
+                                w = _get_wave_style(comps[comp_i], wi)
+                                wave_custom_drag = _custom_wave_paint(w, box, event.pos, wave_custom_drag)
+                                state["wave_custom_drag"] = wave_custom_drag
+                                _set_wave_style(comps[comp_i], w, wi)
+                                strokes[si]["components"] = comps
                 elif wave_slider_drag is not None and pygame.mouse.get_pressed()[0] and selected_curve and selected_curve[0] in selected_strokes:
                     d = wave_slider_drag
                     si, comp_i = d.get("si"), d.get("comp_i")
                     key = d.get("key")
                     r = d.get("rect")
                     lo, hi = d.get("lo", 0.0), d.get("hi", 1.0)
+                    wi = int(d.get("wi", 0) or 0)
                     if 0 <= si < len(strokes) and 0 <= comp_i < len(_stroke_components(strokes[si])):
                         comps = _stroke_components(strokes[si])
                         comps[comp_i] = dict(comps[comp_i])
-                        w = _get_wave_style(comps[comp_i])
+                        w = _get_wave_style(comps[comp_i], wi)
                         t = (event.pos[0] - r.x) / max(1, r.w - 1)
                         val = lo + clamp(t, 0.0, 1.0) * (hi - lo)
                         if key in ("amplitude", "noise", "phase", "seed"):
@@ -3955,7 +4610,7 @@ def main():
                             val = float(val)
                         w[key] = val
                         w["enabled"] = True
-                        _set_wave_style(comps[comp_i], w)
+                        _set_wave_style(comps[comp_i], w, wi)
                         strokes[si]["components"] = comps
                 elif (picker_drag_sv or picker_drag_hue or picker_drag_alpha) and selected_strokes and (selection_submode == "transform" or (selection_submode == "curve" and selected_curve and color_target == "stroke")):
                     sel_list = sorted(selected_strokes)
@@ -4228,6 +4883,8 @@ def main():
                 drag_last = None; selected_point = None; transform_drag = None
                 picker_drag_sv = False; picker_drag_hue = False; picker_drag_alpha = False; ref_opacity_drag = False
                 wave_slider_drag = None
+                wave_custom_drag = None
+                state["wave_custom_drag"] = None
                 state["picker_drag_sv"] = False; state["picker_drag_hue"] = False; state["picker_drag_alpha"] = False
                 ref_drag = None
                 max_points_per_curve = slider.value
@@ -4283,6 +4940,18 @@ def main():
         wave_shape_rects_cache = state.get("wave_shape_rects", wave_shape_rects_cache)
         wave_formula_rect_cache = state.get("wave_formula_rect", wave_formula_rect_cache)
         wave_formula_focus = state.get("wave_formula_focus", wave_formula_focus)
+        wave_custom_draw = state.get("wave_custom_draw", wave_custom_draw)
+        wave_custom_box_rect_cache = state.get("wave_custom_box_rect", wave_custom_box_rect_cache)
+        wave_smooth_rect_cache = state.get("wave_smooth_rect", wave_smooth_rect_cache)
+        wave_reverse_rect_cache = state.get("wave_reverse_rect", wave_reverse_rect_cache)
+        wave_custom_drag = state.get("wave_custom_drag", wave_custom_drag)
+        wave_active_index = int(state.get("wave_active_index", wave_active_index) or 0)
+        wave_row_rects_cache = state.get("wave_row_rects", wave_row_rects_cache)
+        wave_custom_finished = bool(state.get("wave_custom_finished", wave_custom_finished))
+        panel_scroll = int(state.get("panel_scroll", panel_scroll) or 0)
+        _content_bottom = int(state.get("panel_content_bottom", 0) or 0)
+        _max_scroll = max(0, _content_bottom + 24 - HEIGHT)
+        panel_scroll = max(0, min(panel_scroll, _max_scroll))
         wave_slider_rects_cache = state.get("wave_slider_rects", wave_slider_rects_cache)
         ref_load_rect_cache = state.get("ref_load_rect", ref_load_rect_cache)
         ref_vis_rect_cache = state.get("ref_vis_rect", ref_vis_rect_cache)

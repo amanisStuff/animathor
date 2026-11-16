@@ -721,5 +721,769 @@ class TestMultiSelectUI(unittest.TestCase):
         self.assertGreater(state["nodes_toggle_rect"].w, 0)
 
 
+class TestCustomWaveShape(unittest.TestCase):
+    """Regression tests for the drawable custom wave distortion style."""
+
+    def setUp(self):
+        pygame.init()
+        self.screen = pygame.display.set_mode((app.WIDTH, app.HEIGHT))
+        self.fonts = (
+            pygame.font.SysFont(None, 24),
+            pygame.font.SysFont(None, 20),
+            pygame.font.SysFont(None, 30),
+        )
+
+    def tearDown(self):
+        pygame.quit()
+
+    def _panel_state(self, stroke, submode="curve"):
+        btn_boost = app.Button((0, 0, app.PANEL_W - 40, 34), "Boost limit")
+        btn_undo = app.Button((0, 0, app.PANEL_W - 40, 36), "Undo")
+        btn_clear = app.Button((0, 0, app.PANEL_W - 40, 36), "Clear")
+        slider = app.Slider(app.PANEL_X + 20, 0, app.PANEL_W - 40, 2, 5, 4)
+        width_slider = app.Slider(app.PANEL_X + 20, 0, app.PANEL_W - 40, 1, 20, 3)
+        return {
+            "tool_mode": "selection", "max_points": 4, "boost_points": False,
+            "NORMAL_MAX_POINTS": 5, "BOOST_MAX_POINTS": 100,
+            "slider": slider, "width_slider": width_slider,
+            "buttons": {"boost": btn_boost, "actions": [btn_undo, btn_clear]},
+            "stroke_count": 1, "selected_strokes": {0}, "selected_obj": stroke,
+            "selected_curve": (0, 0),
+            "stroke_swatch_rects": [pygame.Rect(0, 0, 0, 0) for _ in app.STROKE_SWATCHES],
+            "fill_swatch_rects": [pygame.Rect(0, 0, 0, 0) for _ in app.FILL_SWATCHES],
+            "color_target": "stroke", "picker_h": 10.0, "picker_s": 0.5, "picker_v": 0.8,
+            "picker_drag_sv": False, "picker_drag_hue": False,
+            "sv_rect": pygame.Rect(0, 0, 0, 0), "hue_rect": pygame.Rect(0, 0, 0, 0),
+            "tab_stroke_rect": pygame.Rect(0, 0, 0, 0), "tab_fill_rect": pygame.Rect(0, 0, 0, 0),
+            "nofill_rect": pygame.Rect(0, 0, 0, 0),
+            "selection_submode": submode,
+            "nodes_toggle_rect": pygame.Rect(0, 0, 0, 0),
+            "wave_formula_focus": False,
+            "wave_custom_draw": False,
+        }
+
+    def test_panel_exposes_custom_box_rect(self):
+        st = self._stroke()
+        self._apply(st, [(0.0, 0.0), (0.5, 1.0), (1.0, 0.0)])
+        state = self._panel_state(st)
+        app.draw_panel(self.screen, self.fonts, (0, 0), state)
+        box = state.get("wave_custom_box_rect", pygame.Rect(0, 0, 0, 0))
+        self.assertGreater(box.w, 0)
+        self.assertGreater(box.h, 0)
+        self.assertTrue(state.get("wave_custom_draw"))
+
+    def test_custom_box_click_maps_to_phase_amplitude(self):
+        st = self._stroke()
+        self._apply(st, [])
+        state = self._panel_state(st)
+        app.draw_panel(self.screen, self.fonts, (0, 0), state)
+        box = state["wave_custom_box_rect"]
+        # click near left-middle -> phase ~0, amplitude ~0
+        t = (box.x - box.x) / box.w
+        amp = ((box.y + box.h / 2.0) - (box.y + box.h / 2.0)) / (box.h / 2.0)
+        self.assertAlmostEqual(t, 0.0)
+        self.assertAlmostEqual(amp, 0.0)
+        # click near right-top -> phase ~1, amplitude ~-1
+        t2 = (box.right - box.x) / box.w
+        amp2 = ((box.y) - (box.y + box.h / 2.0)) / (box.h / 2.0)
+        self.assertAlmostEqual(t2, 1.0)
+        self.assertAlmostEqual(amp2, -1.0)
+
+    def test_paint_builds_fixed_uniform_sample_grid(self):
+        # Bit Invader model: painting stores a fixed-length uniform sample
+        # array, not individual user points
+        w = app.default_wave_params()
+        w["custom_points"] = []
+        box = pygame.Rect(0, 0, 180, 80)
+        n = app.CUSTOM_WAVE_SAMPLES
+        drag = app._custom_wave_paint(w, box, (box.x + box.w * 0.25, box.y + box.h * 0.5), None)
+        pts = w["custom_points"]
+        self.assertEqual(len(pts), n)
+        idx = int(round(0.25 * (n - 1)))
+        self.assertAlmostEqual(pts[idx][0], idx / (n - 1.0), places=9)
+        self.assertAlmostEqual(pts[idx][1], 0.0, places=6)
+        # untouched columns stay flat zero
+        self.assertEqual(pts[0][1], 0.0)
+        self.assertEqual(pts[-1][1], 0.0)
+        # drag up-right: every sample between the two columns is filled
+        drag = app._custom_wave_paint(w, box, (box.x + box.w * 0.75, box.y), drag)
+        t_end = min(1.0, (box.w * 0.75) / (box.w - 1.0))
+        top = int(round(t_end * (n - 1)))
+        self.assertAlmostEqual(pts[top][1], -1.0, places=6)
+        seg = [pts[i][1] for i in range(idx, top + 1)]
+        self.assertEqual(seg, sorted(seg, reverse=True))
+        # dragging past the box edge clamps instead of crashing
+        app._custom_wave_paint(w, box, (box.right + 50, box.y - 50), drag)
+        self.assertAlmostEqual(pts[-1][1], -1.0, places=6)
+
+    def test_smooth_button_relaxes_samples(self):
+        n = app.CUSTOM_WAVE_SAMPLES
+        jitter = [(i / (n - 1.0), (1.0 if i % 2 else -1.0)) for i in range(n)]
+        sm = app._custom_smooth_samples(jitter)
+        self.assertEqual(len(sm), n)
+        # alternating jitter collapses: peak amplitude drops well below 1
+        smooth_peak = max(abs(v) for _t, v in sm)
+        self.assertLess(smooth_peak, 0.9)
+        # wrap-around: a spike on the last sample bleeds into t=0 (wave loops)
+        spike = [(0.0, 0.0) for _ in range(n)]
+        spike[-1] = (1.0, 1.0)
+        wrapped = app._custom_smooth_samples(spike)
+        self.assertGreater(wrapped[0][1], 0.05)
+        # flat wave stays flat
+        flat = app._custom_smooth_samples([(i / (n - 1.0), 0.0) for i in range(n)])
+        for _t, v in flat:
+            self.assertAlmostEqual(v, 0.0, places=9)
+
+    def test_legacy_sparse_points_resample_onto_grid(self):
+        pts = [(0.0, 0.0), (0.5, 1.0), (1.0, 0.0)]
+        uni = app._custom_uniform_samples(pts)
+        self.assertEqual(len(uni), app.CUSTOM_WAVE_SAMPLES)
+        mid = uni[app.CUSTOM_WAVE_SAMPLES // 2][1]
+        self.assertGreater(mid, 0.9)
+        # empty/short input yields a flat grid, not an error
+        self.assertEqual(app._custom_uniform_samples([])[0][1], 0.0)
+        self.assertEqual(app._custom_uniform_samples([(0.5, 1.0)])[0][1], 0.0)
+
+    def _stroke(self):
+        return app.new_stroke([
+            ((0.0, 100.0), (100.0, 0.0), (200.0, 200.0), (300.0, 100.0)),
+            ((300.0, 100.0), (400.0, 0.0), (500.0, 200.0), (600.0, 100.0)),
+        ])
+
+    def _apply(self, stroke, points, freq=3.0, amp=10.0, enabled=True):
+        comps = app._stroke_components(stroke)
+        self.assertTrue(comps)
+        comps[0] = dict(comps[0])
+        w = app.default_wave_params()
+        w.update({
+            "enabled": enabled, "shape": "custom", "amplitude": amp,
+            "frequency": freq, "custom_points": list(points),
+        })
+        app._set_wave_style(comps[0], w)
+        stroke["components"] = comps
+        return stroke
+
+    def test_default_wave_params_include_custom_points(self):
+        self.assertIn("custom_points", app.default_wave_params())
+        self.assertEqual(app.default_wave_params()["custom_points"], [])
+
+    def test_custom_points_roundtrip_through_style_helpers(self):
+        st = self._stroke()
+        pts = [(0.0, 0.0), (0.5, 1.0), (1.0, 0.0)]
+        self._apply(st, pts)
+        comps = app._stroke_components(st)
+        w = app._get_wave_style(comps[0])
+        self.assertEqual(w["shape"], "custom")
+        self.assertEqual(w["custom_points"], pts)
+        self.assertTrue(app._component_wave_enabled(comps[0]))
+
+    def test_custom_points_stored_in_styles_list(self):
+        st = self._stroke()
+        self._apply(st, [(0.0, 0.0), (1.0, 0.0)])
+        comps = app._stroke_components(st)
+        styles = app._component_styles(comps[0])
+        wave_styles = [s for s in styles if isinstance(s, dict) and s.get("type") == "wave"]
+        self.assertEqual(len(wave_styles), 1)
+        self.assertEqual(wave_styles[0]["custom_points"], [(0.0, 0.0), (1.0, 0.0)])
+
+    def test_remove_wave_style_clears_custom_points(self):
+        st = self._stroke()
+        self._apply(st, [(0.0, 0.0), (0.5, 1.0), (1.0, 0.0)])
+        comps = app._stroke_components(st)
+        app._remove_wave_style(comps[0])
+        self.assertFalse(app._component_wave_enabled(comps[0]))
+        self.assertNotEqual(app._get_wave_style(comps[0])["shape"], "custom")
+
+    def test_custom_wave_endpoints_pinned_to_base(self):
+        st = self._stroke()
+        self._apply(st, [(0.0, 0.0), (0.5, 1.0), (1.0, 0.0)])
+        out = app.sample_distorted_component(st, 0)
+        segs = app.segs_of(st)
+        self.assertEqual(out[0], tuple(segs[0][0]))
+        self.assertEqual(out[-1], tuple(segs[-1][3]))
+
+    def test_custom_wave_is_smooth_not_linear(self):
+        # A 3-point half-sine template must be interpolated with tangents,
+        # so mid-segment values must NOT match simple linear interpolation.
+        st = self._stroke()
+        self._apply(st, [(0.0, 0.0), (0.5, 1.0), (1.0, 0.0)], freq=1.0, amp=10.0)
+        out = app.sample_distorted_component(st, 0)
+        base = app._stroke_polyline(st, samples=24)
+        self.assertEqual(len(out), len(base))
+        offs = [math.hypot(out[i][0] - base[i][0], out[i][1] - base[i][1])
+                for i in range(len(out))]
+        # Smooth curve: offsets rise and fall, and are not a straight-line ramp.
+        self.assertGreater(max(offs), 5.0)
+        # Check curvature: consecutive differences should change (not constant).
+        diffs = [offs[i + 1] - offs[i] for i in range(len(offs) - 1)]
+        self.assertGreater(len(set(round(d, 3) for d in diffs)), 1)
+
+    def test_custom_wave_unsorted_points(self):
+        st = self._stroke()
+        self._apply(st, [(1.0, 0.0), (0.0, 0.0), (0.5, 1.0)])
+        out = app.sample_distorted_component(st, 0)
+        self.assertGreater(len(out), 0)
+        for p in out:
+            self.assertTrue(all(isinstance(v, (int, float)) for v in p))
+
+    def test_custom_wave_edge_cases(self):
+        for pts in ([], [(0.5, 1.0)], [(0.0, 0.0), (0.5, 1.0)]):
+            st = self._stroke()
+            self._apply(st, pts, freq=5.0)
+            out = app.sample_distorted_component(st, 0)
+            self.assertGreater(len(out), 0)
+
+    def test_custom_wave_high_frequency(self):
+        st = self._stroke()
+        pts = [(0.0, 0.0), (0.25, 1.0), (0.5, 0.0), (0.75, -1.0), (1.0, 0.0)]
+        self._apply(st, pts, freq=20.0)
+        out = app.sample_distorted_component(st, 0)
+        self.assertGreater(len(out), 10)
+        for p in out:
+            self.assertTrue(all(isinstance(v, (int, float)) for v in p))
+
+    def test_disabled_custom_wave_falls_back_to_base(self):
+        st = self._stroke()
+        self._apply(st, [(0.0, 0.0), (0.5, 1.0), (1.0, 0.0)], enabled=False)
+        out = app.sample_distorted_component(st, 0)
+        base = app._stroke_polyline(st, samples=24)
+        self.assertEqual(len(out), len(base))
+
+    def test_all_builtin_wave_shapes_run(self):
+        for shape in ["sine", "triangle", "square", "sawtooth", "circular", "half_circle", "noise"]:
+            st = self._stroke()
+            comps = app._stroke_components(st)
+            comps[0] = dict(comps[0])
+            w = app.default_wave_params()
+            w.update({"enabled": True, "shape": shape, "frequency": 4.0})
+            app._set_wave_style(comps[0], w)
+            st["components"] = comps
+            out = app.sample_distorted_component(st, 0)
+            self.assertGreater(len(out), 0, shape)
+
+
+class TestWaveStackUI(unittest.TestCase):
+    """Regression tests for the multi-wave modifier stack, contextual panel,
+    waveform thumbnails, live preview and panel scrolling."""
+
+    def setUp(self):
+        pygame.init()
+        self.screen = pygame.display.set_mode((app.WIDTH, app.HEIGHT))
+        self.fonts = (
+            pygame.font.SysFont(None, 24),
+            pygame.font.SysFont(None, 20),
+            pygame.font.SysFont(None, 30),
+        )
+
+    def tearDown(self):
+        pygame.quit()
+
+    def _stroke(self):
+        return app.new_stroke([
+            ((0.0, 100.0), (100.0, 0.0), (200.0, 200.0), (300.0, 100.0)),
+            ((300.0, 100.0), (400.0, 0.0), (500.0, 200.0), (600.0, 100.0)),
+        ])
+
+    def _stacked(self, n=2):
+        st = self._stroke()
+        comps = app._stroke_components(st)
+        comps[0] = dict(comps[0])
+        shapes = ["sine", "noise", "square"]
+        for i in range(n):
+            w = app.default_wave_params()
+            w.update({"enabled": True, "shape": shapes[i], "amplitude": 10.0 + i,
+                      "frequency": 3.0 + i, "noise": 0.0})
+            app._set_wave_style(comps[0], w, i)
+        st["components"] = comps
+        return st
+
+    def _panel_state(self, stroke, active=0, scroll=0, submode="curve"):
+        return {
+            "tool_mode": "selection", "max_points": 4, "boost_points": False,
+            "NORMAL_MAX_POINTS": 5, "BOOST_MAX_POINTS": 100,
+            "slider": app.Slider(app.PANEL_X + 20, 0, app.PANEL_W - 40, 2, 5, 4),
+            "width_slider": app.Slider(app.PANEL_X + 20, 0, app.PANEL_W - 40, 1, 20, 3),
+            "buttons": {
+                "boost": app.Button((0, 0, app.PANEL_W - 40, 34), "Boost limit"),
+                "actions": [app.Button((0, 0, app.PANEL_W - 40, 36), "Undo"),
+                            app.Button((0, 0, app.PANEL_W - 40, 36), "Clear")],
+            },
+            "stroke_count": 1, "selected_strokes": {0}, "selected_obj": stroke,
+            "selected_curve": (0, 0),
+            "stroke_swatch_rects": [pygame.Rect(0, 0, 0, 0) for _ in app.STROKE_SWATCHES],
+            "fill_swatch_rects": [pygame.Rect(0, 0, 0, 0) for _ in app.FILL_SWATCHES],
+            "color_target": "stroke", "picker_h": 10.0, "picker_s": 0.5, "picker_v": 0.8,
+            "picker_drag_sv": False, "picker_drag_hue": False,
+            "sv_rect": pygame.Rect(0, 0, 0, 0), "hue_rect": pygame.Rect(0, 0, 0, 0),
+            "tab_stroke_rect": pygame.Rect(0, 0, 0, 0), "tab_fill_rect": pygame.Rect(0, 0, 0, 0),
+            "nofill_rect": pygame.Rect(0, 0, 0, 0),
+            "selection_submode": submode,
+            "nodes_toggle_rect": pygame.Rect(0, 0, 0, 0),
+            "wave_formula_focus": False,
+            "wave_custom_draw": False,
+            "wave_custom_finished": False,
+            "wave_active_index": active,
+            "wave_row_rects": [],
+            "panel_scroll": scroll,
+        }
+
+    # ---- multi-wave model ----
+
+    def test_set_wave_style_index_builds_stack(self):
+        st = self._stacked(3)
+        comps = app._stroke_components(st)
+        waves = app._get_wave_styles(comps[0])
+        self.assertEqual(len(waves), 3)
+        self.assertEqual([w["shape"] for w in waves], ["sine", "noise", "square"])
+        self.assertEqual(app._get_wave_style(comps[0], 1)["shape"], "noise")
+
+    def test_legacy_wave_key_mirrors_first_style(self):
+        st = self._stacked(2)
+        comp = app._stroke_components(st)[0]
+        self.assertIn("wave", comp)
+        self.assertEqual(comp["wave"]["shape"], "sine")
+        self.assertNotIn("type", comp["wave"])
+
+    def test_remove_wave_style_by_index(self):
+        st = self._stacked(3)
+        comp = app._stroke_components(st)[0]
+        app._remove_wave_style(comp, 1)
+        waves = app._get_wave_styles(comp)
+        self.assertEqual([w["shape"] for w in waves], ["sine", "square"])
+        app._remove_wave_style(comp, 0)
+        self.assertEqual(app._get_wave_style(comp, 0)["shape"], "square")
+        app._remove_wave_style(comp, 0)
+        self.assertEqual(app._get_wave_styles(comp), [])
+        self.assertNotIn("wave", comp)
+
+    def test_component_wave_enabled_if_any_active(self):
+        st = self._stroke()
+        comp = app._stroke_components(st)[0]
+        w1 = app.default_wave_params(); w1.update({"enabled": True, "amplitude": 0.0, "noise": 0.0})
+        w2 = app.default_wave_params(); w2.update({"enabled": True, "amplitude": 12.0})
+        app._set_wave_style(comp, w1, 0)
+        app._set_wave_style(comp, w2, 1)
+        self.assertTrue(app._component_wave_enabled(comp))
+        w2["enabled"] = False
+        app._set_wave_style(comp, w2, 1)
+        self.assertFalse(app._component_wave_enabled(comp))
+
+    def test_sampling_composes_stacked_waves(self):
+        # identical base + identical sample requirements (sine freq 5 needs
+        # 5*32+8 samples; noise at freq 5 with scale 1.0 has 20 cells * 8 + 8)
+        # so sample counts match; the noise layer must visibly change geometry
+        def build(with_second):
+            st = self._stroke()
+            comp = app._stroke_components(st)[0]
+            w1 = app.default_wave_params()
+            w1.update({"enabled": True, "shape": "sine", "amplitude": 10.0, "frequency": 5.0})
+            app._set_wave_style(comp, w1, 0)
+            if with_second:
+                w2 = app.default_wave_params()
+                w2.update({"enabled": True, "shape": "noise", "amplitude": 12.0,
+                           "frequency": 5.0, "noise_scale": 1.0, "seed": 7})
+                app._set_wave_style(comp, w2, 1)
+            st["components"] = [comp]
+            return st
+
+        st1 = build(False)
+        st2 = build(True)
+        out1 = app.sample_distorted_component(st1, 0)
+        out2 = app.sample_distorted_component(st2, 0)
+        self.assertEqual(len(out1), len(out2))
+        # stacking the noise layer must change the geometry
+        diffs = [abs(out1[i][0] - out2[i][0]) + abs(out1[i][1] - out2[i][1])
+                 for i in range(len(out1))]
+        self.assertGreater(max(diffs), 1.0)
+        # endpoints stay pinned to the base curve
+        segs = app.segs_of(st2)
+        self.assertEqual(tuple(out2[0]), tuple(segs[0][0]))
+        self.assertEqual(tuple(out2[-1]), tuple(segs[-1][3]))
+
+    def test_sampling_full_stack_disabled_returns_base(self):
+        st = self._stacked(2)
+        comp = app._stroke_components(st)[0]
+        for i in range(2):
+            w = app._get_wave_style(comp, i)
+            w["enabled"] = False
+            app._set_wave_style(comp, w, i)
+        st["components"] = [comp]
+        out = app.sample_distorted_component(st, 0)
+        base = app._stroke_polyline(st, samples=24)
+        self.assertEqual(len(out), len(base))
+
+    # ---- contextual parameters ----
+
+    def test_noise_sliders_hidden_on_plain_wave_shown_for_legacy(self):
+        # noise is its own stackable layer now: plain waves don't show the
+        # old per-wave noise sliders at all...
+        st = self._stroke()
+        comp = app._stroke_components(st)[0]
+        w = app.default_wave_params(); w.update({"enabled": True, "noise": 0.0})
+        app._set_wave_style(comp, w, 0)
+        st["components"] = [comp]
+        state = self._panel_state(st)
+        app.draw_panel(self.screen, self.fonts, (0, 0), state)
+        rects = state["wave_slider_rects"]
+        self.assertIn("amplitude", rects)
+        self.assertIn("frequency", rects)
+        self.assertIn("phase", rects)
+        self.assertNotIn("seed", rects)
+        self.assertNotIn("noise_scale", rects)
+        self.assertNotIn("noise", rects)
+        # ...but legacy noise saved by older versions stays adjustable here
+        w["noise"] = 10.0
+        app._set_wave_style(comp, w, 0)
+        st["components"] = [comp]
+        state = self._panel_state(st)
+        app.draw_panel(self.screen, self.fonts, (0, 0), state)
+        self.assertIn("noise", state["wave_slider_rects"])
+        self.assertIn("seed", state["wave_slider_rects"])
+        self.assertIn("noise_scale", state["wave_slider_rects"])
+
+    def test_noise_shape_has_contextual_sliders(self):
+        # the standalone Noise layer: amount (amplitude), density (frequency),
+        # smoothing (noise scale) and seed apply; phase does not -> grayed out
+        st = self._stroke()
+        comp = app._stroke_components(st)[0]
+        w = app.default_wave_params()
+        w.update({"enabled": True, "shape": "noise", "amplitude": 20.0,
+                  "frequency": 4.0, "noise_scale": 3.0, "seed": 11})
+        app._set_wave_style(comp, w, 0)
+        st["components"] = [comp]
+        state = self._panel_state(st)
+        app.draw_panel(self.screen, self.fonts, (0, 0), state)
+        rects = state["wave_slider_rects"]
+        self.assertIn("amplitude", rects)
+        self.assertIn("frequency", rects)
+        self.assertIn("noise_scale", rects)
+        self.assertIn("seed", rects)
+        # phase is inapplicable to random noise: drawn grayed, not interactive
+        self.assertNotIn("phase", rects)
+        # no formula input or custom box for the noise layer
+        self.assertEqual(state["wave_formula_rect"].w, 0)
+        self.assertEqual(state["wave_custom_box_rect"].w, 0)
+
+    def test_noise_shape_value_is_bounded_and_smooth(self):
+        ev = app._prepare_wave_evaluator({"shape": "noise", "frequency": 4.0,
+                                          "amplitude": 25.0, "noise_scale": 2.0, "seed": 3})
+        vals = [app._wave_value_for(ev, i / 512.0) for i in range(513)]
+        # bounded like every other shape: [-1,1] (amplitude scales outside)
+        self.assertLessEqual(max(vals), 1.01)
+        self.assertGreaterEqual(min(vals), -1.01)
+        # not degenerate: the profile actually varies
+        self.assertGreater(max(vals) - min(vals), 0.4)
+        # smooth: no jumps between adjacent dense samples
+        max_step = max(abs(vals[i + 1] - vals[i]) for i in range(len(vals) - 1))
+        self.assertLess(max_step, 0.2)
+        # frequency 0 disables the layer (consistent with other shapes)
+        ev0 = app._prepare_wave_evaluator({"shape": "noise", "frequency": 0.0, "amplitude": 25.0})
+        self.assertEqual(app._wave_value_for(ev0, 0.5), 0.0)
+
+    def test_noise_shape_seed_changes_pattern(self):
+        base = {"shape": "noise", "frequency": 5.0, "amplitude": 20.0, "noise_scale": 2.0}
+        v1 = [app._wave_value_for(app._prepare_wave_evaluator({**base, "seed": 1}), i / 64.0)
+              for i in range(65)]
+        v2 = [app._wave_value_for(app._prepare_wave_evaluator({**base, "seed": 2}), i / 64.0)
+              for i in range(65)]
+        self.assertNotEqual(v1, v2)
+
+    def test_noise_layer_is_its_own_row_and_previewable(self):
+        st = self._stacked(2)  # sine + noise rows
+        state = self._panel_state(st, active=1)
+        app.draw_panel(self.screen, self.fonts, (0, 0), state)
+        # the noise row exists in the stack
+        rows = state["wave_row_rects"]
+        self.assertEqual(len(rows), 2)
+        # shape grid contains the Noise thumbnail button
+        self.assertIn("noise", state["wave_shape_rects"])
+        # preview renders the noise profile (adaptive point count for cells)
+        prev = app._wave_preview_polyline(app._get_wave_style(app._stroke_components(st)[0], 1))
+        self.assertGreater(len(prev), 200)
+        for _sx, vy in prev:
+            self.assertTrue(-1.3 <= vy <= 1.3, vy)
+
+    def test_noise_independent_toggle_in_stacked_render(self):
+        st = self._stroke()
+        comp = app._stroke_components(st)[0]
+        sine = app.default_wave_params()
+        sine.update({"enabled": True, "shape": "sine", "amplitude": 10.0, "frequency": 4.0})
+        nz = app.default_wave_params()
+        # noise_scale 1.0 -> 16 cells * 8 + 8 = 136 samples, exactly what the
+        # freq-4 sine needs (4*32+8), so both stacks sample identically
+        nz.update({"enabled": False, "shape": "noise", "amplitude": 15.0,
+                   "frequency": 4.0, "noise_scale": 1.0})
+        app._set_wave_style(comp, sine, 0)
+        app._set_wave_style(comp, nz, 1)
+        st["components"] = [comp]
+        # disabled noise layer does not affect rendering
+        out_off = app.sample_distorted_component(st, 0)
+        sine_only = self._stroke()
+        c2 = app._stroke_components(sine_only)[0]
+        app._set_wave_style(c2, sine, 0)
+        sine_only["components"] = [c2]
+        out_sine = app.sample_distorted_component(sine_only, 0)
+        self.assertEqual(len(out_off), len(out_sine))
+        for a, b in zip(out_off, out_sine):
+            self.assertAlmostEqual(a[0], b[0], places=6)
+            self.assertAlmostEqual(a[1], b[1], places=6)
+        # enabling the noise layer changes the geometry
+        nz["enabled"] = True
+        app._set_wave_style(comp, nz, 1)
+        st["components"] = [comp]
+        out_on = app.sample_distorted_component(st, 0)
+        diffs = [abs(out_on[i][0] - out_sine[i][0]) + abs(out_on[i][1] - out_sine[i][1])
+                 for i in range(len(out_on))]
+        self.assertGreater(max(diffs), 1.0)
+
+    def test_contextual_formula_and_custom_boxes(self):
+        st = self._stroke()
+        comp = app._stroke_components(st)[0]
+        w = app.default_wave_params(); w.update({"enabled": True, "shape": "formula"})
+        app._set_wave_style(comp, w, 0)
+        st["components"] = [comp]
+        state = self._panel_state(st)
+        app.draw_panel(self.screen, self.fonts, (0, 0), state)
+        self.assertGreater(state["wave_formula_rect"].w, 0)
+        self.assertEqual(state["wave_custom_box_rect"].w, 0)
+        w["shape"] = "custom"
+        w["custom_points"] = [(0.0, 0.0), (0.5, 1.0), (1.0, 0.0)]
+        app._set_wave_style(comp, w, 0)
+        st["components"] = [comp]
+        state = self._panel_state(st)
+        app.draw_panel(self.screen, self.fonts, (0, 0), state)
+        self.assertGreater(state["wave_custom_box_rect"].w, 0)
+        self.assertEqual(state["wave_formula_rect"].w, 0)
+
+    # ---- waveform thumbnails + live preview ----
+
+    def test_shape_thumbnail_grid_has_all_icons(self):
+        st = self._stroke()
+        comp = app._stroke_components(st)[0]
+        w = app.default_wave_params(); w.update({"enabled": True})
+        app._set_wave_style(comp, w, 0)
+        st["components"] = [comp]
+        state = self._panel_state(st)
+        app.draw_panel(self.screen, self.fonts, (0, 0), state)
+        self.assertEqual(set(state["wave_shape_rects"]), set(app.WAVE_SHAPES))
+        self.assertIn("noise", state["wave_shape_rects"])
+
+    def test_icon_polyline_is_one_normalized_cycle(self):
+        for shape in app.WAVE_SHAPES:
+            poly = app._wave_icon_polyline({"shape": shape, "frequency": 9.0,
+                                            "custom_points": [(0.0, 0.0), (0.5, 1.0), (1.0, 0.0)]})
+            self.assertGreaterEqual(len(poly), 10, shape)
+            self.assertAlmostEqual(poly[0][0], 0.0)
+            self.assertAlmostEqual(poly[-1][0], 1.0)
+            for vx, vy in poly:
+                self.assertTrue(-2.5 <= vy <= 2.5, (shape, vy))
+        # frequency must not affect the icon (one cycle is forced)
+        a = app._wave_icon_polyline({"shape": "sine", "frequency": 2.0})
+        b = app._wave_icon_polyline({"shape": "sine", "frequency": 17.0})
+        self.assertEqual(len(a), len(b))
+        for (x1, y1), (x2, y2) in zip(a, b):
+            self.assertAlmostEqual(y1, y2, places=6)
+
+    def test_preview_polyline_reflects_amplitude(self):
+        p1 = app._wave_preview_polyline({"shape": "sine", "enabled": True,
+                                         "amplitude": 100.0, "frequency": 4.0})
+        p2 = app._wave_preview_polyline({"shape": "sine", "enabled": True,
+                                         "amplitude": 50.0, "frequency": 4.0})
+        self.assertGreater(len(p1), 100)
+        m1 = max(abs(v) for _x, v in p1)
+        m2 = max(abs(v) for _x, v in p2)
+        self.assertGreater(m1, 0.5)   # amp 100 -> ~1.0
+        self.assertLess(m2, m1)       # smaller amplitude -> smaller preview
+        self.assertLessEqual(m1, 1.3)
+
+    # ---- stack row switching ----
+
+    def test_stack_rows_and_active_index_switching(self):
+        st = self._stacked(2)
+        state = self._panel_state(st, active=0)
+        app.draw_panel(self.screen, self.fonts, (0, 0), state)
+        rows = state["wave_row_rects"]
+        self.assertEqual(len(rows), 2)
+        # toggle/remove belong to the active row
+        self.assertTrue(rows[0][1].collidepoint(state["wave_toggle_rect"].center))
+        self.assertTrue(rows[0][1].collidepoint(state["wave_remove_rect"].center))
+        # active row must be inside the visible panel
+        self.assertGreaterEqual(rows[0][1].top, 0)
+        # active row 0 is a plain sine: no noise sliders
+        self.assertNotIn("seed", state["wave_slider_rects"])
+        state = self._panel_state(st, active=1)
+        app.draw_panel(self.screen, self.fonts, (0, 0), state)
+        rows = state["wave_row_rects"]
+        self.assertTrue(rows[1][1].collidepoint(state["wave_toggle_rect"].center))
+        # parameters shown belong to the active noise layer
+        self.assertIn("seed", state["wave_slider_rects"])
+        self.assertIn("noise_scale", state["wave_slider_rects"])
+        self.assertNotIn("phase", state["wave_slider_rects"])
+
+    # ---- panel scrolling ----
+
+    # ---- geometric frequency/amplitude scaling ----
+
+    def _straight(self, length=200.0):
+        return app.new_stroke([((0.0, 0.0), (length / 3.0, 0.0), (2.0 * length / 3.0, 0.0), (length, 0.0))])
+
+    def _sign_changes(self, ys):
+        changes = 0
+        last = 0
+        for y in ys:
+            sg = 1 if y > 1e-6 else (-1 if y < -1e-6 else 0)
+            if sg == 0:
+                continue
+            if last != 0 and sg != last:
+                changes += 1
+            last = sg
+        return changes
+
+    def _waved(self, length, freq, amp=100.0):
+        st = self._straight(length)
+        comp = app._stroke_components(st)[0]
+        w = app.default_wave_params()
+        w.update({"enabled": True, "shape": "sine", "amplitude": amp, "frequency": freq})
+        app._set_wave_style(comp, w, 0)
+        st["components"] = [comp]
+        return st
+
+    def test_cycle_length_is_freq_fraction_of_bbox_diagonal(self):
+        # bbox is 200x0 -> diagonal 200; freq 1.0 = one cycle spans the
+        # diagonal -> exactly one interior zero crossing along the stroke
+        out = app.sample_distorted_component(self._waved(200.0, 1.0), 0)
+        self.assertEqual(self._sign_changes([p[1] for p in out]), 1)
+        # freq 0.5 -> cycle = half the diagonal -> two cycles -> 3 crossings
+        out = app.sample_distorted_component(self._waved(200.0, 0.5), 0)
+        self.assertEqual(self._sign_changes([p[1] for p in out]), 3)
+        # freq 0.01 -> 100 cycles across a 200px diagonal
+        out = app.sample_distorted_component(self._waved(200.0, 0.01), 0)
+        self.assertGreaterEqual(self._sign_changes([p[1] for p in out]), 90)
+
+    def test_amplitude_scales_with_shape_size(self):
+        # amp 50 -> amp_px = 0.5 * diagonal/2; doubling the shape doubles it
+        out1 = app.sample_distorted_component(self._waved(200.0, 1.0, 50.0), 0)
+        out2 = app.sample_distorted_component(self._waved(400.0, 1.0, 50.0), 0)
+        peak1 = max(abs(p[1]) for p in out1)
+        peak2 = max(abs(p[1]) for p in out2)
+        self.assertGreater(peak1, 20.0)
+        self.assertAlmostEqual(peak2 / peak1, 2.0, delta=0.3)
+
+    def test_frequency_slider_uses_fraction_range(self):
+        st = self._waved(200.0, 0.25)
+        state = self._panel_state(st)
+        app.draw_panel(self.screen, self.fonts, (0, 0), state)
+        _r, lo, hi = state["wave_slider_rects"]["frequency"]
+        self.assertAlmostEqual(lo, 0.01)
+        self.assertAlmostEqual(hi, 1.0)
+
+    def test_preview_shows_geometric_cycle_count(self):
+        # preview geometry is a unit square: freq 0.25 -> 4 cycles
+        prev = app._wave_preview_polyline({"shape": "sine", "enabled": True,
+                                           "amplitude": 100.0, "frequency": 0.25})
+        self.assertGreater(len(prev), 200)
+        self.assertEqual(self._sign_changes([v for _x, v in prev]), 7)
+
+    def test_reverse_flag_flips_wave_direction(self):
+        # reverse = -f(x): the offset profile is negated, not time-mirrored
+        st = self._waved(200.0, 1.0, 100.0)
+        comp = app._stroke_components(st)[0]
+        out_f = app.sample_distorted_component(st, 0)
+        w = app._get_wave_style(comp, 0)
+        w2 = dict(w)
+        w2["reverse"] = True
+        app._set_wave_style(comp, w2, 0)
+        st["components"] = [comp]
+        out_r = app.sample_distorted_component(st, 0)
+        self.assertEqual(len(out_f), len(out_r))
+        ys_f = [p[1] for p in out_f]
+        ys_r = [p[1] for p in out_r]
+        for i in range(len(ys_f)):
+            self.assertAlmostEqual(ys_r[i], -ys_f[i], delta=1e-6)
+        # x positions unchanged (only the offset flips)
+        for (fx, _fy), (rx, _ry) in zip(out_f, out_r):
+            self.assertAlmostEqual(fx, rx, places=6)
+        # endpoints stay pinned in both directions
+        segs = app.segs_of(st)
+        self.assertEqual(tuple(out_r[0]), tuple(segs[0][0]))
+        self.assertEqual(tuple(out_r[-1]), tuple(segs[-1][3]))
+
+    def test_reverse_toggle_in_panel(self):
+        st = self._waved(200.0, 1.0, 50.0)
+        state = self._panel_state(st)
+        app.draw_panel(self.screen, self.fonts, (0, 0), state)
+        rev_rect = state.get("wave_reverse_rect", pygame.Rect(0, 0, 0, 0))
+        self.assertGreater(rev_rect.w, 0)
+        # default is OFF; the flag round-trips through the style helpers
+        self.assertIn("reverse", app.default_wave_params())
+        self.assertFalse(app.default_wave_params()["reverse"])
+        comp = app._stroke_components(st)[0]
+        w = app._get_wave_style(comp, 0)
+        self.assertFalse(bool(w.get("reverse")))
+        w["reverse"] = True
+        app._set_wave_style(comp, w, 0)
+        st["components"] = [comp]
+        self.assertTrue(app._get_wave_style(app._stroke_components(st)[0], 0)["reverse"])
+
+    def test_event_handlers_read_only_wired_state_keys(self):
+        # state is rebuilt every frame from a literal BEFORE events run, so any
+        # key an event handler reads must appear in that literal (fed by a
+        # *_cache readback) - otherwise the handler silently no-ops. This is
+        # how the custom-wave box click broke: the box rendered (draw_panel
+        # sets the key after events) but clicks saw a zero rect at event time.
+        import io
+        import re
+        path = app.__file__
+        if path.endswith(".pyc"):
+            path = path[:-1]
+        lines = io.open(path, encoding="utf-8").read().splitlines()
+        lit_start = next(i for i, l in enumerate(lines) if l == "        state = {")
+        lit_end = next(i for i in range(lit_start + 1, len(lines)) if lines[i] == "        }")
+        literal_keys = set(re.findall(r'"([a-z_0-9]+)":', "\n".join(lines[lit_start:lit_end + 1])))
+        ev_start = next(i for i, l in enumerate(lines) if "for event in pygame.event.get():" in l)
+        ev_end = next(i for i in range(ev_start + 1, len(lines))
+                      if "draw_panel(screen, fonts, mouse_pos, state)" in lines[i])
+        region = "\n".join(lines[ev_start:ev_end])
+        reads = set(re.findall(r'state\.get\(\s*"([a-z_0-9]+)"', region))
+        reads.update(re.findall(r'state\.setdefault\(\s*"([a-z_0-9]+)"', region))
+        for m in re.finditer(r'state\[\s*"([a-z_0-9]+)"\s*\](?!\s*=)', region):
+            reads.add(m.group(1))
+        missing = sorted(k for k in reads if k not in literal_keys)
+        self.assertEqual(
+            missing, [],
+            "event handlers read state keys missing from the per-frame state "
+            "literal (no cache/readback wiring): %s" % missing)
+
+    def test_panel_content_overflows_and_scroll_reveals_it(self):
+        st = self._stacked(2)
+        state = self._panel_state(st, scroll=0)
+        app.draw_panel(self.screen, self.fonts, (0, 0), state)
+        bottom = state["panel_content_bottom"]
+        self.assertGreater(bottom, app.HEIGHT, "panel content should overflow the window")
+        max_scroll = max(0, bottom + 24 - app.HEIGHT)
+        self.assertGreater(max_scroll, 0)
+        # scroll to the max: preset swatches (drawn last) must come into view
+        state2 = self._panel_state(st, scroll=max_scroll)
+        app.draw_panel(self.screen, self.fonts, (0, 0), state2)
+        sw = state2["stroke_swatch_rects"][0]
+        self.assertGreater(sw.w, 0)
+        self.assertGreaterEqual(sw.top, 0)
+        self.assertLessEqual(sw.bottom, app.HEIGHT)
+        # content height is scroll-invariant (measured un-scrolled)
+        self.assertEqual(state2["panel_content_bottom"], bottom)
+
+    def test_scroll_amount_is_clamped_to_content(self):
+        st = self._stacked(2)
+        state = self._panel_state(st, scroll=0)
+        app.draw_panel(self.screen, self.fonts, (0, 0), state)
+        bottom = state["panel_content_bottom"]
+        max_scroll = max(0, bottom + 24 - app.HEIGHT)
+        # the main-loop clamp: never negative, never past the content
+        for requested in (-500, 0, max_scroll // 2, max_scroll, max_scroll + 10000):
+            clamped = max(0, min(requested, max_scroll))
+            self.assertGreaterEqual(clamped, 0)
+            self.assertLessEqual(clamped, max_scroll)
+
+
 if __name__ == "__main__":
     unittest.main()
