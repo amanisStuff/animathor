@@ -496,11 +496,6 @@ def main():
                     elif event.key == pygame.K_SPACE:
                         space_panning = True
                     # --- Editing ---
-                    elif not ctrl and event.key == pygame.K_c:
-                        # legacy: clear canvas (destructive) when not using Ctrl+C copy
-                        if strokes:
-                            push_undo()
-                        strokes.clear(); selected_strokes.clear(); selected_point = None; transform_drag = None
                     elif event.key in (pygame.K_DELETE, pygame.K_BACKSPACE) and tool_mode == "selection":
                         if selected_strokes:
                             push_undo()

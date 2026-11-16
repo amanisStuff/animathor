@@ -33,10 +33,10 @@
 | `E` | Eraser | **Implemented** | `E` switches to **Draw (eraser)** subtool. |
 | `T` | Text / Type | **Not implemented** | No text tool. |
 | `I` | Eyedropper / Color picker | **Not implemented** | No eyedropper. |
-| `C` | Crop / Cut-Razor | **Partial (rebound)** | Bare `C` toggles **corner anchor** in selection/node contexts — unrelated to crop/cut. `Ctrl+C` is Copy. No crop/razor tool. |
+| `C` | Crop / Cut-Razor | **Partial (rebound)** | Bare `C` is currently unbound (no longer clears the canvas); `Ctrl+C` is Copy. No crop/razor tool and no corner-anchor hotkey currently. |
 | `R` / `S` / `G` | Rotate / Scale / Grab (3D) | **N/A** (3D) | 2D app: transform handles support move/scale/rotate in selection transform submode (mouse-driven), but no `R`/`S`/`G` hotkeys. |
 | `[` / `]` | Decrease / Increase brush size (or step) | **Implemented** | `[` / `-` / Numpad `-` decrease max-points/width parameter; `]` / `=` / `+` / Numpad `+` increase (context-dependent slider behavior preserved). |
-| Other app-specific keys | — | **Implemented (non-standard)** | `N` — cycle selection submode (transform/nodes/curve). `Delete` / `Backspace` — delete selection. Bare `C` — corner-anchor toggle / legacy clear behavior when not copying. `Space` — temporary pan (see navigation). |
+| Other app-specific keys | — | **Implemented (non-standard)** | `N` — cycle selection submode (transform/nodes/curve). `Delete` / `Backspace` — delete selection. `Space` — temporary pan (see navigation). `Shift` (hold while drawing) — constrain to a straight line. |
 
 ## 3. Canvas & Viewport Navigation
 
@@ -86,6 +86,6 @@
 - **Navigation:** mouse-wheel zoom toward cursor over canvas; `Space`+LMB drag and MMB drag to pan; `Ctrl+0` fit-all; `Ctrl+1` actual size.
 - **File I/O:** `src/models/document.py` (JSON serialize/deserialize/save/load) + native dialogs (`pick_open/save/export` in `src/views/dialogs.py`) + `export_scene_png`; wired to `Ctrl+S`, `Ctrl+Shift+S`, `Ctrl+O`, `Ctrl+Shift+E`.
 - **Editing/selection:** `Ctrl+A` select all, `Ctrl+D` duplicate (+offset), `Ctrl+C/X/V` internal clipboard, improved `Esc` cancel/deselect priority.
-- **Tool shortcuts & discoverability:** `V` select, `B` draw/pen, `E` eraser; straight-line constraint moved to `Shift`-hold during draw; toolbar hover tooltips with shortcuts (`src/views/toolbar.py`).
+- **Tool shortcuts & discoverability:** `V` select, `B` draw/pen, `E` eraser; straight-line constraint moved to `Shift`-hold during draw; toolbar hover tooltips with shortcuts (`src/views/toolbar.py`). Bare `C` no longer clears the canvas. Line is a **draw shape** (select in Draw panel → Shape → `Line`), not a separate hotkey; hold `Shift` while drawing with the pen to constrain a straight segment.
 
 **Remaining high-value gaps:** paste-in-place, group/ungroup, command palette, hide-UI (`Tab`), rulers/guides, scrubby sliders with math-in-fields, uniform modifier semantics (snap-bypass/center-scale/duplicate-drag), general layer stack UI, and full key-remapping/preferences.
