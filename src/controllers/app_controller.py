@@ -1227,10 +1227,8 @@ def main():
                 if pivot_drag is not None and pygame.mouse.get_pressed()[0]:
                     cpos = clamp_to_canvas(event.pos)
                     sp0 = pivot_drag.get("start_pivot", cpos)
-                    sm = pivot_drag.get("start", event.pos)
-                    dx = cpos[0] - clamp_to_canvas(sm)[0]
-                    dy = cpos[1] - clamp_to_canvas(sm)[1]
-                    pivot_pos = (sp0[0] + dx, sp0[1] + dy)
+                    sm = pivot_drag.get("start", cpos)
+                    pivot_pos = (sp0[0] + cpos[0] - sm[0], sp0[1] + cpos[1] - sm[1])
                     continue
                 if ref_opacity_drag and reference_image is not None:
                     bar = state.get("ref_opacity_rect", pygame.Rect(0,0,0,0))
