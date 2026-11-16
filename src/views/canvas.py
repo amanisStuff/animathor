@@ -159,7 +159,7 @@ def draw_stroke_path_distorted(ctx, stroke):
         ctx.close_path()
     return True
 
-def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, selected_index=None, selected_indices=None, edit_mode=False, selection_submode="transform", selected_curve=None, snap_kind="connect", redrawing_curve=None, ref_img=None, view_zoom=None, view_pan=None, pivot_pos=None):
+def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, selected_index=None, selected_indices=None, edit_mode=False, selection_submode="transform", selected_curve=None, snap_kind="connect", redrawing_curve=None, ref_img=None, view_zoom=None, view_pan=None, pivot_pos=None, for_export=False):
     # Backward compat: selected_index (single) or selected_indices (collection)
     if selected_indices is None and selected_index is not None:
         selected_indices = selected_index
@@ -175,12 +175,13 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
         ctx.set_antialias(cairo.ANTIALIAS_BEST)
     except Exception:
         pass
-    # background in screen/viewport space
-    ctx.save()
-    ctx.identity_matrix()
-    ctx.set_source_rgb(*BG_COLOR)
-    ctx.paint()
-    ctx.restore()
+    # background in screen/viewport space (skip for export: keep transparent/no background)
+    if not for_export:
+        ctx.save()
+        ctx.identity_matrix()
+        ctx.set_source_rgb(*BG_COLOR)
+        ctx.paint()
+        ctx.restore()
 
     # world/view transform
     ctx.save()
@@ -287,7 +288,7 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
         show_hidden = edit_mode and selection_submode in ("curve", "nodes") and bool(hidden)
 
         # Hint: show original/base (guide) shape for distorted curves so they remain selectable
-        if _stroke_has_wave(stroke):
+        if (not for_export) and _stroke_has_wave(stroke):
             comps = _stroke_components(stroke)
             ranges = _component_ranges(stroke)
             ctx.save()
@@ -539,18 +540,18 @@ def surface_to_pygame(cairo_surface):
 
 def export_scene_png(path, strokes, ref_img=None, view_zoom=1.0, view_pan=(0.0, 0.0), size=None):
     """Export the current scene to a PNG file (viewport-sized)."""
-    w, h = (int(size[0]), int(size[1])) if size else (int(cfg.CANVAS_W), int(cfg.HEIGHT))
+    w, h = (int(size[0]), int(size[1])) if size else (int(cfg.CANVAS_W), int(max(1, cfg.HEIGHT - getattr(cfg, "TOP_BAR_H", 0))))
     surf = make_cairo_surface(w, h)
-    draw_scene(surf, strokes, ref_img=ref_img, view_zoom=view_zoom, view_pan=view_pan)
+    draw_scene(surf, strokes, ref_img=ref_img, view_zoom=view_zoom, view_pan=view_pan, for_export=True)
     surf.write_to_png(path)
 
 
 def export_scene_svg(path, strokes, ref_img=None, view_zoom=1.0, view_pan=(0.0, 0.0), size=None):
     """Export the current scene to an SVG file (viewport-sized)."""
-    w, h = (int(size[0]), int(size[1])) if size else (int(cfg.CANVAS_W), int(cfg.HEIGHT))
+    w, h = (int(size[0]), int(size[1])) if size else (int(cfg.CANVAS_W), int(max(1, cfg.HEIGHT - getattr(cfg, "TOP_BAR_H", 0))))
     surf = cairo.SVGSurface(str(path), w, h)
     try:
-        draw_scene(surf, strokes, ref_img=ref_img, view_zoom=view_zoom, view_pan=view_pan)
+        draw_scene(surf, strokes, ref_img=ref_img, view_zoom=view_zoom, view_pan=view_pan, for_export=True)
         try:
             surf.flush()
         except Exception:
