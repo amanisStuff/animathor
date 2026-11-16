@@ -1482,6 +1482,7 @@ def main():
                                     shape_stroke = merge_connected_strokes([shape_stroke, extra])[0]
                                 shape_stroke = _close_path_if_needed(shape_stroke)
                                 strokes.append(shape_stroke)
+                                strokes = merge_connected_strokes(strokes)
                             selected_strokes.clear(); selected_point = None; selected_curve = None; redrawing_curve = None
                         elif straight_line:
                             push_undo()
