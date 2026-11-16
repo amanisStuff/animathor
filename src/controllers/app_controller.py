@@ -31,7 +31,7 @@ def main():
     pygame.display.set_caption("Cairo Vector Draw - strokes to Bezier curves")
     clock = pygame.time.Clock()
 
-    cairo_surface = make_cairo_surface(cfg.CANVAS_W, cfg.HEIGHT)
+    cairo_surface = make_cairo_surface(cfg.CANVAS_W, max(1, cfg.HEIGHT - TOP_BAR_H))
     strokes = []
     undo_stack = []
     redo_stack = []
@@ -98,13 +98,12 @@ def main():
     font_title = pygame.font.SysFont(None, 30)
     fonts = (font, font_small, font_title)
 
-    btn_undo = Button((8, 8, 40, 40), "")
-    btn_redo = Button((8, 52, 40, 40), "")
-    btn_draw = Button((8, 104, 40, 40), "")
-    btn_select = Button((8, 152, 40, 40), "")
+    btn_undo = Button((8, TOP_BAR_H + 8, 40, 40), "")
+    btn_redo = Button((8, TOP_BAR_H + 52, 40, 40), "")
+    btn_draw = Button((8, TOP_BAR_H + 104, 40, 40), "")
+    btn_select = Button((8, TOP_BAR_H + 152, 40, 40), "")
     btn_boost = Button((0, 0, PANEL_W - 40, 34), "Boost limit")
-    btn_clear = Button((0, 0, PANEL_W - 40, 36), "Clear")
-    buttons = {"boost": btn_boost, "actions": [btn_clear]}
+    buttons = {"boost": btn_boost, "actions": []}
     slider = Slider(cfg.PANEL_X + 20, 0, PANEL_W - 40, 2, NORMAL_MAX_POINTS, max_points_per_curve)
     width_slider = Slider(cfg.PANEL_X + 20, 0, PANEL_W - 40, 1, 20, 3)
 
@@ -151,6 +150,9 @@ def main():
     pan_drag = None  # {"start_mouse":(x,y),"start_pan":(x,y)}
     document_path = None
     clipboard_strokes = []
+    menu_open = None
+    menu_bar_rect = pygame.Rect(0, 0, 0, 0)
+    menu_item_rects = {}
     swatch_rects_cache = {
         "stroke": [pygame.Rect(0, 0, 0, 0) for _ in STROKE_SWATCHES],
         "fill": [pygame.Rect(0, 0, 0, 0) for _ in STROKE_SWATCHES],  # presets sized to STROKE_SWATCHES in picker
@@ -280,7 +282,7 @@ def main():
                 cfg.CANVAS_X = LEFT_BAR_W
                 cfg.PANEL_X = LEFT_BAR_W + cfg.CANVAS_W
                 # Recreate the Cairo drawing surface to match the new canvas size
-                cairo_surface = make_cairo_surface(cfg.CANVAS_W, cfg.HEIGHT)
+                cairo_surface = make_cairo_surface(cfg.CANVAS_W, max(1, cfg.HEIGHT - TOP_BAR_H))
 
             if event.type == pygame.MOUSEWHEEL:
                 _mx, _my = pygame.mouse.get_pos()
@@ -414,9 +416,9 @@ def main():
                             pass
                     elif ctrl and shift and event.key == pygame.K_e:
                         try:
-                            path = pick_export_png_path()
+                            path = pick_export_image_path()
                             if path:
-                                export_scene_png(path, strokes, ref_img=reference_image,
+                                export_scene_image(path, strokes, ref_img=reference_image,
                                                  view_zoom=getattr(cfg, "VIEW_ZOOM", 1.0),
                                                  view_pan=(getattr(cfg, "VIEW_PAN_X", 0.0), getattr(cfg, "VIEW_PAN_Y", 0.0)),
                                                  size=(cfg.CANVAS_W, cfg.HEIGHT))
@@ -554,6 +556,66 @@ def main():
                 if wave_formula_focus and not state.get("wave_formula_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
                     wave_formula_focus = False
                     state["wave_formula_focus"] = False
+                # Top menu bar interactions
+                menu_handled = False
+                if event.pos[1] < TOP_BAR_H:
+                    if menu_bar_rect.collidepoint(event.pos):
+                        menu_open = None if menu_open == "file" else "file"
+                    else:
+                        menu_open = None
+                    menu_handled = True
+                elif menu_open == "file":
+                    mi = menu_item_rects
+                    if mi.get("save", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
+                        try:
+                            if document_path is None:
+                                document_path = pick_save_document_path()
+                            if document_path:
+                                save_document(document_path, strokes, {"view": {"zoom": cfg.VIEW_ZOOM, "pan": [cfg.VIEW_PAN_X, cfg.VIEW_PAN_Y]}})
+                        except Exception:
+                            pass
+                        menu_open = None
+                        menu_handled = True
+                    elif mi.get("save_as", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
+                        try:
+                            path = pick_save_document_path()
+                            if path:
+                                document_path = path
+                                save_document(document_path, strokes, {"view": {"zoom": cfg.VIEW_ZOOM, "pan": [cfg.VIEW_PAN_X, cfg.VIEW_PAN_Y]}})
+                        except Exception:
+                            pass
+                        menu_open = None
+                        menu_handled = True
+                    elif mi.get("open", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
+                        try:
+                            path = pick_open_document_path()
+                            if path:
+                                loaded = load_document(path)
+                                push_undo()
+                                strokes.clear(); strokes.extend(loaded)
+                                selected_strokes.clear(); selected_point = None; selected_curve = None
+                                transform_drag = None; drag_last = None; redrawing_curve = None
+                                document_path = path
+                        except Exception:
+                            pass
+                        menu_open = None
+                        menu_handled = True
+                    elif mi.get("export", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
+                        try:
+                            path = pick_export_image_path()
+                            if path:
+                                export_scene_image(path, strokes, ref_img=reference_image,
+                                                   view_zoom=getattr(cfg, "VIEW_ZOOM", 1.0),
+                                                   view_pan=(getattr(cfg, "VIEW_PAN_X", 0.0), getattr(cfg, "VIEW_PAN_Y", 0.0)),
+                                                   size=(cfg.CANVAS_W, max(1, cfg.HEIGHT - TOP_BAR_H)))
+                        except Exception:
+                            pass
+                        menu_open = None
+                        menu_handled = True
+                    else:
+                        menu_open = None
+                if menu_handled:
+                    continue
                 if btn_undo.hit(event.pos):
                     if do_undo():
                         selected_strokes = {i for i in selected_strokes if 0 <= i < len(strokes)}
@@ -574,10 +636,6 @@ def main():
                         if not boost_points:
                             max_points_per_curve = min(max_points_per_curve, NORMAL_MAX_POINTS)
                         slider.value = max_points_per_curve
-                    elif tool_mode == "draw" and btn_clear.hit(event.pos):
-                        if strokes:
-                            push_undo()
-                        strokes.clear(); selected_strokes.clear(); selected_point = None; selected_curve = None; redrawing_curve = None
                     elif tool_mode == "draw":
                         handled_draw_panel = False
                         if state.get("ref_load_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
@@ -1588,7 +1646,7 @@ def main():
         )
         frame = surface_to_pygame(cairo_surface)
         screen.fill((230, 233, 238))
-        screen.blit(frame, (cfg.CANVAS_X, 0))
+        screen.blit(frame, (cfg.CANVAS_X, TOP_BAR_H))
 
         # marquee selection overlay
         if marquee_select is not None and tool_mode == "selection":
@@ -1639,7 +1697,7 @@ def main():
         wave_custom_finished = bool(state.get("wave_custom_finished", wave_custom_finished))
         panel_scroll = int(state.get("panel_scroll", panel_scroll) or 0)
         _content_bottom = int(state.get("panel_content_bottom", 0) or 0)
-        _max_scroll = max(0, _content_bottom + 24 - cfg.HEIGHT)
+        _max_scroll = max(0, _content_bottom + 24 - (cfg.HEIGHT - TOP_BAR_H))
         panel_scroll = max(0, min(panel_scroll, _max_scroll))
         wave_slider_rects_cache = state.get("wave_slider_rects", wave_slider_rects_cache)
         ref_load_rect_cache = state.get("ref_load_rect", ref_load_rect_cache)
@@ -1654,6 +1712,32 @@ def main():
             primary_i = sorted(selected_strokes)[0]
             if 0 <= primary_i < len(strokes):
                 width_slider.value = int(round(strokes[primary_i].get("stroke_width", 3)))
+
+        # Top menu bar
+        menu_bar = pygame.Rect(0, 0, cfg.WIDTH, TOP_BAR_H)
+        pygame.draw.rect(screen, (250, 251, 253), menu_bar)
+        pygame.draw.line(screen, PANEL_BORDER, (0, TOP_BAR_H - 1), (cfg.WIDTH, TOP_BAR_H - 1), 1)
+        file_label = font_small.render("File", True, TEXT_COLOR)
+        menu_bar_rect = pygame.Rect(6, 2, file_label.get_width() + 16, TOP_BAR_H - 4)
+        mbg = TOOL_ACTIVE if (menu_open == "file" or menu_bar_rect.collidepoint(mouse_pos)) else (250, 251, 253)
+        pygame.draw.rect(screen, mbg, menu_bar_rect, border_radius=4)
+        screen.blit(file_label, (menu_bar_rect.x + 8, menu_bar_rect.y + 4))
+        menu_item_rects = {}
+        if menu_open == "file":
+            items = [("save", "Save"), ("save_as", "Save As..."), ("open", "Open..."), ("export", "Export PNG/SVG...")]
+            mw = 190
+            ih = 26
+            mx, my = menu_bar_rect.x, TOP_BAR_H
+            drop = pygame.Rect(mx, my, mw, ih * len(items))
+            pygame.draw.rect(screen, (255, 255, 255), drop)
+            pygame.draw.rect(screen, PANEL_BORDER, drop, 1)
+            for i, (key, label) in enumerate(items):
+                r = pygame.Rect(mx, my + i * ih, mw, ih)
+                menu_item_rects[key] = r
+                bg = BUTTON_HOVER if r.collidepoint(mouse_pos) else (255, 255, 255)
+                pygame.draw.rect(screen, bg, r)
+                t = font_small.render(label, True, TEXT_COLOR)
+                screen.blit(t, (r.x + 10, r.y + 5))
 
         pygame.display.flip()
         clock.tick(120)

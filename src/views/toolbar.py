@@ -52,9 +52,10 @@ TOOL_TIPS = {
 
 
 def draw_left_toolbar(screen, mouse_pos, tool_mode, btn_draw, btn_select, btn_undo=None, btn_redo=None, can_undo=False, can_redo=False):
-    bar = pygame.Rect(0, 0, LEFT_BAR_W, cfg.HEIGHT)
+    top = getattr(cfg, "TOP_BAR_H", 0)
+    bar = pygame.Rect(0, top, LEFT_BAR_W, cfg.HEIGHT - top)
     pygame.draw.rect(screen, TOOLBAR_BG, bar)
-    pygame.draw.line(screen, PANEL_BORDER, (LEFT_BAR_W - 1, 0), (LEFT_BAR_W - 1, cfg.HEIGHT), 2)
+    pygame.draw.line(screen, PANEL_BORDER, (LEFT_BAR_W - 1, top), (LEFT_BAR_W - 1, cfg.HEIGHT), 2)
     items = []
     if btn_undo is not None:
         items.append(("undo", btn_undo, False, can_undo))

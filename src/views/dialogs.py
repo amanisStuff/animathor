@@ -40,21 +40,25 @@ def pick_reference_image_path():
 def pick_open_document_path():
     return _tk_call(lambda root: tk_filedialog.askopenfilename(
         title="Open drawing",
-        filetypes=[("Animathor drawing", "*.anim.json;*.json"), ("All files", "*.*")],
+        filetypes=[("Animathor drawing", "*.athors"), ("Animathor JSON", "*.anim.json;*.json"), ("All files", "*.*")],
     ))
 
 
 def pick_save_document_path():
     return _tk_call(lambda root: tk_filedialog.asksaveasfilename(
         title="Save drawing",
-        defaultextension=".anim.json",
-        filetypes=[("Animathor drawing", "*.anim.json"), ("JSON", "*.json"), ("All files", "*.*")],
+        defaultextension=".athors",
+        filetypes=[("Animathor drawing", "*.athors"), ("Animathor JSON", "*.anim.json"), ("JSON", "*.json"), ("All files", "*.*")],
+    ))
+
+
+def pick_export_image_path():
+    return _tk_call(lambda root: tk_filedialog.asksaveasfilename(
+        title="Export image",
+        defaultextension=".png",
+        filetypes=[("PNG image", "*.png"), ("SVG image", "*.svg"), ("All files", "*.*")],
     ))
 
 
 def pick_export_png_path():
-    return _tk_call(lambda root: tk_filedialog.asksaveasfilename(
-        title="Export PNG",
-        defaultextension=".png",
-        filetypes=[("PNG image", "*.png"), ("All files", "*.*")],
-    ))
+    return pick_export_image_path()

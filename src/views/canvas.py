@@ -544,6 +544,31 @@ def export_scene_png(path, strokes, ref_img=None, view_zoom=1.0, view_pan=(0.0, 
     draw_scene(surf, strokes, ref_img=ref_img, view_zoom=view_zoom, view_pan=view_pan)
     surf.write_to_png(path)
 
+
+def export_scene_svg(path, strokes, ref_img=None, view_zoom=1.0, view_pan=(0.0, 0.0), size=None):
+    """Export the current scene to an SVG file (viewport-sized)."""
+    w, h = (int(size[0]), int(size[1])) if size else (int(cfg.CANVAS_W), int(cfg.HEIGHT))
+    surf = cairo.SVGSurface(str(path), w, h)
+    try:
+        draw_scene(surf, strokes, ref_img=ref_img, view_zoom=view_zoom, view_pan=view_pan)
+        try:
+            surf.flush()
+        except Exception:
+            pass
+    finally:
+        try:
+            surf.finish()
+        except Exception:
+            pass
+
+
+def export_scene_image(path, strokes, ref_img=None, view_zoom=1.0, view_pan=(0.0, 0.0), size=None):
+    """Export the current scene to PNG or SVG based on file extension."""
+    if str(path).lower().endswith(".svg"):
+        export_scene_svg(path, strokes, ref_img=ref_img, view_zoom=view_zoom, view_pan=view_pan, size=size)
+    else:
+        export_scene_png(path, strokes, ref_img=ref_img, view_zoom=view_zoom, view_pan=view_pan, size=size)
+
 def load_reference_image(path):
     """Load image file into a cairo ImageSurface (ARGB32) for reference drawing."""
     if not path:

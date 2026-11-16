@@ -23,10 +23,12 @@ __all__ = [
     "STROKE_SWATCHES",
     "TEXT_COLOR",
     "TOOLBAR_BG",
+    "TOP_BAR_H",
     "TOOL_ACTIVE",
     "TRACE_ALGORITHMS",
 ]
 
+TOP_BAR_H = 28
 LEFT_BAR_W = 56
 
 CANVAS_W, HEIGHT = 980, 700

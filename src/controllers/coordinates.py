@@ -15,16 +15,19 @@ def to_canvas(pos):
     z = getattr(cfg, "VIEW_ZOOM", 1.0) or 1.0
     px = getattr(cfg, "VIEW_PAN_X", 0.0)
     py = getattr(cfg, "VIEW_PAN_Y", 0.0)
-    return ((pos[0] - cfg.CANVAS_X - px) / z, (pos[1] - py) / z)
+    top = getattr(cfg, "TOP_BAR_H", 0)
+    return ((pos[0] - cfg.CANVAS_X - px) / z, (pos[1] - top - py) / z)
 
 def in_canvas(pos):
     """True if the screen position is over the canvas viewport area."""
-    return cfg.CANVAS_X <= pos[0] < cfg.CANVAS_X + cfg.CANVAS_W and 0 <= pos[1] < cfg.HEIGHT
+    top = getattr(cfg, "TOP_BAR_H", 0)
+    return cfg.CANVAS_X <= pos[0] < cfg.CANVAS_X + cfg.CANVAS_W and top <= pos[1] < cfg.HEIGHT
 
 def clamp_to_canvas(pos):
     """Map any window position to the nearest world point visible in the canvas viewport."""
+    top = getattr(cfg, "TOP_BAR_H", 0)
     sx = clamp(pos[0], cfg.CANVAS_X, cfg.CANVAS_X + cfg.CANVAS_W - 1)
-    sy = clamp(pos[1], 0, cfg.HEIGHT - 1)
+    sy = clamp(pos[1], top, cfg.HEIGHT - 1)
     return to_canvas((sx, sy))
 
 def to_screen(world_pos):
@@ -32,4 +35,5 @@ def to_screen(world_pos):
     z = getattr(cfg, "VIEW_ZOOM", 1.0) or 1.0
     px = getattr(cfg, "VIEW_PAN_X", 0.0)
     py = getattr(cfg, "VIEW_PAN_Y", 0.0)
-    return (world_pos[0] * z + px + cfg.CANVAS_X, world_pos[1] * z + py)
+    top = getattr(cfg, "TOP_BAR_H", 0)
+    return (world_pos[0] * z + px + cfg.CANVAS_X, world_pos[1] * z + py + top)

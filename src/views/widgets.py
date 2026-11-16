@@ -5,6 +5,10 @@ import pygame
 from config import *
 
 
+def clamp(v, lo, hi):
+    return lo if v < lo else hi if v > hi else v
+
+
 class Button:
     def __init__(self, rect, label):
         self.rect = pygame.Rect(rect)

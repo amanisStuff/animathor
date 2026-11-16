@@ -16,10 +16,10 @@
 | Duplicate | `Ctrl+D` or `Ctrl+J` | **Implemented** | `Ctrl+D` duplicates selected strokes (+16,+16) and selects duplicates. `Ctrl+J` not bound. |
 | Select All | `Ctrl+A` | **Implemented** | Selects all strokes. |
 | Deselect | `Ctrl+D` / `Esc` | **Implemented** | `Esc` cancels/deselects in priority order (redraw → marquee → drawing → transform/drag/selection → pan) before quitting the app when nothing is active. |
-| Save | `Ctrl+S` | **Implemented** | Saves document as JSON (`.anim.json`) via native dialog; remembers path. `src/models/document.py`. |
-| Save As | `Ctrl+Shift+S` | **Implemented** | Prompts for a new path and saves. |
-| Export | `Ctrl+Shift+E` | **Implemented** | Exports current canvas view to PNG (`export_scene_png` / cairo `write_to_png`). |
-| Open | `Ctrl+O` | **Implemented** | Opens a saved `.anim.json` document (replaces current strokes, undoable). |
+| Save | `Ctrl+S` | **Implemented** | Saves document as XML (`.athors`, default) or JSON (`.anim.json`) via native dialog; remembers path. `src/models/document.py`. |
+| Save As | `Ctrl+Shift+S` | **Implemented** | Prompts for a new path and saves (default `.athors`). |
+| Export | `Ctrl+Shift+E` | **Implemented** | Exports current canvas view to PNG or SVG (`export_scene_image`; cairo image/SVG surface) via native dialog. |
+| Open | `Ctrl+O` | **Implemented** | Opens a saved `.athors` or `.anim.json` document (replaces current strokes, undoable). |
 | Group / Ungroup | `Ctrl+G` / `Ctrl+Shift+G` | **Not implemented** | No grouping; strokes merge by endpoint snapping, but no explicit group commands. |
 | Command Palette / Search | `Ctrl+K` / `Ctrl+P` | **Not implemented** | No command palette or searchable action menu. |
 
@@ -32,7 +32,7 @@
 | `P` | Pen / Vector | **Not implemented** | No `P` shortcut (pen is the default draw subtool, reachable via `B`). |
 | `E` | Eraser | **Implemented** | `E` switches to **Draw (eraser)** subtool. |
 | `T` | Text / Type | **Not implemented** | No text tool. |
-| `I` | Eyedropper / Color picker | **Not implemented** | No eyedropper. |
+| `I` | Eyedropper / Color picker | **Implemented** | Eyedropper is a tool within the **Selection** panel ("Eyedropper - pick style (I)"). Activate via the panel button or `I` (switches to Selection), then click a stroke on the canvas to sample its stroke/fill color, line stroke size, and wave effects and apply them to the current selection (or to the selected curve/component when in Curve submode, with fill applied at stroke level). If nothing is selected, the picked stroke is selected. Pick mode is one-shot (or `Esc` to cancel). |
 | `C` | Crop / Cut-Razor | **Partial (rebound)** | Bare `C` is currently unbound (no longer clears the canvas); `Ctrl+C` is Copy. No crop/razor tool and no corner-anchor hotkey currently. |
 | `R` / `S` / `G` | Rotate / Scale / Grab (3D) | **N/A** (3D) | 2D app: transform handles support move/scale/rotate in selection transform submode (mouse-driven), but no `R`/`S`/`G` hotkeys. |
 | `[` / `]` | Decrease / Increase brush size (or step) | **Implemented** | `[` / `-` / Numpad `-` decrease max-points/width parameter; `]` / `=` / `+` / Numpad `+` increase (context-dependent slider behavior preserved). |
@@ -84,7 +84,7 @@
 
 - **View/camera transform:** `VIEW_ZOOM`, `VIEW_PAN_X`, `VIEW_PAN_Y` in `src/config.py`; view-aware `to_canvas`/`clamp_to_canvas`/`to_screen` in `src/controllers/coordinates.py`; `draw_scene(..., view_zoom, view_pan)` applies cairo translate/scale (`src/views/canvas.py`).
 - **Navigation:** mouse-wheel zoom toward cursor over canvas; `Space`+LMB drag and MMB drag to pan; `Ctrl+0` fit-all; `Ctrl+1` actual size.
-- **File I/O:** `src/models/document.py` (JSON serialize/deserialize/save/load) + native dialogs (`pick_open/save/export` in `src/views/dialogs.py`) + `export_scene_png`; wired to `Ctrl+S`, `Ctrl+Shift+S`, `Ctrl+O`, `Ctrl+Shift+E`.
+- **File I/O:** `src/models/document.py` (XML `.athors` and JSON `.anim.json` serialize/deserialize/save/load) + native dialogs (`pick_open/save/export` in `src/views/dialogs.py`) + `export_scene_image` (PNG/SVG); wired to `Ctrl+S`, `Ctrl+Shift+S`, `Ctrl+O`, `Ctrl+Shift+E`.
 - **Editing/selection:** `Ctrl+A` select all, `Ctrl+D` duplicate (+offset), `Ctrl+C/X/V` internal clipboard, improved `Esc` cancel/deselect priority.
 - **Tool shortcuts & discoverability:** `V` select, `B` draw/pen, `E` eraser; straight-line constraint moved to `Shift`-hold during draw; toolbar hover tooltips with shortcuts (`src/views/toolbar.py`). Bare `C` no longer clears the canvas. Line is a **draw shape** (select in Draw panel → Shape → `Line`), not a separate hotkey; hold `Shift` while drawing with the pen to constrain a straight segment.
 

@@ -54,17 +54,27 @@ def draw_swatch(screen, rect, color, selected, mouse_pos):
 
 def draw_panel(screen, fonts, mouse_pos, state):
     font, font_small, font_title = fonts
-    panel_rect = pygame.Rect(cfg.PANEL_X, 0, PANEL_W, cfg.HEIGHT)
+    top = getattr(cfg, "TOP_BAR_H", 0)
+    panel_rect = pygame.Rect(cfg.PANEL_X, top, PANEL_W, cfg.HEIGHT - top)
     pygame.draw.rect(screen, PANEL_BG, panel_rect)
-    pygame.draw.line(screen, PANEL_BORDER, (cfg.PANEL_X, 0), (cfg.PANEL_X, cfg.HEIGHT), 2)
+    pygame.draw.line(screen, PANEL_BORDER, (cfg.PANEL_X, top), (cfg.PANEL_X, cfg.HEIGHT), 2)
 
     x = cfg.PANEL_X + 20
-    y = 18 - int(state.get("panel_scroll", 0) or 0)
-    title = font_title.render("Draw" if state["tool_mode"] == "draw" else "Selection", True, TEXT_COLOR)
+    y = top + 18 - int(state.get("panel_scroll", 0) or 0)
+    tm = state.get("tool_mode", "draw")
+    if tm == "draw":
+        state["eyedropper_rect"] = pygame.Rect(0, 0, 0, 0)
+        title_text = "Draw"
+    elif tm == "eyedropper":
+        title_text = "Eyedropper"
+    else:
+        title_text = "Selection"
+    title = font_title.render(title_text, True, TEXT_COLOR)
     screen.blit(title, (x, y))
     y += 36
 
-    if state["tool_mode"] == "draw":
+    if tm == "draw":
+        state["eyedropper_rect"] = pygame.Rect(0, 0, 0, 0)
         # Points control
         label = font.render("Points / curve", True, TEXT_COLOR)
         screen.blit(label, (x, y)); y += 24
@@ -169,12 +179,7 @@ def draw_panel(screen, fonts, mouse_pos, state):
             screen.blit(font_small.render("No reference image", True, MUTED_COLOR), (x, y)); y += 18
         y += 4
 
-        label2 = font.render("Actions", True, TEXT_COLOR)
-        screen.blit(label2, (x, y)); y += 28
-        for i, b in enumerate(state["buttons"]["actions"]):
-            b.rect.topleft = (x, y + i * 42)
-            b.draw(screen, font, mouse_pos)
-        y += len(state["buttons"]["actions"]) * 42 + 12
+        y += 4
 
         stats = font_small.render(f"Strokes: {state['stroke_count']} | Backend: {CAIRO_BACKEND}", True, MUTED_COLOR)
         screen.blit(stats, (x, y)); y += 24
@@ -210,7 +215,21 @@ def draw_panel(screen, fonts, mouse_pos, state):
                 pygame.draw.rect(screen, TOOL_ACTIVE, r.inflate(-4, -4), border_radius=5)
             t = font_small.render(label, True, ACCENT if active else TEXT_COLOR)
             screen.blit(t, t.get_rect(center=r.center))
-        y += 38
+        y += 34
+        # Eyedropper (pick style) - tool within selection panel
+        pick_active = bool(state.get("eyedropper_pick"))
+        ed_rect = pygame.Rect(x, y, PANEL_W - 40, 28)
+        state["eyedropper_rect"] = ed_rect
+        bg = TOOL_ACTIVE if pick_active else (BUTTON_HOVER if ed_rect.collidepoint(mouse_pos) else BUTTON_BG)
+        pygame.draw.rect(screen, bg, ed_rect, border_radius=6)
+        pygame.draw.rect(screen, ACCENT if pick_active else BUTTON_BORDER, ed_rect, 2 if pick_active else 1, border_radius=6)
+        ed_label = "Eyedropper: click a stroke..." if pick_active else "Eyedropper - pick style (I)"
+        t = font_small.render(ed_label, True, ACCENT if pick_active else TEXT_COLOR)
+        screen.blit(t, t.get_rect(center=ed_rect.center))
+        y += 32
+        if pick_active:
+            hint = font_small.render("Samples stroke/fill color, size, wave effects", True, MUTED_COLOR)
+            screen.blit(hint, (x, y)); y += 18
 
         sel_stroke = state.get("selected_obj")
         # Curve/stroke-edit controls (single selection in curve mode)
@@ -247,18 +266,46 @@ def draw_panel(screen, fonts, mouse_pos, state):
                 y += 38
 
                 # Curve styles list (non-destructive). Styles are added to this curve.
-                screen.blit(font_small.render("Curve styles", True, TEXT_COLOR), (x, y)); y += 20
                 comp = comps[comp_i] if 0 <= comp_i < len(comps) else {}
                 styles = _component_styles(comp)
                 has_wave = any(isinstance(s, dict) and s.get("type") == "wave" for s in styles)
+                waves_all = _get_wave_styles(comp) if has_wave else []
+                n_waves = len(waves_all)
+                collapsed = bool(state.get("wave_list_collapsed"))
+                arrow = ">" if collapsed else "v"
+                header_label = f"{arrow} Curve styles"
+                if has_wave:
+                    header_label += f" ({n_waves})"
+                hdr_rect = pygame.Rect(x, y, PANEL_W - 40, 22)
+                state["wave_list_header_rect"] = hdr_rect
+                hbg = BUTTON_HOVER if hdr_rect.collidepoint(mouse_pos) else None
+                if hbg:
+                    pygame.draw.rect(screen, hbg, hdr_rect, border_radius=5)
+                screen.blit(font_small.render(header_label, True, TEXT_COLOR), (x + 4, y + 3))
+                y += 24
+
                 state["wave_add_rect"] = pygame.Rect(0,0,0,0)
                 state["wave_remove_rect"] = pygame.Rect(0,0,0,0)
                 state["wave_toggle_rect"] = pygame.Rect(0,0,0,0)
                 state["wave_slider_rects"] = {}
+                state["wave_shape_rects"] = {}
+                state["wave_row_rects"] = []
+                state["wave_formula_rect"] = pygame.Rect(0,0,0,0)
+                state["wave_custom_box_rect"] = pygame.Rect(0,0,0,0)
+                state["wave_smooth_rect"] = pygame.Rect(0,0,0,0)
+                state["wave_reverse_rect"] = pygame.Rect(0,0,0,0)
 
-                if has_wave:
-                    waves_all = _get_wave_styles(comp)
-                    n_waves = len(waves_all)
+                if collapsed:
+                    # keep details hidden but allow adding a wave
+                    add_rect = pygame.Rect(x, y, PANEL_W - 40, 24)
+                    state["wave_add_rect"] = add_rect
+                    abg = BUTTON_HOVER if add_rect.collidepoint(mouse_pos) else BUTTON_BG
+                    pygame.draw.rect(screen, abg, add_rect, border_radius=5)
+                    pygame.draw.rect(screen, BUTTON_BORDER, add_rect, 1, border_radius=5)
+                    at = font_small.render("+ Add Wave distortion", True, TEXT_COLOR)
+                    screen.blit(at, at.get_rect(center=add_rect.center))
+                    y += 30
+                elif has_wave:
                     # active (expanded) wave index, clamped to the current stack
                     wi = int(state.get("wave_active_index", 0) or 0)
                     if not (0 <= wi < n_waves):
@@ -268,7 +315,6 @@ def draw_panel(screen, fonts, mouse_pos, state):
                     shape = str(wave.get("shape", "sine") or "sine").lower()
 
                     # ---- modifier stack rows: click a row to edit that wave ----
-                    state["wave_row_rects"] = []
                     row_h = 26
                     for i, wv in enumerate(waves_all):
                         row = pygame.Rect(x, y, PANEL_W - 40, row_h)
@@ -523,8 +569,6 @@ def draw_panel(screen, fonts, mouse_pos, state):
                 else:
                     add_rect = pygame.Rect(x, y, PANEL_W - 40, 28)
                     state["wave_add_rect"] = add_rect
-                    state["wave_shape_rects"] = {}
-                    state["wave_row_rects"] = []
                     bg = BUTTON_HOVER if add_rect.collidepoint(mouse_pos) else BUTTON_BG
                     pygame.draw.rect(screen, bg, add_rect, border_radius=6)
                     pygame.draw.rect(screen, BUTTON_BORDER, add_rect, 1, border_radius=6)
@@ -850,7 +894,8 @@ def draw_panel(screen, fonts, mouse_pos, state):
     max_scroll = max(0, content_bottom + 24 - cfg.HEIGHT)
     if max_scroll > 0:
         # simple scrollbar on the panel's right edge
-        track = pygame.Rect(cfg.PANEL_X + PANEL_W - 7, 6, 5, cfg.HEIGHT - 12)
+        _tb = getattr(cfg, "TOP_BAR_H", 0)
+        track = pygame.Rect(cfg.PANEL_X + PANEL_W - 7, _tb + 6, 5, cfg.HEIGHT - _tb - 12)
         pygame.draw.rect(screen, (58, 62, 74), track, border_radius=3)
         frac = min(1.0, (cfg.HEIGHT - 40) / max(1, content_bottom))
         thumb_h = max(30, int(track.h * frac))
