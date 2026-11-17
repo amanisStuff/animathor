@@ -33,7 +33,7 @@ def _tk_call(fn):
 def pick_reference_image_path():
     return _tk_call(lambda root: tk_filedialog.askopenfilename(
         title="Select reference image",
-        filetypes=[("Images", "*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp"), ("All files", "*.*")],
+        filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp *.gif *.webp"), ("All files", "*.*")],
     ))
 
 

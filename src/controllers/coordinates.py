@@ -21,13 +21,15 @@ def to_canvas(pos):
 def in_canvas(pos):
     """True if the screen position is over the canvas viewport area."""
     top = getattr(cfg, "TOP_BAR_H", 0)
-    return cfg.CANVAS_X <= pos[0] < cfg.CANVAS_X + cfg.CANVAS_W and top <= pos[1] < cfg.HEIGHT
+    bottom = cfg.HEIGHT - getattr(cfg, "BOTTOM_BAR_H", 0)
+    return cfg.CANVAS_X <= pos[0] < cfg.CANVAS_X + cfg.CANVAS_W and top <= pos[1] < bottom
 
 def clamp_to_canvas(pos):
     """Map any window position to the nearest world point visible in the canvas viewport."""
     top = getattr(cfg, "TOP_BAR_H", 0)
+    bottom = cfg.HEIGHT - getattr(cfg, "BOTTOM_BAR_H", 0)
     sx = clamp(pos[0], cfg.CANVAS_X, cfg.CANVAS_X + cfg.CANVAS_W - 1)
-    sy = clamp(pos[1], top, cfg.HEIGHT - 1)
+    sy = clamp(pos[1], top, bottom - 1)
     return to_canvas((sx, sy))
 
 def to_screen(world_pos):

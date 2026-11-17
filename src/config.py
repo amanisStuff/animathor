@@ -10,6 +10,9 @@ __all__ = [
     "ACCENT",
     "ACTIVE_COLOR",
     "BG_COLOR",
+    "BOTTOM_BAR_H",
+    "BOTTOM_TOOLS",
+    "BUCKET_SWATCHES",
     "BUTTON_BG",
     "BUTTON_BORDER",
     "BUTTON_HOVER",
@@ -26,10 +29,12 @@ __all__ = [
     "TOP_BAR_H",
     "TOOL_ACTIVE",
     "TRACE_ALGORITHMS",
+    "TRIANGLE_VARIANTS",
 ]
 
 TOP_BAR_H = 28
 LEFT_BAR_W = 56
+BOTTOM_BAR_H = 56
 
 CANVAS_W, HEIGHT = 980, 700
 
@@ -40,6 +45,11 @@ WIDTH = LEFT_BAR_W + CANVAS_W + PANEL_W
 CANVAS_X = LEFT_BAR_W
 
 PANEL_X = LEFT_BAR_W + CANVAS_W
+
+
+def canvas_viewport_height():
+    """Height of the drawable canvas area (window minus top and bottom bars)."""
+    return max(1, HEIGHT - TOP_BAR_H - BOTTOM_BAR_H)
 
 # View/camera transform (world <-> screen). Mutated by the Controller.
 VIEW_ZOOM = 1.0
@@ -87,6 +97,22 @@ FILL_SWATCHES = [
     (1.0, 1.0, 1.0),
 ]
 
+# Preset colors for the Fill (bucket) tool. Unlike FILL_SWATCHES these are all
+# opaque colors (a bucket fill with no color would be invisible).
+BUCKET_SWATCHES = [
+    (0.45, 0.72, 1.0),
+    (0.85, 0.92, 1.0),
+    (1.0, 0.9, 0.85),
+    (0.88, 1.0, 0.88),
+    (0.97, 0.88, 1.0),
+    (0.95, 0.6, 0.1),
+    (0.9, 0.2, 0.2),
+    (0.15, 0.55, 0.2),
+    (0.15, 0.35, 0.9),
+    (1.0, 1.0, 1.0),
+    (0.1, 0.1, 0.15),
+]
+
 TRACE_ALGORITHMS = [
     ("fit", "Fit"),
     ("catmull-rom", "C-R"),
@@ -101,4 +127,18 @@ DRAW_SHAPES = [
     ("ellipse", "Ellipse"),
     ("circle", "Circle"),
     ("triangle", "Tri"),
+]
+
+# Non-shape drawing tools shown at the right end of the bottom bar.
+BOTTOM_TOOLS = [
+    ("eraser", "Eraser"),
+    ("cutter", "Split"),
+    ("bucket", "Fill"),
+]
+
+# Triangle sub-types (right-click the Tri button on the bottom bar).
+TRIANGLE_VARIANTS = [
+    ("isosceles", "Isosceles"),
+    ("right", "Right"),
+    ("equilateral", "Equilateral"),
 ]

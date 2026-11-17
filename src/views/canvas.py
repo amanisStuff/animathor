@@ -159,7 +159,7 @@ def draw_stroke_path_distorted(ctx, stroke):
         ctx.close_path()
     return True
 
-def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, selected_index=None, selected_indices=None, edit_mode=False, selection_submode="transform", selected_curve=None, snap_kind="connect", redrawing_curve=None, ref_img=None, view_zoom=None, view_pan=None, pivot_pos=None, for_export=False):
+def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, selected_index=None, selected_indices=None, edit_mode=False, selection_submode="transform", selected_curve=None, snap_kind="connect", redrawing_curve=None, ref_img=None, view_zoom=None, view_pan=None, pivot_pos=None, for_export=False, transform_handle_mode="scale"):
     # Backward compat: selected_index (single) or selected_indices (collection)
     if selected_indices is None and selected_index is not None:
         selected_indices = selected_index
@@ -233,6 +233,41 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
             pass
         ctx.restore()
 
+    def _draw_arrowhead(ctx, segs, color, width):
+        """Draw an arrowhead at the end of the last segment (line shapes)."""
+        if not segs:
+            return
+        try:
+            p2, p3 = segs[-1][2], segs[-1][3]
+        except Exception:
+            return
+        dx, dy = p3[0] - p2[0], p3[1] - p2[1]
+        length = math.hypot(dx, dy)
+        if length < 1e-6:
+            try:
+                p2, p3 = segs[-1][0], segs[-1][3]
+                dx, dy = p3[0] - p2[0], p3[1] - p2[1]
+                length = math.hypot(dx, dy)
+            except Exception:
+                return
+        if length < 1e-6:
+            return
+        ux, uy = dx / length, dy / length
+        size = max(9.0, float(width or 3.0) * 3.5)
+        ang = math.radians(26.0)
+        ca, sa = math.cos(ang), math.sin(ang)
+        ctx.new_path()
+        for sign in (-1.0, 1.0):
+            rx = -ux * ca + uy * sa * sign
+            ry = -ux * sa * sign - uy * ca
+            ctx.move_to(p3[0], p3[1])
+            ctx.line_to(p3[0] + rx * size, p3[1] + ry * size)
+        ctx.set_source_rgba(*color_rgba(color, (0.1, 0.1, 0.15, 1.0)))
+        ctx.set_line_width(max(1.0, float(width or 3.0)))
+        ctx.set_line_cap(cairo.LINE_CAP_ROUND)
+        ctx.stroke()
+
+
     def _draw_stroke_segments(ctx, stroke, seg_indices, stroke_color, stroke_width):
         if not seg_indices:
             return
@@ -271,9 +306,14 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
                     ctx.move_to(p0[0], p0[1]); ctx.curve_to(c1[0], c1[1], c2[0], c2[1], p3[0], p3[1])
                     drew_c = True
             if drew_c:
-                ctx.set_source_rgba(*color_rgba(sc_i if _stroke_has_component_styles(stroke) or _component_wave_enabled(comp) else stroke_color, (0.1, 0.1, 0.15, 1.0)))
-                ctx.set_line_width(sw_i if _stroke_has_component_styles(stroke) or _component_wave_enabled(comp) else stroke_width)
-                ctx.stroke()
+                eff_sc = sc_i if _stroke_has_component_styles(stroke) or _component_wave_enabled(comp) else stroke_color
+                eff_sw = sw_i if _stroke_has_component_styles(stroke) or _component_wave_enabled(comp) else stroke_width
+                if eff_sw is not None and float(eff_sw) > 0.0 and color_alpha(eff_sc, 1.0) > 0.0:
+                    ctx.set_source_rgba(*color_rgba(eff_sc, (0.1, 0.1, 0.15, 1.0)))
+                    ctx.set_line_width(float(eff_sw))
+                    ctx.stroke()
+                else:
+                    ctx.new_path()
 
 
     for idx, stroke in enumerate(strokes):
@@ -361,18 +401,26 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
             ctx.stroke()
 
         visible_segs = [i for i in range(len(segs)) if i not in hidden]
+        has_stroke = (stroke_width is not None and float(stroke_width) > 0.0 and color_alpha(stroke_color, 1.0) > 0.0)
         if fill_color is not None and draw_stroke_path(ctx, stroke):
             ctx.set_source_rgba(*color_rgba(fill_color, (0.0, 0.0, 0.0, 1.0)))
             if _stroke_needs_variable_width(stroke, visible_segs):
                 ctx.fill()
-                _draw_stroke_segments(ctx, stroke, visible_segs, stroke_color, stroke_width)
+                if has_stroke or _stroke_has_component_styles(stroke):
+                    _draw_stroke_segments(ctx, stroke, visible_segs, stroke_color, stroke_width)
             else:
-                ctx.fill_preserve()
-                if _stroke_has_component_styles(stroke):
-                    ctx.new_path()
-                _draw_stroke_segments(ctx, stroke, visible_segs, stroke_color, stroke_width)
+                if has_stroke or _stroke_has_component_styles(stroke):
+                    ctx.fill_preserve()
+                    if _stroke_has_component_styles(stroke):
+                        ctx.new_path()
+                    _draw_stroke_segments(ctx, stroke, visible_segs, stroke_color, stroke_width)
+                else:
+                    ctx.fill()
         else:
             _draw_stroke_segments(ctx, stroke, visible_segs, stroke_color, stroke_width)
+
+        if isinstance(stroke, dict) and stroke.get("arrow_end") and has_stroke:
+            _draw_arrowhead(ctx, segs, stroke_color, stroke_width)
 
         # Show hidden curves differently in edit curve/nodes modes for easier selection
         if show_hidden:
@@ -424,7 +472,7 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
             obb = combined_obb(strokes, selected_in_range)
             if obb:
                 corners = obb.get("corners", [])
-                handles = bbox_handles(obb)
+                handles = bbox_handles(obb, mode=transform_handle_mode)
                 try:
                     ctx.set_dash([6, 4])
                 except Exception:
@@ -441,17 +489,23 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
                     ctx.set_dash([])
                 except Exception:
                     pass
-                # rotation stem: from top-mid edge to rot handle
-                if "n" in handles and "rot" in handles:
+                # rotation stem only in legacy-style scale mode separate rot handle
+                if transform_handle_mode == "scale" and "n" in handles and "rot" in handles:
                     npt = handles["n"]; rpt = handles["rot"]
                     ctx.set_source_rgb(0.1, 0.45, 0.95)
                     ctx.set_line_width(1.0)
                     ctx.move_to(npt[0], npt[1]); ctx.line_to(rpt[0], rpt[1])
                     ctx.stroke()
                 for name, pt in handles.items():
-                    if name == "rot":
+                    if name == "rot" or name.startswith("rot_"):
                         ctx.set_source_rgb(1, 1, 1); ctx.arc(pt[0], pt[1], 5.0, 0, 2*math.pi); ctx.fill()
                         ctx.set_source_rgb(0.1, 0.45, 0.95); ctx.set_line_width(1.5); ctx.arc(pt[0], pt[1], 5.0, 0, 2*math.pi); ctx.stroke()
+                    elif name.startswith("skew_"):
+                        # skew handles as diamonds
+                        d = 4.5
+                        ctx.move_to(pt[0], pt[1]-d); ctx.line_to(pt[0]+d, pt[1]); ctx.line_to(pt[0], pt[1]+d); ctx.line_to(pt[0]-d, pt[1]); ctx.close_path()
+                        ctx.set_source_rgb(1, 1, 1); ctx.fill_preserve()
+                        ctx.set_source_rgb(0.1, 0.45, 0.95); ctx.set_line_width(1.5); ctx.stroke()
                     else:
                         ctx.set_source_rgb(1, 1, 1); ctx.rectangle(pt[0]-4, pt[1]-4, 8, 8); ctx.fill_preserve()
                         ctx.set_source_rgb(0.1, 0.45, 0.95); ctx.set_line_width(1.5); ctx.stroke()
@@ -540,7 +594,7 @@ def surface_to_pygame(cairo_surface):
 
 def export_scene_png(path, strokes, ref_img=None, view_zoom=1.0, view_pan=(0.0, 0.0), size=None):
     """Export the current scene to a PNG file (viewport-sized)."""
-    w, h = (int(size[0]), int(size[1])) if size else (int(cfg.CANVAS_W), int(max(1, cfg.HEIGHT - getattr(cfg, "TOP_BAR_H", 0))))
+    w, h = (int(size[0]), int(size[1])) if size else (int(cfg.CANVAS_W), int(cfg.canvas_viewport_height()))
     surf = make_cairo_surface(w, h)
     draw_scene(surf, strokes, ref_img=ref_img, view_zoom=view_zoom, view_pan=view_pan, for_export=True)
     surf.write_to_png(path)
@@ -548,7 +602,7 @@ def export_scene_png(path, strokes, ref_img=None, view_zoom=1.0, view_pan=(0.0, 
 
 def export_scene_svg(path, strokes, ref_img=None, view_zoom=1.0, view_pan=(0.0, 0.0), size=None):
     """Export the current scene to an SVG file (viewport-sized)."""
-    w, h = (int(size[0]), int(size[1])) if size else (int(cfg.CANVAS_W), int(max(1, cfg.HEIGHT - getattr(cfg, "TOP_BAR_H", 0))))
+    w, h = (int(size[0]), int(size[1])) if size else (int(cfg.CANVAS_W), int(cfg.canvas_viewport_height()))
     surf = cairo.SVGSurface(str(path), w, h)
     try:
         draw_scene(surf, strokes, ref_img=ref_img, view_zoom=view_zoom, view_pan=view_pan, for_export=True)
@@ -570,23 +624,66 @@ def export_scene_image(path, strokes, ref_img=None, view_zoom=1.0, view_pan=(0.0
     else:
         export_scene_png(path, strokes, ref_img=ref_img, view_zoom=view_zoom, view_pan=view_pan, size=size)
 
-def load_reference_image(path):
-    """Load image file into a cairo ImageSurface (ARGB32) for reference drawing."""
-    if not path:
-        return None
+def _pygame_image_to_cairo_surface(path):
+    """Load any pygame-supported image and copy its pixels into a cairo surface.
+
+    Returns a cairo.ImageSurface (ARGB32) or None. The pixels are copied into
+    the surface's own buffer, so there is no external buffer whose lifetime we
+    have to track. (pycairo surfaces are C objects and cannot hold a reference
+    to a Python buffer as an attribute, which previously made every non-PNG
+    load fail silently.)
+    """
     try:
-        # Prefer cairo PNG loader when possible
-        if str(path).lower().endswith(".png"):
-            surf = cairo.ImageSurface.create_from_png(path)
-            w, h = surf.get_width(), surf.get_height()
-        else:
-            img = pygame.image.load(path).convert_alpha()
-            w, h = img.get_width(), img.get_height()
-            data = pygame.image.tostring(img, "BGRA")
-            buf = bytearray(data)
-            surf = cairo.ImageSurface.create_for_data(buf, cairo.FORMAT_ARGB32, w, h)
-            # keep buffer alive
-            surf._buf = buf
-        return {"surface": surf, "w": w, "h": h, "x": 0.0, "y": 0.0, "scale": 1.0, "opacity": 0.5, "visible": True, "path": path}
+        img = pygame.image.load(path)
     except Exception:
         return None
+    try:
+        img = img.convert_alpha()
+    except Exception:
+        # No display / conversion unavailable: use the loaded surface as-is.
+        pass
+    w, h = img.get_size()
+    if w <= 0 or h <= 0:
+        return None
+    try:
+        data = pygame.image.tobytes(img, "BGRA")
+    except AttributeError:  # older pygame
+        data = pygame.image.tostring(img, "BGRA")
+    try:
+        surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, h)
+        view = surf.get_data()
+        view[:len(data)] = data
+        # We wrote straight into the surface's buffer, so tell cairo the pixels
+        # changed. Without this it can keep painting a stale (blank) snapshot.
+        try:
+            surf.mark_dirty()
+        except Exception:
+            pass
+        return surf
+    except Exception:
+        return None
+
+
+def load_reference_image(path):
+    """Load image file into a cairo ImageSurface (ARGB32) for reference drawing.
+
+    PNG uses cairo's native loader (fast and exact). Everything else — and any
+    PNG cairo cannot decode — goes through pygame, so JPG/JPEG/BMP/GIF/WEBP all
+    work consistently. Returns None only if the file genuinely cannot be read.
+    """
+    if not path:
+        return None
+    surf = None
+    # Prefer cairo's PNG loader when possible.
+    if str(path).lower().endswith(".png"):
+        try:
+            surf = cairo.ImageSurface.create_from_png(path)
+        except Exception:
+            surf = None
+    # Fall back to pygame for other formats and unreadable PNGs.
+    if surf is None:
+        surf = _pygame_image_to_cairo_surface(path)
+        if surf is None:
+            return None
+    w, h = surf.get_width(), surf.get_height()
+    return {"surface": surf, "w": w, "h": h, "x": 0.0, "y": 0.0, "scale": 1.0, "opacity": 0.5, "visible": True, "path": path}

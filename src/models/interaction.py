@@ -28,6 +28,8 @@ for _n in dir(_dep):
 
 
 def nearest_endpoint(pos, strokes, radius, extra_points=None):
+    if radius <= 0:
+        return None
     best = None
     best_d = radius
     candidates = stroke_endpoints(strokes)
@@ -42,6 +44,8 @@ def nearest_endpoint(pos, strokes, radius, extra_points=None):
 
 def nearest_snap_point(pos, strokes, radius, extra_points=None):
     """Nearest endpoint or point on any existing curve/edge within radius."""
+    if radius <= 0:
+        return None
     best = nearest_endpoint(pos, strokes, radius, extra_points=extra_points)
     best_d = math.hypot(pos[0] - best[0], pos[1] - best[1]) if best is not None else radius
     curve_pt = nearest_point_on_strokes(pos, strokes, best_d)
@@ -278,6 +282,406 @@ def erase_curve_at(strokes, pos, threshold=10.0):
         replacements.append(st)
     new_list = list(strokes[:si]) + replacements + list(strokes[si + 1:])
     return new_list, True
+
+# --- Split curve (razor) ----------------------------------------------------
+# A cutter swipe is a polyline in canvas space. Every visible curve segment it
+# crosses is split at the crossing (De Casteljau), turning the stroke into two
+# or more independent strokes while keeping its style and component styles.
+
+def _lerp_pt(p, q, t):
+    return (p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t)
+
+
+def split_cubic_at(seg, t):
+    """Split a cubic bezier at parameter ``t``; returns (left, right)."""
+    p0, c1, c2, p3 = seg
+    a = _lerp_pt(p0, c1, t)
+    b = _lerp_pt(c1, c2, t)
+    c = _lerp_pt(c2, p3, t)
+    d = _lerp_pt(a, b, t)
+    e = _lerp_pt(b, c, t)
+    f = _lerp_pt(d, e, t)
+    return (tuple(p0), a, d, f), (f, e, c, tuple(p3))
+
+
+def _sub_cubic(seg, t0, t1):
+    """The portion of ``seg`` between parameters ``t0 < t1``."""
+    if t0 <= 1e-9 and t1 >= 1.0 - 1e-9:
+        return tuple(seg)
+    left, right = split_cubic_at(seg, t0)
+    if t1 >= 1.0 - 1e-9:
+        return right
+    t = (t1 - t0) / max(1e-9, 1.0 - t0)
+    return split_cubic_at(right, t)[0]
+
+
+# A razor cut breaks a curve at each crossing. With no gap the stroke stays one
+# connected path: the crossing simply becomes a new anchor, so both new curves
+# still share it and anything joined to the stroke stays joined. An optional
+# gap trims a little material from each side and then the pieces are separate.
+
+
+def _insert_cut_nodes(stroke, cuts):
+    """Split a stroke at every cut into separately selectable curve components.
+
+    Each crossing becomes a new anchor and also starts a new component, so the
+    two resulting curves can be picked individually in Curve mode. The stroke
+    itself stays one object and the halves share the node, so anything joined to
+    the stroke stays joined. Returns the modified stroke, or ``None`` when no
+    interior cut was found."""
+    segs = list(segs_of(stroke))
+    params_by_seg = {}
+    for si, ts in (cuts or {}).items():
+        if not (0 <= si < len(segs)):
+            continue
+        vals = sorted({clamp(float(t), 0.0, 1.0) for t in ts
+                       if 1e-4 < float(t) < 1.0 - 1e-4})
+        if vals:
+            params_by_seg[si] = vals
+    if not params_by_seg:
+        return None
+
+    new_segs = []
+    seg_map = {}  # original segment index -> (first, last) new index
+    for si, seg in enumerate(segs):
+        ts = [0.0] + params_by_seg.get(si, []) + [1.0]
+        first = len(new_segs)
+        for t0, t1 in zip(ts, ts[1:]):
+            new_segs.append(_sub_cubic(seg, t0, t1))
+        seg_map[si] = (first, len(new_segs) - 1)
+
+    if not isinstance(stroke, dict):
+        return new_segs
+
+    out = _copy_stroke(stroke)
+    out["segs"] = new_segs
+
+    # Anchors travel with their segment; cut nodes stay smooth (tangent
+    # continuous) because both halves come from the same cubic.
+    corners = set()
+    for si, name in _corners(stroke):
+        if si in seg_map:
+            first, last = seg_map[si]
+            corners.add((first if name == "p0" else last, name))
+    out["corner_anchors"] = corners
+
+    hidden = set()
+    for si in (stroke.get("hidden_segs") or ()):
+        if si in seg_map:
+            hidden.add(seg_map[si][0])
+    out["hidden_segs"] = hidden
+
+    pw = stroke.get("point_widths")
+    if pw:
+        new_pw = {}
+        for si in range(len(segs)):
+            first, last = seg_map[si]
+            if si in params_by_seg:
+                w0 = get_point_width(stroke, si, "p0")
+                w1 = get_point_width(stroke, si, "p3")
+                ts = [0.0] + params_by_seg[si] + [1.0]
+                for k in range(len(ts) - 1):
+                    new_pw[f"{first + k}:p0"] = w0 + (w1 - w0) * ts[k]
+                    new_pw[f"{first + k}:p3"] = w0 + (w1 - w0) * ts[k + 1]
+            else:
+                for name, idx in (("p0", first), ("p3", last)):
+                    key = f"{si}:{name}"
+                    if key in pw:
+                        new_pw[f"{idx}:{name}"] = pw[key]
+        out["point_widths"] = new_pw
+
+    # Rebuild components, breaking each one at the new cut nodes. Every half
+    # keeps the original component's style, so the split is purely structural.
+    comps_src = _stroke_components(stroke)
+    ranges = _component_ranges(stroke)
+    covered = ranges[-1][1] if ranges else 0
+    if covered < len(segs):
+        comps_src = list(comps_src) + [{}]
+        ranges = list(ranges) + [(covered, len(segs))]
+
+    new_comps = []
+    for ci, (s0, s1) in enumerate(ranges):
+        src = comps_src[ci] if ci < len(comps_src) else {}
+        sub = []
+        cur = []
+        for si in range(s0, min(s1, len(segs))):
+            first, last = seg_map[si]
+            for k in range(first, last + 1):
+                cur.append(new_segs[k])
+                if k < last:
+                    # Interior cut: end this component and start the next one.
+                    sub.append(cur)
+                    cur = []
+        if cur:
+            sub.append(cur)
+        for seglist in sub:
+            comp = dict(src)
+            comp["segs"] = seglist
+            # The old raw points describe the whole pre-cut curve; drop them so
+            # redrawing a half cannot regenerate the other half.
+            comp["raw_points"] = []
+            new_comps.append(comp)
+    out["components"] = new_comps
+    return out
+
+
+def _cubic_length(seg, samples=16):
+    p0, c1, c2, p3 = seg
+    prev = p0
+    total = 0.0
+    for k in range(1, samples + 1):
+        pt = _cubic_point(p0, c1, c2, p3, k / float(samples))
+        total += math.hypot(pt[0] - prev[0], pt[1] - prev[1])
+        prev = pt
+    return total
+
+
+def _trim_piece_atoms(piece, gap_start, gap_end):
+    """Keep the part of ``piece`` between the given arc-length trims."""
+    if not piece:
+        return None
+    if gap_start <= 0.0 and gap_end <= 0.0:
+        return piece
+    lens = [_cubic_length(a["seg"]) for a in piece]
+    total = sum(lens)
+    if total <= (gap_start + gap_end) * 1.15:
+        return None  # sliver: drop the whole piece
+
+    def locate(dist):
+        acc = 0.0
+        for i, L in enumerate(lens):
+            if acc + L >= dist:
+                return i, clamp((dist - acc) / max(1e-9, L), 0.0, 1.0)
+            acc += L
+        return len(lens) - 1, 1.0
+
+    si, sf = locate(gap_start) if gap_start > 0.0 else (0, 0.0)
+    ei, ef = locate(total - gap_end) if gap_end > 0.0 else (len(lens) - 1, 1.0)
+    if ei < si or (ei == si and ef - sf <= 1e-4):
+        return None
+
+    out = []
+    for i in range(si, ei + 1):
+        t0 = sf if i == si else 0.0
+        t1 = ef if i == ei else 1.0
+        if t1 - t0 <= 1e-6:
+            continue
+        atom = dict(piece[i])
+        atom["seg"] = _sub_cubic(piece[i]["seg"], t0, t1)
+        out.append(atom)
+    return out or None
+
+
+def _seg_cross_params(seg, a, b, samples=24):
+    """Parameters along a cubic where it crosses the segment a-b."""
+    p0, c1, c2, p3 = seg
+    params = []
+    prev = p0
+    for k in range(1, samples + 1):
+        pt = _cubic_point(p0, c1, c2, p3, k / float(samples))
+        rx, ry = pt[0] - prev[0], pt[1] - prev[1]
+        sx, sy = b[0] - a[0], b[1] - a[1]
+        den = rx * sy - ry * sx
+        if abs(den) > 1e-12:
+            qx, qy = a[0] - prev[0], a[1] - prev[1]
+            s = (qx * sy - qy * sx) / den   # along the cubic sub-segment
+            u = (qx * ry - qy * rx) / den   # along the cutter segment
+            if -1e-9 <= s <= 1.0 + 1e-9 and -1e-9 <= u <= 1.0 + 1e-9:
+                params.append((k - 1 + clamp(s, 0.0, 1.0)) / float(samples))
+        prev = pt
+    return params
+
+
+def _split_stroke_at_cuts(stroke, cuts, gap=0.0):
+    """Split a stroke at {seg_index: [t, ...]}. Returns the piece strokes.
+
+    ``t`` may be 0 or 1: a cut on a segment joint becomes a break there.
+    ``gap`` is the material trimmed from *each* cut end (canvas px); 0 leaves
+    the pieces sharing the exact intersection node."""
+    segs = list(segs_of(stroke))
+    ranges = _component_ranges(stroke)
+    comps_src = _stroke_components(stroke)
+
+    def comp_of(seg_i):
+        for ci, (s0, s1) in enumerate(ranges):
+            if s0 <= seg_i < s1:
+                return ci
+        return 0
+
+    # Cuts landing on a joint break *before* the next segment.
+    break_before = set()
+    for si, ts in cuts.items():
+        for t in ts:
+            if t <= 1e-4:
+                break_before.add(si)
+            elif t >= 1.0 - 1e-4:
+                break_before.add(si + 1)
+
+    # Flatten the stroke into sub-segments ("atoms"), remembering the component
+    # each atom belongs to.
+    atoms = []
+    for si, seg in enumerate(segs):
+        ts = sorted(set([0.0] + list(cuts.get(si, ())) + [1.0]))
+        for t0, t1 in zip(ts, ts[1:]):
+            if t1 - t0 <= 1e-6:
+                continue
+            atoms.append({
+                "seg": _sub_cubic(seg, t0, t1),
+                "ci": comp_of(si),
+                "si": si,
+                "t0": t0,
+                "t1": t1,
+            })
+
+    interior_cut = {(si, round(t, 9)) for si, ts in cuts.items()
+                    for t in ts if 1e-4 < t < 1.0 - 1e-4}
+
+    pieces = []
+    current = []
+    for atom in atoms:
+        if current and atom["si"] in break_before:
+            pieces.append(current)
+            current = []
+            break_before.discard(atom["si"])
+        current.append(atom)
+        if (atom["si"], round(atom["t1"], 9)) in interior_cut:
+            pieces.append(current)
+            current = []
+    if current:
+        pieces.append(current)
+    if len(pieces) <= 1:
+        return None
+
+    is_dict = isinstance(stroke, dict)
+    base_sc = stroke.get("stroke_color", (0.1, 0.1, 0.15)) if is_dict else (0.1, 0.1, 0.15)
+    base_sw = stroke.get("stroke_width", 3.0) if is_dict else 3.0
+    fill = stroke.get("fill_color") if is_dict else None
+    algo = stroke.get("algorithm", "fit") if is_dict else "fit"
+    closed = (len(segs) > 1 and
+              math.hypot(segs[0][0][0] - segs[-1][3][0],
+                         segs[0][0][1] - segs[-1][3][1]) <= 1e-6)
+    seam_cut = ((0 in cuts and any(t <= 1e-4 for t in cuts[0])) or
+                ((len(segs) - 1) in cuts and
+                 any(t >= 1.0 - 1e-4 for t in cuts[len(segs) - 1])))
+    if closed and not seam_cut and len(pieces) > 1:
+        # A closed loop is stored as an open polyline whose ends meet at the
+        # seam; rejoin across it so a cut yields the expected arcs instead of
+        # an extra split at the arbitrary seam point.
+        pieces = [pieces[-1] + pieces[0]] + pieces[1:-1]
+    gap = max(0.0, float(gap or 0.0))
+
+    out = []
+    for piece in pieces:
+        first, last = piece[0], piece[-1]
+        at_origin = (first["si"] == 0 and first["t0"] <= 1e-9)
+        at_finish = (last["si"] == len(segs) - 1 and last["t1"] >= 1.0 - 1e-9)
+        # "cut" ends get a visible gap; a "seam" is the stroke's original
+        # closure point: it must not re-merge, but must not gain a gap either.
+        start_kind = None if at_origin else "cut"
+        end_kind = None if at_finish else "cut"
+        if at_origin and closed:
+            start_kind = "seam"
+        if at_finish and closed:
+            end_kind = "seam"
+
+        trimmed = _trim_piece_atoms(
+            piece,
+            gap if start_kind == "cut" else 0.0,
+            gap if end_kind == "cut" else 0.0,
+        )
+        if not trimmed:
+            continue
+        piece = trimmed
+        piece_segs = [a["seg"] for a in piece]
+        st = new_stroke(piece_segs, stroke_color=base_sc, stroke_width=base_sw,
+                        fill_color=fill, algorithm=algo)
+        # Rebuild components so per-component styles (e.g. waves) survive.
+        comps = []
+        group_ci = None
+        group = None
+        for atom in piece:
+            if group is None or atom["ci"] != group_ci:
+                if group is not None:
+                    comps.append(group)
+                src = comps_src[atom["ci"]] if 0 <= atom["ci"] < len(comps_src) else {}
+                group = dict(src)
+                group["segs"] = []
+                group["raw_points"] = []
+                group_ci = atom["ci"]
+            group["segs"].append(atom["seg"])
+        if group is not None:
+            comps.append(group)
+        if comps:
+            st["components"] = comps
+        ends = {}
+        if start_kind:
+            ends["start"] = start_kind
+        if end_kind:
+            ends["end"] = end_kind
+        if ends:
+            st["cut_ends"] = ends
+        out.append(st)
+    return out or None
+
+
+def cut_stroke_with_path(stroke, path, samples=24, gap=0.0):
+    """Razor-cut one stroke along a canvas-space path.
+
+    Returns a list of strokes, or ``None`` when the path misses. With ``gap`` 0
+    the list holds the same connected stroke with nodes added at the crossings."""
+    segs = list(segs_of(stroke))
+    if not segs or len(path) < 2:
+        return None
+    hidden = set(stroke.get("hidden_segs") or ()) if isinstance(stroke, dict) else set()
+    cuts = {}
+    for si, seg in enumerate(segs):
+        if si in hidden:
+            continue
+        params = []
+        for a, b in zip(path, path[1:]):
+            params.extend(_seg_cross_params(seg, a, b, samples=samples))
+        params = sorted(clamp(p, 0.0, 1.0) for p in params)
+        uniq = []
+        for p in params:
+            if not uniq or abs(p - uniq[-1]) > 1e-3:
+                uniq.append(p)
+        if uniq:
+            cuts[si] = uniq
+    if not cuts:
+        return None
+    if float(gap or 0.0) <= 0.0:
+        # No gap: keep the stroke connected and just add anchors at the
+        # crossings, so the object never breaks apart.
+        inserted = _insert_cut_nodes(stroke, cuts)
+        return [inserted] if inserted is not None else None
+    return _split_stroke_at_cuts(stroke, cuts, gap=gap)
+
+
+def cut_strokes_with_path(strokes, path, only_indices=None, gap=0.0):
+    """Razor-cut strokes along a path.
+
+    ``gap`` trims material from each cut end (canvas px); 0 inserts a node at
+    each intersection and leaves the stroke connected.
+
+    Returns ``(new_strokes, cut_indices)`` where ``cut_indices`` are the indices
+    of the pieces created by the cut (useful for keeping them selected)."""
+    out = []
+    cut_indices = set()
+    changed = False
+    for i, stroke in enumerate(strokes):
+        if only_indices is not None and i not in only_indices:
+            out.append(stroke)
+            continue
+        pieces = cut_stroke_with_path(stroke, path, gap=gap)
+        if pieces:
+            start = len(out)
+            out.extend(pieces)
+            cut_indices.update(range(start, len(out)))
+            changed = True
+        else:
+            out.append(stroke)
+    return (out if changed else strokes), cut_indices
+
 
 def hit_test_component(stroke, pos, threshold=10.0):
     segs = segs_of(stroke)

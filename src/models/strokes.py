@@ -382,6 +382,53 @@ def transform_stroke(stroke, cx, cy, angle_rad, scale_x, scale_y=None):
         return out
     return moved
 
+def scale_stroke_local(stroke, fixed_pt, ang, su, sv):
+    """Scale stroke in local axes (rotated by ang) keeping fixed_pt fixed."""
+    ca, sa = math.cos(ang), math.sin(ang)
+    fx, fy = fixed_pt
+    def _xf(pt):
+        dx, dy = pt[0] - fx, pt[1] - fy
+        lx = dx * ca + dy * sa
+        ly = -dx * sa + dy * ca
+        lx *= su; ly *= sv
+        return (fx + lx * ca - ly * sa, fy + lx * sa + ly * ca)
+    segs = segs_of(stroke)
+    moved = [(_xf(p0), _xf(c1), _xf(c2), _xf(p3)) for (p0, c1, c2, p3) in segs]
+    if isinstance(stroke, dict):
+        out = dict(stroke); out["segs"] = moved; return out
+    return moved
+
+def rotate_stroke_around(stroke, cx, cy, angle_rad):
+    """Rotate stroke around (cx,cy) by angle_rad."""
+    ca, sa = math.cos(angle_rad), math.sin(angle_rad)
+    def _xf(pt):
+        dx, dy = pt[0] - cx, pt[1] - cy
+        return (cx + dx * ca - dy * sa, cy + dx * sa + dy * ca)
+    segs = segs_of(stroke)
+    moved = [(_xf(p0), _xf(c1), _xf(c2), _xf(p3)) for (p0, c1, c2, p3) in segs]
+    if isinstance(stroke, dict):
+        out = dict(stroke); out["segs"] = moved; return out
+    return moved
+
+def skew_stroke_local(stroke, center_pt, ang, skew_x, skew_y):
+    """Skew stroke in local axes around center_pt.
+    skew_x shears local X by local Y (x' = x + skew_x*y), skew_y shears Y by X.
+    """
+    ca, sa = math.cos(ang), math.sin(ang)
+    cx, cy = center_pt
+    def _xf(pt):
+        dx, dy = pt[0] - cx, pt[1] - cy
+        lx = dx * ca + dy * sa
+        ly = -dx * sa + dy * ca
+        lx2 = lx + skew_x * ly
+        ly2 = ly + skew_y * lx
+        return (cx + lx2 * ca - ly2 * sa, cy + lx2 * sa + ly2 * ca)
+    segs = segs_of(stroke)
+    moved = [(_xf(p0), _xf(c1), _xf(c2), _xf(p3)) for (p0, c1, c2, p3) in segs]
+    if isinstance(stroke, dict):
+        out = dict(stroke); out["segs"] = moved; return out
+    return moved
+
 def _anchor_handle_slots(seg_list, seg_index, anchor_name, closed):
     """Slots [(seg_index, 'c1'|'c2')] for handles attached to an anchor."""
     n = len(seg_list)
@@ -492,6 +539,15 @@ def reverse_stroke(stroke):
         # hidden segs mapped
         hidden = set(out.get("hidden_segs", set()))
         out["hidden_segs"] = {n - 1 - i for i in hidden}
+        # start/end swap when the direction flips
+        ce = _cut_ends(out)
+        if ce:
+            swapped = {}
+            if "end" in ce:
+                swapped["start"] = ce["end"]
+            if "start" in ce:
+                swapped["end"] = ce["start"]
+            out["cut_ends"] = swapped
         return out
     return rev
 
@@ -514,15 +570,26 @@ def _copy_stroke(stroke):
         out["corner_anchors"] = set(out.get("corner_anchors", set()))
     if "hidden_segs" in out:
         out["hidden_segs"] = set(out.get("hidden_segs", set()))
+    if "cut_ends" in out:
+        out["cut_ends"] = dict(out.get("cut_ends") or {})
     if "components" in out:
         out["components"] = [dict(c) for c in (out.get("components") or [])]
     return out
+
+def _cut_ends(stroke):
+    """Endpoint flags set by the razor: {"start"/"end": "cut"|"seam"}."""
+    if isinstance(stroke, dict):
+        return dict(stroke.get("cut_ends") or {})
+    return {}
 
 def _close_path_if_needed(stroke, eps=6.0):
     """If a path's endpoints are within eps, make them exactly identical.
 
     Closing a path joins the two ends, so the closure anchor is marked as a corner.
+    Razor-cut ends are left open: closing them would undo the cut.
     """
+    if _cut_ends(stroke):
+        return stroke
     segs = segs_of(stroke)
     if not segs:
         return stroke
@@ -570,9 +637,11 @@ def merge_connected_strokes(strokes, eps=6.0):
                 if not b_segs:
                     continue
                 b_start, b_end = b_segs[0][0], b_segs[-1][3]
+                ca, cb = _cut_ends(a), _cut_ends(b)
                 merged = None
                 merged_comps = None
-                if _pts_close(a_end, b_start, eps):
+                merged_ends = None
+                if "end" not in ca and "start" not in cb and _pts_close(a_end, b_start, eps):
                     # A followed by B
                     b2 = list(b_segs)
                     b2[0] = (a_end, b2[0][1], b2[0][2], b2[0][3])
@@ -580,7 +649,8 @@ def merge_connected_strokes(strokes, eps=6.0):
                     corners = _corners(a) | _shift_corners(_corners(b), na) | {(na - 1, "p3"), (na, "p0")}
                     merged = _set_corners(_with_segs(a, list(a_segs) + b2), corners)
                     merged_comps = _stroke_components(a) + _stroke_components(b)
-                elif _pts_close(a_end, b_end, eps):
+                    merged_ends = {"start": ca.get("start"), "end": cb.get("end")}
+                elif "end" not in ca and "end" not in cb and _pts_close(a_end, b_end, eps):
                     # A followed by reversed B
                     rb = reverse_stroke(b)
                     rb_segs = list(segs_of(rb))
@@ -589,7 +659,8 @@ def merge_connected_strokes(strokes, eps=6.0):
                     corners = _corners(a) | _shift_corners(_corners(rb), na) | {(na - 1, "p3"), (na, "p0")}
                     merged = _set_corners(_with_segs(a, list(a_segs) + rb_segs), corners)
                     merged_comps = _stroke_components(a) + _stroke_components(rb)
-                elif _pts_close(a_start, b_end, eps):
+                    merged_ends = {"start": ca.get("start"), "end": cb.get("start")}
+                elif "start" not in ca and "end" not in cb and _pts_close(a_start, b_end, eps):
                     # B followed by A
                     a2 = list(a_segs)
                     a2[0] = (b_end, a2[0][1], a2[0][2], a2[0][3])
@@ -597,7 +668,8 @@ def merge_connected_strokes(strokes, eps=6.0):
                     corners = _corners(b) | _shift_corners(_corners(a), nb) | {(nb - 1, "p3"), (nb, "p0")}
                     merged = _set_corners(_with_segs(b, list(b_segs) + a2), corners)
                     merged_comps = _stroke_components(b) + _stroke_components(a)
-                elif _pts_close(a_start, b_start, eps):
+                    merged_ends = {"start": cb.get("start"), "end": ca.get("end")}
+                elif "start" not in ca and "start" not in cb and _pts_close(a_start, b_start, eps):
                     # Reversed B followed by A
                     rb = reverse_stroke(b)
                     rb_segs = list(segs_of(rb))
@@ -607,11 +679,18 @@ def merge_connected_strokes(strokes, eps=6.0):
                     corners = _corners(rb) | _shift_corners(_corners(a), nb) | {(nb - 1, "p3"), (nb, "p0")}
                     merged = _set_corners(_with_segs(rb, rb_segs + a2), corners)
                     merged_comps = _stroke_components(rb) + _stroke_components(a)
+                    merged_ends = {"start": cb.get("end"), "end": ca.get("end")}
                 if merged is not None:
                     if isinstance(merged, dict) and merged_comps is not None:
                         merged["components"] = merged_comps
                         # hidden segs offsets across merges are complex; reset for safety
                         merged["hidden_segs"] = set()
+                    if isinstance(merged, dict):
+                        ends = {k: v for k, v in (merged_ends or {}).items() if v}
+                        if ends:
+                            merged["cut_ends"] = ends
+                        else:
+                            merged.pop("cut_ends", None)
                     paths[i] = _close_path_if_needed(merged, eps=eps)
                     paths.pop(j)
                     changed = True

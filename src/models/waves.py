@@ -595,14 +595,18 @@ def sample_distorted_component(stroke, comp_index, samples_per_seg=24):
     if total <= 1e-6:
         total = 1.0
 
-    # bounding box diagonal: frequency/amplitude are relative to the shape size
-    xs = []
-    ys = []
+    # bounding box diagonal: frequency/amplitude are relative to the shape size.
+    # Use oriented (min-area) bbox so rotation doesn't change the wave.
+    pts_for_diag = []
     for (p0, c1, c2, p3) in segs:
-        for pt in (p0, c1, c2, p3):
-            xs.append(pt[0])
-            ys.append(pt[1])
-    diag = math.hypot(max(xs) - min(xs), max(ys) - min(ys))
+        pts_for_diag.extend((p0, c1, c2, p3))
+    obb = _min_area_obb(pts_for_diag)
+    if obb is not None:
+        diag = 2.0 * math.hypot(float(obb.get("hw", 0.0)), float(obb.get("hh", 0.0)))
+    else:
+        xs = [p[0] for p in pts_for_diag] or [0.0]
+        ys = [p[1] for p in pts_for_diag] or [0.0]
+        diag = math.hypot(max(xs) - min(xs), max(ys) - min(ys))
     if diag <= 1e-6:
         diag = total
     geom = {"diag": diag, "length": total}

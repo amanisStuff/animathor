@@ -1,9 +1,9 @@
 """MVC View package: rendering, panel, toolbar, widgets."""
 
-from views import widgets, toolbar, canvas, panel, dialogs  # noqa: F401
+from views import widgets, icons, toolbar, canvas, panel, dialogs  # noqa: F401
 
-_PLUMBING = {'_m', '_n', '_mod', '_name', 'cfg', 'math', 'copy', 'pygame', 'cairo', '_models', '_views', '_m_geometry', '_m_strokes', '_m_waves', '_v_canvas', 'geometry', 'strokes', 'waves', 'interaction', 'canvas', 'panel', 'toolbar', 'widgets', 'dialogs', 'app_controller', 'coordinates'}
-_SUBS = (widgets, toolbar, canvas, panel, dialogs)
+_PLUMBING = {'_m', '_n', '_mod', '_name', 'cfg', 'math', 'copy', 'pygame', 'cairo', '_models', '_views', '_m_geometry', '_m_strokes', '_m_waves', '_v_canvas', 'geometry', 'strokes', 'waves', 'interaction', 'canvas', 'panel', 'toolbar', 'widgets', 'icons', 'dialogs', 'app_controller', 'coordinates'}
+_SUBS = (widgets, icons, toolbar, canvas, panel, dialogs)
 for _m in _SUBS:
     for _n in dir(_m):
         if _n.startswith('__') or _n in _PLUMBING:

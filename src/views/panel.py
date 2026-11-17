@@ -14,11 +14,13 @@ for _n in dir(_dep):
         continue
     globals().setdefault(_n, getattr(_dep, _n))
 import views.canvas as _dep
-_PLUMBING = {'_m', '_n', '_mod', '_name', 'cfg', 'math', 'copy', 'pygame', 'cairo', '_models', '_views', '_m_geometry', '_m_strokes', '_m_waves', '_v_canvas', 'geometry', 'strokes', 'waves', 'interaction', 'canvas', 'panel', 'toolbar', 'widgets', 'dialogs', 'app_controller', 'coordinates'}
+_PLUMBING = {'_m', '_n', '_mod', '_name', 'cfg', 'math', 'copy', 'pygame', 'cairo', '_models', '_views', '_m_geometry', '_m_strokes', '_m_waves', '_v_canvas', 'geometry', 'strokes', 'waves', 'interaction', 'canvas', 'panel', 'toolbar', 'widgets', 'icons', 'dialogs', 'app_controller', 'coordinates'}
 for _n in dir(_dep):
     if _n.startswith('__') or _n in _PLUMBING:
         continue
     globals().setdefault(_n, getattr(_dep, _n))
+
+from views.icons import BUTTON_TIPS, draw_icon, draw_tooltip  # noqa: E402
 
 
 def _draw_wave_graph(screen, rect, poly, color, bg=(24, 26, 34), line_w=2, mid=True):
@@ -52,6 +54,57 @@ def draw_swatch(screen, rect, color, selected, mouse_pos):
     border = ACCENT if selected else (ACCENT if hover else BUTTON_BORDER)
     pygame.draw.rect(screen, border, rect, width=2 if selected else 1, border_radius=4)
 
+
+# Cached HSV picker gradients: rebuilding the SV square pixel-by-pixel every
+# frame costs tens of milliseconds, so keep the surfaces around.
+_SV_CACHE = {}
+_SV_RAMP_CACHE = {}
+_HUE_BAR_CACHE = {}
+
+
+def _value_ramp(w, h):
+    """Vertical white->black ramp used to turn an S gradient into an S/V square."""
+    key = (w, h)
+    ramp = _SV_RAMP_CACHE.get(key)
+    if ramp is None:
+        col = pygame.Surface((1, h))
+        for iy in range(h):
+            g = int(round(255 * (1.0 - iy / max(1, h - 1))))
+            col.set_at((0, iy), (g, g, g))
+        ramp = pygame.transform.smoothscale(col, (w, h))
+        _SV_RAMP_CACHE[key] = ramp
+    return ramp
+
+
+def _sv_surface(hue, w, h):
+    """Saturation/value square for a hue (built from a 1px row + value ramp)."""
+    key = (round(float(hue), 1), w, h)
+    surf = _SV_CACHE.get(key)
+    if surf is None:
+        row = pygame.Surface((w, 1))
+        for ix in range(w):
+            c = hsv_to_rgb(hue, ix / max(1, w - 1), 1.0)
+            row.set_at((ix, 0), tuple(int(v * 255) for v in c))
+        surf = pygame.transform.smoothscale(row, (w, h))
+        surf.blit(_value_ramp(w, h), (0, 0), special_flags=pygame.BLEND_RGB_MULT)
+        if len(_SV_CACHE) > 24:
+            _SV_CACHE.clear()
+        _SV_CACHE[key] = surf
+    return surf
+
+
+def _hue_bar_surface(w, h):
+    """Full-saturation hue gradient strip."""
+    key = (w, h)
+    surf = _HUE_BAR_CACHE.get(key)
+    if surf is None:
+        surf = pygame.Surface((w, h))
+        for ix in range(w):
+            c = hsv_to_rgb((ix / max(1, w - 1)) * 360.0, 1.0, 1.0)
+            pygame.draw.line(surf, tuple(int(v * 255) for v in c), (ix, 0), (ix, h - 1))
+        _HUE_BAR_CACHE[key] = surf
+    return surf
+
 def draw_panel(screen, fonts, mouse_pos, state):
     font, font_small, font_title = fonts
     top = getattr(cfg, "TOP_BAR_H", 0)
@@ -62,9 +115,26 @@ def draw_panel(screen, fonts, mouse_pos, state):
     x = cfg.PANEL_X + 20
     y = top + 18 - int(state.get("panel_scroll", 0) or 0)
     tm = state.get("tool_mode", "draw")
+
+    # Tooltips are queued while drawing buttons, then rendered on top at the
+    # end so later controls never cover them.
+    _tips = []
+
+    def _queue_tip(rect, key, text=None):
+        if rect.collidepoint(mouse_pos):
+            _tips.append(text or BUTTON_TIPS.get(key, ""))
+
+    def _icon_and_label(rect, icon_name, label, active):
+        """Draw a small icon followed by a label inside a button rect."""
+        color = ACCENT if active else TEXT_COLOR
+        icon_r = pygame.Rect(rect.x + 4, rect.centery - 10, 20, 20)
+        draw_icon(screen, icon_name, icon_r, color=color, size=20)
+        label_surf = font_small.render(label, True, color)
+        area = pygame.Rect(icon_r.right + 3, rect.y, rect.right - icon_r.right - 7, rect.h)
+        screen.blit(label_surf, label_surf.get_rect(center=area.center))
     if tm == "draw":
         state["eyedropper_rect"] = pygame.Rect(0, 0, 0, 0)
-        title_text = "Draw"
+        title_text = "Tool options"
     elif tm == "eyedropper":
         title_text = "Eyedropper"
     else:
@@ -75,75 +145,184 @@ def draw_panel(screen, fonts, mouse_pos, state):
 
     if tm == "draw":
         state["eyedropper_rect"] = pygame.Rect(0, 0, 0, 0)
-        # Points control
-        label = font.render("Points / curve", True, TEXT_COLOR)
-        screen.blit(label, (x, y)); y += 24
-        limit = state["BOOST_MAX_POINTS"] if state["boost_points"] else state["NORMAL_MAX_POINTS"]
-        val = font_title.render(str(state["max_points"]), True, ACCENT)
-        screen.blit(val, (x, y - 2))
-        hint = font_small.render(f"(2 - {limit})", True, MUTED_COLOR)
-        screen.blit(hint, (x + val.get_width() + 10, y + 4)); y += 32
-        state["slider"].track.topleft = (x, y)
-        state["slider"].track.width = PANEL_W - 40
-        state["slider"].draw(screen); y += 24
-        b = state["buttons"]["boost"]
-        b.rect.topleft = (x, y)
-        b.label = "Boost: ON" if state["boost_points"] else "Boost limit"
-        b.draw(screen, font, mouse_pos, active=state["boost_points"]); y += 44
 
-        # Tracing algorithm (per new stroke)
-        screen.blit(font.render("Tracing", True, TEXT_COLOR), (x, y)); y += 22
-        algo = state.get("trace_algorithm", "fit")
-        rects = {}
-        bw = (PANEL_W - 40 - 8) // 3
-        for i, (key, label) in enumerate(TRACE_ALGORITHMS):
-            r = pygame.Rect(x + i * (bw + 4), y, bw, 28)
-            rects[key] = r
-            active = (algo == key)
-            bg = TOOL_ACTIVE if active else (BUTTON_HOVER if r.collidepoint(mouse_pos) else BUTTON_BG)
-            pygame.draw.rect(screen, bg, r, border_radius=6)
-            pygame.draw.rect(screen, ACCENT if active else BUTTON_BORDER, r, 2 if active else 1, border_radius=6)
-            t = font_small.render(label, True, ACCENT if active else TEXT_COLOR)
-            screen.blit(t, t.get_rect(center=r.center))
-        state["trace_algo_rects"] = rects
-        y += 36
-
-        # Tool: Pen / Eraser
-        screen.blit(font.render("Tool", True, TEXT_COLOR), (x, y)); y += 22
+        # Tools first: the active tool decides which options are shown below.
         draw_tool = state.get("draw_tool", "pen")
-        pen_r = pygame.Rect(x, y, (PANEL_W - 40 - 8) // 2, 28)
-        er_r = pygame.Rect(x + (PANEL_W - 40 - 8) // 2 + 8, y, (PANEL_W - 40 - 8) - ((PANEL_W - 40 - 8) // 2 + 8), 28)
+        total_w = PANEL_W - 40
+        gap = 6
+        bw = (total_w - gap) // 2
+        rh = 28
+        pen_r = pygame.Rect(x, y, bw, rh)
+        er_r = pygame.Rect(x + bw + gap, y, total_w - bw - gap, rh)
+        bucket_r = pygame.Rect(x, y + rh + gap, bw, rh)
+        cutter_r = pygame.Rect(x + bw + gap, y + rh + gap, total_w - bw - gap, rh)
         state["draw_tool_pen_rect"] = pen_r
         state["draw_tool_eraser_rect"] = er_r
-        for r, key, label in ((pen_r, "pen", "Pen"), (er_r, "eraser", "Eraser")):
+        state["draw_tool_bucket_rect"] = bucket_r
+        state["draw_tool_cutter_rect"] = cutter_r
+        for r, key, label in ((pen_r, "pen", "Pen"), (er_r, "eraser", "Eraser"),
+                              (bucket_r, "bucket", "Fill"), (cutter_r, "cutter", "Split curve")):
             active_t = (draw_tool == key)
             bg = TOOL_ACTIVE if active_t else (BUTTON_HOVER if r.collidepoint(mouse_pos) else BUTTON_BG)
             pygame.draw.rect(screen, bg, r, border_radius=6)
             pygame.draw.rect(screen, ACCENT if active_t else BUTTON_BORDER, r, 2 if active_t else 1, border_radius=6)
-            t = font_small.render(label, True, ACCENT if active_t else TEXT_COLOR)
-            screen.blit(t, t.get_rect(center=r.center))
+            _icon_and_label(r, key, label, active_t)
+            _queue_tip(r, key)
+        y += rh * 2 + gap + 10
+
+        if draw_tool != "pen":
+            # Pen-only controls aren't drawn; move their hit areas out of the way.
+            state["trace_algo_rects"] = {}
+            state["slider"].track.width = 0
+            state["buttons"]["boost"].rect = pygame.Rect(0, 0, 0, 0)
+
+        if draw_tool == "pen":
+            # Points control
+            label = font.render("Points / curve", True, TEXT_COLOR)
+            screen.blit(label, (x, y)); y += 24
+            limit = state["BOOST_MAX_POINTS"] if state["boost_points"] else state["NORMAL_MAX_POINTS"]
+            val = font_title.render(str(state["max_points"]), True, ACCENT)
+            screen.blit(val, (x, y - 2))
+            hint = font_small.render(f"(2 - {limit})", True, MUTED_COLOR)
+            screen.blit(hint, (x + val.get_width() + 10, y + 4)); y += 32
+            state["slider"].track.topleft = (x, y)
+            state["slider"].track.width = PANEL_W - 40
+            state["slider"].draw(screen); y += 24
+            b = state["buttons"]["boost"]
+            b.rect.topleft = (x, y)
+            b.label = "Boost: ON" if state["boost_points"] else "Boost limit"
+            b.draw(screen, font, mouse_pos, active=state["boost_points"])
+            draw_icon(screen, "boost", pygame.Rect(b.rect.x + 6, b.rect.centery - 10, 20, 20),
+                      color=ACCENT if state["boost_points"] else TEXT_COLOR, size=20)
+            _queue_tip(b.rect, "boost"); y += 44
+
+            # Tracing algorithm (per new stroke)
+            screen.blit(font.render("Tracing", True, TEXT_COLOR), (x, y)); y += 22
+            algo = state.get("trace_algorithm", "fit")
+            rects = {}
+            bw = (PANEL_W - 40 - 8) // 3
+            _trace_tip = {"fit": "trace_fit", "catmull-rom": "trace_catmull_rom", "single": "trace_single"}
+            for i, (key, label) in enumerate(TRACE_ALGORITHMS):
+                r = pygame.Rect(x + i * (bw + 4), y, bw, 28)
+                rects[key] = r
+                active = (algo == key)
+                bg = TOOL_ACTIVE if active else (BUTTON_HOVER if r.collidepoint(mouse_pos) else BUTTON_BG)
+                pygame.draw.rect(screen, bg, r, border_radius=6)
+                pygame.draw.rect(screen, ACCENT if active else BUTTON_BORDER, r, 2 if active else 1, border_radius=6)
+                t = font_small.render(label, True, ACCENT if active else TEXT_COLOR)
+                screen.blit(t, t.get_rect(center=r.center))
+                _queue_tip(r, _trace_tip.get(key))
+            state["trace_algo_rects"] = rects
+            y += 36
+        elif draw_tool == "eraser":
+            screen.blit(font_small.render("Click a curve or edge to erase it.", True, MUTED_COLOR), (x, y)); y += 22
+        elif draw_tool == "cutter":
+            screen.blit(font_small.render("Drag across curves to split them.", True, MUTED_COLOR), (x, y)); y += 22
+            screen.blit(font_small.render("Each crossing adds a node; each half is a curve.", True, MUTED_COLOR), (x, y)); y += 22
+
+            # Optional gap: 0 keeps the stroke connected at the new node.
+            screen.blit(font.render("Gap", True, TEXT_COLOR), (x, y)); y += 24
+            gap_val = int(state.get("cut_gap", 0) or 0)
+            val = font_title.render(f"{gap_val} px", True, ACCENT)
+            screen.blit(val, (x, y - 2))
+            hint = font_small.render("(0 = stays connected)", True, MUTED_COLOR)
+            screen.blit(hint, (x + val.get_width() + 10, y + 4)); y += 30
+            _gap_slider = state.get("cut_gap_slider")
+            if _gap_slider is not None:
+                _gap_slider.track.topleft = (x, y)
+                _gap_slider.track.width = PANEL_W - 40
+                _gap_slider.value = gap_val
+                _gap_slider.draw(screen)
+            y += 26
+        else:
+            screen.blit(font_small.render("Click an enclosed area to fill it.", True, MUTED_COLOR), (x, y)); y += 24
+
+            # Fill color: preset swatches plus an HSV picker for any color.
+            screen.blit(font.render("Fill color", True, TEXT_COLOR), (x, y)); y += 22
+            col = color_rgb(state.get("bucket_fill_color"), (0.45, 0.72, 1.0))
+            h, s, vcol = rgb_to_hsv(*col)
+            drag = state.get("bucket_picker_drag")
+            if drag != "sv":
+                state["bucket_picker_s"] = s
+                state["bucket_picker_v"] = vcol
+            if drag != "hue":
+                state["bucket_picker_h"] = h
+            ph = state.get("bucket_picker_h", h)
+            ps = state.get("bucket_picker_s", s)
+            pv = state.get("bucket_picker_v", vcol)
+
+            # Current color preview + hex
+            preview = pygame.Rect(x, y, 30, 30)
+            pygame.draw.rect(screen, (255, 255, 255), preview, border_radius=6)
+            pygame.draw.rect(screen, tuple(int(c * 255) for c in col),
+                             preview.inflate(-6, -6), border_radius=4)
+            pygame.draw.rect(screen, BUTTON_BORDER, preview, 1, border_radius=6)
+            screen.blit(font_small.render(rgb_to_hex(col), True, TEXT_COLOR), (x + 38, y + 7))
+            y += 38
+
+            # Saturation / value square
+            sv_w = PANEL_W - 40
+            sv_h = 84
+            sv_rect = pygame.Rect(x, y, sv_w, sv_h)
+            state["bucket_sv_rect"] = sv_rect
+            sv_surf = _sv_surface(ph, sv_w, sv_h)
+            screen.blit(sv_surf, sv_rect.topleft)
+            pygame.draw.rect(screen, BUTTON_BORDER, sv_rect, 1, border_radius=4)
+            cxp = sv_rect.x + int(clamp(ps, 0.0, 1.0) * (sv_w - 1))
+            cyp = sv_rect.y + int((1.0 - clamp(pv, 0.0, 1.0)) * (sv_h - 1))
+            pygame.draw.circle(screen, (255, 255, 255), (cxp, cyp), 5, 2)
+            pygame.draw.circle(screen, (0, 0, 0), (cxp, cyp), 5, 1)
+            y += sv_h + 8
+
+            # Hue bar
+            hue_h = 12
+            hue_rect = pygame.Rect(x, y, sv_w, hue_h)
+            state["bucket_hue_rect"] = hue_rect
+            screen.blit(_hue_bar_surface(sv_w, hue_h), hue_rect.topleft)
+            pygame.draw.rect(screen, BUTTON_BORDER, hue_rect, 1, border_radius=4)
+            hx = hue_rect.x + int((clamp(ph, 0.0, 360.0) / 360.0) * (sv_w - 1))
+            pygame.draw.rect(screen, (255, 255, 255), (hx - 3, hue_rect.y - 2, 6, hue_h + 4), 2, border_radius=2)
+            pygame.draw.rect(screen, (0, 0, 0), (hx - 3, hue_rect.y - 2, 6, hue_h + 4), 1, border_radius=2)
+            y += hue_h + 10
+
+            # Preset swatches
+            sw, sgap = 26, 6
+            per_row = max(1, (PANEL_W - 40 + sgap) // (sw + sgap))
+            cur = tuple(round(c, 3) for c in col)
+            srects = []
+            for i, pcol in enumerate(BUCKET_SWATCHES):
+                rr = pygame.Rect(x + (i % per_row) * (sw + sgap),
+                                 y + (i // per_row) * (sw + sgap), sw, sw)
+                srects.append(rr)
+                draw_swatch(screen, rr, pcol, cur == tuple(round(c, 3) for c in pcol), mouse_pos)
+            state["bucket_swatch_rects"] = srects
+            rows_used = (len(BUCKET_SWATCHES) + per_row - 1) // per_row
+            y += rows_used * (sw + sgap) + 2
+
+        if draw_tool != "bucket":
+            # Hide the fill picker hit-areas when another tool is active.
+            state["bucket_sv_rect"] = pygame.Rect(0, 0, 0, 0)
+            state["bucket_hue_rect"] = pygame.Rect(0, 0, 0, 0)
+            state["bucket_swatch_rects"] = [pygame.Rect(0, 0, 0, 0) for _ in BUCKET_SWATCHES]
+
+        if draw_tool != "cutter":
+            # Hide the cutter gap slider when another tool is active.
+            _gap_slider = state.get("cut_gap_slider")
+            if _gap_slider is not None:
+                _gap_slider.track.width = 0
+
+        # Snapping toggle: turn off for precise, detailed drawing.
+        snap_on = bool(state.get("snap_enabled", True))
+        snap_r = pygame.Rect(x, y, PANEL_W - 40, 28)
+        state["snap_toggle_rect"] = snap_r
+        bg = TOOL_ACTIVE if snap_on else (BUTTON_HOVER if snap_r.collidepoint(mouse_pos) else BUTTON_BG)
+        pygame.draw.rect(screen, bg, snap_r, border_radius=6)
+        pygame.draw.rect(screen, ACCENT if snap_on else BUTTON_BORDER, snap_r, 2 if snap_on else 1, border_radius=6)
+        _icon_and_label(snap_r, "snap", "Snapping: ON" if snap_on else "Snapping: OFF", snap_on)
+        _queue_tip(snap_r, "snap")
         y += 36
 
-        # Shape target (doodle -> standard shape)
-        screen.blit(font.render("Shape", True, TEXT_COLOR), (x, y)); y += 22
-        draw_shape = state.get("draw_shape", "freehand")
-        shape_rects = {}
-        cols = 4
-        gap = 6
-        bw_s = (PANEL_W - 40 - gap * (cols - 1)) // cols
-        for i, (key, label) in enumerate(DRAW_SHAPES):
-            row, col = divmod(i, cols)
-            r = pygame.Rect(x + col * (bw_s + gap), y + row * 30, bw_s, 26)
-            shape_rects[key] = r
-            active_s = (draw_shape == key)
-            bg = TOOL_ACTIVE if active_s else (BUTTON_HOVER if r.collidepoint(mouse_pos) else BUTTON_BG)
-            pygame.draw.rect(screen, bg, r, border_radius=6)
-            pygame.draw.rect(screen, ACCENT if active_s else BUTTON_BORDER, r, 2 if active_s else 1, border_radius=6)
-            t = font_small.render(label, True, ACCENT if active_s else TEXT_COLOR)
-            screen.blit(t, t.get_rect(center=r.center))
-        state["draw_shape_rects"] = shape_rects
-        rows = (len(DRAW_SHAPES) + cols - 1) // cols
-        y += rows * 30 + 8
+        # Shape tools live in the bottom toolbar (drawn by the controller).
 
         # Reference image
         screen.blit(font.render("Reference image", True, TEXT_COLOR), (x, y)); y += 22
@@ -156,12 +335,13 @@ def draw_panel(screen, fonts, mouse_pos, state):
         state["ref_vis_rect"] = vis_r
         state["ref_clear_rect"] = clear_r
         vis_label = "Hide" if (ref and ref.get("visible", True)) else "Show"
-        for r, label in ((load_r, "Load"), (vis_r, vis_label), (clear_r, "Clear")):
+        vis_icon = "ref_visible" if (ref and ref.get("visible", True)) else "ref_hidden"
+        for r, icon_name, label in ((load_r, "ref_load", "Load"), (vis_r, vis_icon, vis_label), (clear_r, "ref_clear", "Clear")):
             bg = BUTTON_HOVER if r.collidepoint(mouse_pos) else BUTTON_BG
             pygame.draw.rect(screen, bg, r, border_radius=6)
             pygame.draw.rect(screen, BUTTON_BORDER, r, 1, border_radius=6)
-            t = font_small.render(label, True, TEXT_COLOR)
-            screen.blit(t, t.get_rect(center=r.center))
+            _icon_and_label(r, icon_name, label, False)
+            _queue_tip(r, "ref_visible" if icon_name in ("ref_visible", "ref_hidden") else icon_name)
         y += 34
         if ref and ref.get("surface") is not None:
             op = int(round(clamp(ref.get("opacity", 0.5), 0.0, 1.0) * 100))
@@ -177,23 +357,49 @@ def draw_panel(screen, fonts, mouse_pos, state):
         else:
             state["ref_opacity_rect"] = pygame.Rect(0, 0, 0, 0)
             screen.blit(font_small.render("No reference image", True, MUTED_COLOR), (x, y)); y += 18
+        err = state.get("reference_error")
+        if err:
+            # Word-wrap the error so it stays inside the panel.
+            line = ""
+            for word in str(err).split():
+                trial = (line + " " + word).strip()
+                if line and font_small.size(trial)[0] > PANEL_W - 40:
+                    screen.blit(font_small.render(line, True, (190, 70, 60)), (x, y)); y += 16
+                    line = word
+                else:
+                    line = trial
+            if line:
+                screen.blit(font_small.render(line, True, (190, 70, 60)), (x, y)); y += 16
         y += 4
 
         y += 4
 
         stats = font_small.render(f"Strokes: {state['stroke_count']} | Backend: {CAIRO_BACKEND}", True, MUTED_COLOR)
         screen.blit(stats, (x, y)); y += 24
-        if state.get("draw_tool", "pen") == "eraser":
+        _dt = state.get("draw_tool", "pen")
+        if _dt == "eraser":
             help_lines = [
                 "Eraser: click curve/edge to remove.",
-                "Switch to Pen to draw strokes/shapes.",
+                "Switch to Pen/Fill to draw.",
+                "Shortcuts: Ctrl+Z/Ctrl+Y, C, Esc",
+            ]
+        elif _dt == "cutter":
+            help_lines = [
+                "Split: drag across curves to break them.",
+                "Halves stay connected; select each in Curve mode.",
+                "Shortcuts: Ctrl+Z/Ctrl+Y, C, Esc",
+            ]
+        elif _dt == "bucket":
+            help_lines = [
+                "Fill: click an enclosed area to create a filled shape (no stroke).",
+                "Works on visible boundaries like a paint bucket.",
                 "Shortcuts: Ctrl+Z/Ctrl+Y, C, Esc",
             ]
         else:
             help_lines = [
                 "Pen: drag on canvas to draw.",
                 "Pick a Shape to create standard shapes.",
-                "Hover endpoints to snap / auto-merge.",
+                "Snapping joins nearby endpoints (S to toggle).",
                 "Shortcuts: Ctrl+Z/Ctrl+Y, C, Esc",
             ]
     else:
@@ -215,6 +421,7 @@ def draw_panel(screen, fonts, mouse_pos, state):
                 pygame.draw.rect(screen, TOOL_ACTIVE, r.inflate(-4, -4), border_radius=5)
             t = font_small.render(label, True, ACCENT if active else TEXT_COLOR)
             screen.blit(t, t.get_rect(center=r.center))
+            _queue_tip(r, None, f"{label} mode (N to cycle)")
         y += 34
         # Eyedropper (pick style) - tool within selection panel
         pick_active = bool(state.get("eyedropper_pick"))
@@ -224,17 +431,67 @@ def draw_panel(screen, fonts, mouse_pos, state):
         pygame.draw.rect(screen, bg, ed_rect, border_radius=6)
         pygame.draw.rect(screen, ACCENT if pick_active else BUTTON_BORDER, ed_rect, 2 if pick_active else 1, border_radius=6)
         ed_label = "Eyedropper: click a stroke..." if pick_active else "Eyedropper - pick style (I)"
-        t = font_small.render(ed_label, True, ACCENT if pick_active else TEXT_COLOR)
-        screen.blit(t, t.get_rect(center=ed_rect.center))
+        _icon_and_label(ed_rect, "eyedropper", ed_label, pick_active)
+        _queue_tip(ed_rect, "eyedropper")
         y += 32
         if pick_active:
             hint = font_small.render("Samples stroke/fill color, size, wave effects", True, MUTED_COLOR)
             screen.blit(hint, (x, y)); y += 18
 
         sel_stroke = state.get("selected_obj")
+        # Elevation / z-order controls (transform mode)
+        state.setdefault("elev_front_rect", pygame.Rect(0,0,0,0))
+        state.setdefault("elev_forward_rect", pygame.Rect(0,0,0,0))
+        state.setdefault("elev_backward_rect", pygame.Rect(0,0,0,0))
+        state.setdefault("elev_back_rect", pygame.Rect(0,0,0,0))
+        if submode == "transform" and sel_count > 0:
+            screen.blit(font_small.render("Elevation", True, TEXT_COLOR), (x, y)); y += 20
+            gap = 6
+            bw = (PANEL_W - 40 - gap) // 2
+            labels = [("To Front", "elev_front_rect", "elev_front"), ("Forward", "elev_forward_rect", "elev_forward"),
+                      ("Backward", "elev_backward_rect", "elev_backward"), ("To Back", "elev_back_rect", "elev_back")]
+            for i, (label, key, icon_name) in enumerate(labels):
+                row, col = divmod(i, 2)
+                r = pygame.Rect(x + col * (bw + gap), y + row * 28, bw, 24)
+                state[key] = r
+                bg = BUTTON_HOVER if r.collidepoint(mouse_pos) else BUTTON_BG
+                pygame.draw.rect(screen, bg, r, border_radius=5)
+                pygame.draw.rect(screen, BUTTON_BORDER, r, 1, border_radius=5)
+                _icon_and_label(r, icon_name, label, False)
+                _queue_tip(r, icon_name)
+            y += 2 * 28 + 8
+        else:
+            state["elev_front_rect"] = pygame.Rect(0,0,0,0)
+            state["elev_forward_rect"] = pygame.Rect(0,0,0,0)
+            state["elev_backward_rect"] = pygame.Rect(0,0,0,0)
+            state["elev_back_rect"] = pygame.Rect(0,0,0,0)
+
+        # Boolean operations (transform mode, 2+ selected shapes)
+        state.setdefault("bool_union_rect", pygame.Rect(0,0,0,0))
+        state.setdefault("bool_intersect_rect", pygame.Rect(0,0,0,0))
+        if submode == "transform" and sel_count >= 2:
+            screen.blit(font_small.render("Boolean", True, TEXT_COLOR), (x, y)); y += 20
+            bgap = 6
+            bwidth = (PANEL_W - 40 - bgap) // 2
+            for bi, (blabel, bkey, bicon) in enumerate([
+                    ("Union", "bool_union_rect", "union"),
+                    ("Intersect", "bool_intersect_rect", "intersect")]):
+                br = pygame.Rect(x + (bi % 2) * (bwidth + bgap), y + (bi // 2) * 28, bwidth, 24)
+                state[bkey] = br
+                bg = BUTTON_HOVER if br.collidepoint(mouse_pos) else BUTTON_BG
+                pygame.draw.rect(screen, bg, br, border_radius=5)
+                pygame.draw.rect(screen, BUTTON_BORDER, br, 1, border_radius=5)
+                _icon_and_label(br, bicon, blabel, False)
+                _queue_tip(br, bicon)
+            y += 28 + 8
+        else:
+            state["bool_union_rect"] = pygame.Rect(0,0,0,0)
+            state["bool_intersect_rect"] = pygame.Rect(0,0,0,0)
+
         # Curve/stroke-edit controls (single selection in curve mode)
         state.setdefault("curve_hide_rect", pygame.Rect(0,0,0,0))
         state.setdefault("curve_redraw_rect", pygame.Rect(0,0,0,0))
+        state.setdefault("curve_cut_rect", pygame.Rect(0,0,0,0))
         if submode == "curve" and sel_count == 1 and sel_stroke is not None:
             sc = state.get("selected_curve")
             if sc and sc[0] in sel_strokes:
@@ -255,15 +512,49 @@ def draw_panel(screen, fonts, mouse_pos, state):
                 if comp_hidden:
                     hint = "Hidden curve segment(s)" if len(comp_hidden) < (ranges[comp_i][1]-ranges[comp_i][0] if 0 <= comp_i < len(ranges) else 999) else "Hidden curve"
                     screen.blit(font_small.render(f"Hint: {hint} (shown dashed in edit modes)", True, (170, 95, 40)), (x, y)); y += 18
-                redraw_rect = pygame.Rect(x, y, PANEL_W - 40, 30)
+                total_w = PANEL_W - 40
+                btn_gap = 6
+                btn_w = (total_w - btn_gap) // 2
+                redraw_rect = pygame.Rect(x, y, btn_w, 30)
+                cut_rect = pygame.Rect(x + btn_w + btn_gap, y, total_w - btn_w - btn_gap, 30)
                 state["curve_hide_rect"] = pygame.Rect(0,0,0,0)
                 state["curve_redraw_rect"] = redraw_rect
+                state["curve_cut_rect"] = cut_rect
                 bg = BUTTON_HOVER if redraw_rect.collidepoint(mouse_pos) else BUTTON_BG
                 pygame.draw.rect(screen, bg, redraw_rect, border_radius=6)
                 pygame.draw.rect(screen, BUTTON_BORDER, redraw_rect, 1, border_radius=6)
-                t = font_small.render("Redraw stroke", True, TEXT_COLOR)
-                screen.blit(t, t.get_rect(center=redraw_rect.center))
+                _icon_and_label(redraw_rect, "curve_redraw", "Redraw", False)
+                _queue_tip(redraw_rect, "curve_redraw")
+                cut_active = bool(state.get("curve_cut_mode"))
+                cbg = TOOL_ACTIVE if cut_active else (BUTTON_HOVER if cut_rect.collidepoint(mouse_pos) else BUTTON_BG)
+                pygame.draw.rect(screen, cbg, cut_rect, border_radius=6)
+                pygame.draw.rect(screen, ACCENT if cut_active else BUTTON_BORDER, cut_rect,
+                                 2 if cut_active else 1, border_radius=6)
+                _icon_and_label(cut_rect, "cutter", "Split curve", cut_active)
+                _queue_tip(cut_rect, "curve_cut")
                 y += 38
+                if cut_active:
+                    screen.blit(font_small.render("Drag across the selected curve to cut it.",
+                                                  True, ACCENT), (x, y)); y += 20
+
+                    # Optional gap: 0 keeps the stroke connected at the new node.
+                    screen.blit(font.render("Gap", True, TEXT_COLOR), (x, y)); y += 24
+                    gap_val = int(state.get("cut_gap", 0) or 0)
+                    val = font_title.render(f"{gap_val} px", True, ACCENT)
+                    screen.blit(val, (x, y - 2))
+                    hint = font_small.render("(0 = stays connected)", True, MUTED_COLOR)
+                    screen.blit(hint, (x + val.get_width() + 10, y + 4)); y += 30
+                    _gap_slider = state.get("cut_gap_slider")
+                    if _gap_slider is not None:
+                        _gap_slider.track.topleft = (x, y)
+                        _gap_slider.track.width = PANEL_W - 40
+                        _gap_slider.value = gap_val
+                        _gap_slider.draw(screen)
+                    y += 26
+                else:
+                    _gap_slider = state.get("cut_gap_slider")
+                    if _gap_slider is not None:
+                        _gap_slider.track.width = 0
 
                 # Curve styles list (non-destructive). Styles are added to this curve.
                 comp = comps[comp_i] if 0 <= comp_i < len(comps) else {}
@@ -302,8 +593,8 @@ def draw_panel(screen, fonts, mouse_pos, state):
                     abg = BUTTON_HOVER if add_rect.collidepoint(mouse_pos) else BUTTON_BG
                     pygame.draw.rect(screen, abg, add_rect, border_radius=5)
                     pygame.draw.rect(screen, BUTTON_BORDER, add_rect, 1, border_radius=5)
-                    at = font_small.render("+ Add Wave distortion", True, TEXT_COLOR)
-                    screen.blit(at, at.get_rect(center=add_rect.center))
+                    _icon_and_label(add_rect, "wave_add", "Add Wave distortion", False)
+                    _queue_tip(add_rect, "wave_add")
                     y += 30
                 elif has_wave:
                     # active (expanded) wave index, clamped to the current stack
@@ -341,11 +632,13 @@ def draw_panel(screen, fonts, mouse_pos, state):
                             pygame.draw.rect(screen, ACCENT if wv_on else BUTTON_BORDER, tog_rect, 1, border_radius=5)
                             tt = font_small.render("ON" if wv_on else "OFF", True, ACCENT if wv_on else MUTED_COLOR)
                             screen.blit(tt, tt.get_rect(center=tog_rect.center))
+                            _queue_tip(tog_rect, "wave_toggle")
                             xbg = BUTTON_HOVER if rem_rect.collidepoint(mouse_pos) else BUTTON_BG
                             pygame.draw.rect(screen, xbg, rem_rect, border_radius=5)
                             pygame.draw.rect(screen, BUTTON_BORDER, rem_rect, 1, border_radius=5)
                             xt = font_small.render("\u00d7", True, (205, 115, 115))
                             screen.blit(xt, xt.get_rect(center=rem_rect.center))
+                            _queue_tip(rem_rect, "wave_remove")
                         else:
                             stt = font_small.render("ON" if wv_on else "OFF", True, ACCENT if wv_on else MUTED_COLOR)
                             screen.blit(stt, (row.right - 8 - stt.get_width(), row.y + 5))
@@ -378,8 +671,8 @@ def draw_panel(screen, fonts, mouse_pos, state):
                     abg = BUTTON_HOVER if add_rect.collidepoint(mouse_pos) else BUTTON_BG
                     pygame.draw.rect(screen, abg, add_rect, border_radius=5)
                     pygame.draw.rect(screen, BUTTON_BORDER, add_rect, 1, border_radius=5)
-                    at = font_small.render("+ Add Wave distortion", True, TEXT_COLOR)
-                    screen.blit(at, at.get_rect(center=add_rect.center))
+                    _icon_and_label(add_rect, "wave_add", "Add Wave distortion", False)
+                    _queue_tip(add_rect, "wave_add")
                     y += 24 + 6
 
                     # ---- shape selector: waveform thumbnail icons ----
@@ -572,14 +865,18 @@ def draw_panel(screen, fonts, mouse_pos, state):
                     bg = BUTTON_HOVER if add_rect.collidepoint(mouse_pos) else BUTTON_BG
                     pygame.draw.rect(screen, bg, add_rect, border_radius=6)
                     pygame.draw.rect(screen, BUTTON_BORDER, add_rect, 1, border_radius=6)
-                    t = font_small.render("+ Add Wave distortion", True, TEXT_COLOR)
-                    screen.blit(t, t.get_rect(center=add_rect.center))
+                    _icon_and_label(add_rect, "wave_add", "Add Wave distortion", False)
+                    _queue_tip(add_rect, "wave_add")
                     y += 34
                     screen.blit(font_small.render("No curve styles added", True, MUTED_COLOR), (x, y)); y += 18
             else:
                 screen.blit(font_small.render("Click a stroke to edit separately", True, MUTED_COLOR), (x, y)); y += 24
                 state["curve_hide_rect"] = pygame.Rect(0,0,0,0)
                 state["curve_redraw_rect"] = pygame.Rect(0,0,0,0)
+                state["curve_cut_rect"] = pygame.Rect(0,0,0,0)
+                _gap_slider = state.get("cut_gap_slider")
+                if _gap_slider is not None:
+                    _gap_slider.track.width = 0
                 state["wave_toggle_rect"] = pygame.Rect(0,0,0,0)
                 state["wave_add_rect"] = pygame.Rect(0,0,0,0)
                 state["wave_remove_rect"] = pygame.Rect(0,0,0,0)
@@ -589,6 +886,10 @@ def draw_panel(screen, fonts, mouse_pos, state):
         else:
             state["curve_hide_rect"] = pygame.Rect(0,0,0,0)
             state["curve_redraw_rect"] = pygame.Rect(0,0,0,0)
+            state["curve_cut_rect"] = pygame.Rect(0,0,0,0)
+            _gap_slider = state.get("cut_gap_slider")
+            if _gap_slider is not None:
+                _gap_slider.track.width = 0
             state["wave_toggle_rect"] = pygame.Rect(0,0,0,0)
             state["wave_add_rect"] = pygame.Rect(0,0,0,0)
             state["wave_remove_rect"] = pygame.Rect(0,0,0,0)
@@ -746,14 +1047,7 @@ def draw_panel(screen, fonts, mouse_pos, state):
             sv_rect = pygame.Rect(x, y, sv_w, sv_h)
             state["sv_rect"] = sv_rect
             # draw SV gradient for current hue
-            sv_surf = pygame.Surface((sv_w, sv_h))
-            for ix in range(sv_w):
-                s_val = ix / max(1, sv_w - 1)
-                for iy in range(sv_h):
-                    v_val = 1.0 - iy / max(1, sv_h - 1)
-                    col = hsv_to_rgb(ph, s_val, v_val)
-                    sv_surf.set_at((ix, iy), tuple(int(c * 255) for c in col))
-            screen.blit(sv_surf, sv_rect.topleft)
+            screen.blit(_sv_surface(ph, sv_w, sv_h), sv_rect.topleft)
             pygame.draw.rect(screen, BUTTON_BORDER, sv_rect, 1, border_radius=4)
             # SV cursor
             cxp = sv_rect.x + int(ps * (sv_w - 1))
@@ -766,10 +1060,7 @@ def draw_panel(screen, fonts, mouse_pos, state):
             hue_h = 14
             hue_rect = pygame.Rect(x, y, sv_w, hue_h)
             state["hue_rect"] = hue_rect
-            for ix in range(sv_w):
-                hh = (ix / max(1, sv_w - 1)) * 360.0
-                col = hsv_to_rgb(hh, 1.0, 1.0)
-                pygame.draw.line(screen, tuple(int(c * 255) for c in col), (hue_rect.x + ix, hue_rect.y), (hue_rect.x + ix, hue_rect.y + hue_h - 1))
+            screen.blit(_hue_bar_surface(sv_w, hue_h), hue_rect.topleft)
             pygame.draw.rect(screen, BUTTON_BORDER, hue_rect, 1, border_radius=4)
             hx = hue_rect.x + int((ph / 360.0) * (sv_w - 1))
             pygame.draw.rect(screen, (255, 255, 255), (hx - 3, hue_rect.y - 2, 6, hue_h + 4), 2, border_radius=2)
@@ -901,3 +1192,31 @@ def draw_panel(screen, fonts, mouse_pos, state):
         thumb_h = max(30, int(track.h * frac))
         thumb_y = track.y + int((track.h - thumb_h) * (clamp(_scroll, 0, max_scroll) / max_scroll))
         pygame.draw.rect(screen, (148, 154, 168), pygame.Rect(track.x, thumb_y, track.w, thumb_h), border_radius=3)
+
+    # Draw the (single) hovered button's name / shortcut tooltip on top.
+    if _tips:
+        draw_tooltip(screen, mouse_pos, _tips[0])
+
+
+def draw_panel_toggle(screen, mouse_pos, state):
+    """Small tab on the panel edge that collapses/expands the right sidebar."""
+    collapsed = bool(state.get("panel_collapsed"))
+    top = getattr(cfg, "TOP_BAR_H", 0)
+    w, h = 16, 48
+    x = (cfg.WIDTH - w) if collapsed else (cfg.PANEL_X - w // 2 - 1)
+    y = top + 10
+    r = pygame.Rect(x, y, w, h)
+    state["panel_toggle_rect"] = r
+    hover = r.collidepoint(mouse_pos)
+    bg = BUTTON_HOVER if hover else (250, 251, 253)
+    pygame.draw.rect(screen, bg, r, border_radius=4)
+    pygame.draw.rect(screen, BUTTON_BORDER, r, 1, border_radius=4)
+    cx, cy = r.centerx, r.centery
+    if collapsed:
+        pts = [(cx + 2, cy - 6), (cx - 3, cy), (cx + 2, cy + 6)]
+    else:
+        pts = [(cx - 3, cy - 6), (cx + 2, cy), (cx - 3, cy + 6)]
+    pygame.draw.lines(screen, TEXT_COLOR, False, pts, 2)
+    if hover:
+        draw_tooltip(screen, mouse_pos, "Show sidebar" if collapsed else "Hide sidebar")
+    return r
