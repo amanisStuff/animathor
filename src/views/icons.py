@@ -54,6 +54,14 @@ BUTTON_TIPS = {
     "trace_fit": "Tracing: Fit (fewest points)",
     "trace_catmull_rom": "Tracing: Catmull-Rom",
     "trace_single": "Tracing: Single curve",
+    "flip_h": "Flip Horizontal",
+    "flip_v": "Flip Vertical",
+    "align_left": "Align Left",
+    "align_hcenter": "Align Horizontal Center",
+    "align_right": "Align Right",
+    "align_top": "Align Top",
+    "align_vmiddle": "Align Vertical Middle",
+    "align_bottom": "Align Bottom",
 }
 
 
@@ -84,10 +92,82 @@ def _tinted(img, color):
     return result
 
 
+def _draw_fallback_icon(screen, name, center, color, size=20):
+    """Draw a simple procedural icon when a PNG asset is unavailable."""
+    cx, cy = int(center[0]), int(center[1])
+    s = max(12, int(size))
+    c = color
+    w = max(2, s // 10)
+
+    if name == "flip_h":
+        # vertical axis with arrows left/right
+        pygame.draw.line(screen, c, (cx, cy - s // 2 + 2), (cx, cy + s // 2 - 2), w)
+        y = cy
+        for dx, sign in ((-1, -1), (1, 1)):
+            tip = (cx + sign * (s // 2 - 2), y)
+            base_x = cx + sign * (s // 5)
+            pygame.draw.polygon(screen, c, [tip, (base_x, y - 4), (base_x, y + 4)])
+        return True
+    if name == "flip_v":
+        # horizontal axis with arrows up/down
+        pygame.draw.line(screen, c, (cx - s // 2 + 2, cy), (cx + s // 2 - 2, cy), w)
+        x = cx
+        for dy, sign in ((-1, -1), (1, 1)):
+            tip = (x, cy + sign * (s // 2 - 2))
+            base_y = cy + sign * (s // 5)
+            pygame.draw.polygon(screen, c, [tip, (x - 4, base_y), (x + 4, base_y)])
+        return True
+
+    # alignment icons: reference line + two rectangles
+    if name in ("align_left", "align_hcenter", "align_right", "align_top", "align_vmiddle", "align_bottom"):
+        l = cx - s // 2 + 2
+        r = cx + s // 2 - 2
+        t = cy - s // 2 + 2
+        b = cy + s // 2 - 2
+        if name == "align_left":
+            x = l
+            pygame.draw.line(screen, c, (x, t), (x, b), w)
+            pygame.draw.rect(screen, c, (x + 3, cy - 6, 9, 4), 1)
+            pygame.draw.rect(screen, c, (x + 3, cy + 2, 6, 4), 1)
+        elif name == "align_hcenter":
+            x = cx
+            pygame.draw.line(screen, c, (x, t), (x, b), w)
+            pygame.draw.rect(screen, c, (cx - 5, cy - 6, 10, 4), 1)
+            pygame.draw.rect(screen, c, (cx - 3, cy + 2, 6, 4), 1)
+        elif name == "align_right":
+            x = r
+            pygame.draw.line(screen, c, (x, t), (x, b), w)
+            pygame.draw.rect(screen, c, (x - 12, cy - 6, 9, 4), 1)
+            pygame.draw.rect(screen, c, (x - 9, cy + 2, 6, 4), 1)
+        elif name == "align_top":
+            y = t
+            pygame.draw.line(screen, c, (l, y), (r, y), w)
+            pygame.draw.rect(screen, c, (cx - 7, y + 3, 4, 9), 1)
+            pygame.draw.rect(screen, c, (cx + 2, y + 3, 4, 6), 1)
+        elif name == "align_vmiddle":
+            y = cy
+            pygame.draw.line(screen, c, (l, y), (r, y), w)
+            pygame.draw.rect(screen, c, (cx - 7, cy - 5, 4, 10), 1)
+            pygame.draw.rect(screen, c, (cx + 2, cy - 3, 4, 6), 1)
+        elif name == "align_bottom":
+            y = b
+            pygame.draw.line(screen, c, (l, y), (r, y), w)
+            pygame.draw.rect(screen, c, (cx - 7, y - 12, 4, 9), 1)
+            pygame.draw.rect(screen, c, (cx + 2, y - 9, 4, 6), 1)
+        return True
+    return False
+
+
 def draw_icon(screen, name, rect, color=None, size=20, enabled=True):
     """Draw a bundled icon centred in ``rect`` (or at a position tuple)."""
     img = load_icon(name, size)
+    c = (170, 176, 184) if not enabled else (color if color is not None else (255, 255, 255))
     if img is None:
+        if isinstance(rect, pygame.Rect):
+            center = rect.center
+        else:
+            center = rect
+        _draw_fallback_icon(screen, name, center, c, size=size)
         return
     if not enabled:
         img = _tinted(img, (170, 176, 184))

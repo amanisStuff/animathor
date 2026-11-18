@@ -497,40 +497,38 @@ def draw_panel(screen, fonts, mouse_pos, state):
             screen.blit(font_small.render("Flip", True, TEXT_COLOR), (x, y)); y += 20
             mgap = 6
             mwidth = (PANEL_W - 40 - mgap) // 2
-            for mi, (mlabel, mkey, tip) in enumerate([
-                    ("Horizontal", "mirror_h_rect", "Flip Horizontal"),
-                    ("Vertical", "mirror_v_rect", "Flip Vertical")]):
+            for mi, (mlabel, mkey, icon_name) in enumerate([
+                    ("Horizontal", "mirror_h_rect", "flip_h"),
+                    ("Vertical", "mirror_v_rect", "flip_v")]):
                 mr = pygame.Rect(x + mi * (mwidth + mgap), y, mwidth, 24)
                 state[mkey] = mr
                 bg = BUTTON_HOVER if mr.collidepoint(mouse_pos) else BUTTON_BG
                 pygame.draw.rect(screen, bg, mr, border_radius=5)
                 pygame.draw.rect(screen, BUTTON_BORDER, mr, 1, border_radius=5)
-                t = font_small.render(mlabel, True, TEXT_COLOR)
-                screen.blit(t, t.get_rect(center=mr.center))
-                _queue_tip(mr, None, tip)
+                _icon_and_label(mr, icon_name, mlabel, False)
+                _queue_tip(mr, icon_name)
             y += 24 + 8
 
             screen.blit(font_small.render("Align", True, TEXT_COLOR), (x, y)); y += 20
             agap = 6
             aw = (PANEL_W - 40 - 2 * agap) // 3
             align_defs = [
-                ("Left", "align_left_rect", "Align Left"),
-                ("Center", "align_hcenter_rect", "Align Horizontal Center"),
-                ("Right", "align_right_rect", "Align Right"),
-                ("Top", "align_top_rect", "Align Top"),
-                ("Middle", "align_vmiddle_rect", "Align Vertical Middle"),
-                ("Bottom", "align_bottom_rect", "Align Bottom"),
+                ("Left", "align_left_rect", "align_left"),
+                ("Center", "align_hcenter_rect", "align_hcenter"),
+                ("Right", "align_right_rect", "align_right"),
+                ("Top", "align_top_rect", "align_top"),
+                ("Middle", "align_vmiddle_rect", "align_vmiddle"),
+                ("Bottom", "align_bottom_rect", "align_bottom"),
             ]
-            for ai, (alabel, akey, tip) in enumerate(align_defs):
+            for ai, (_alabel, akey, icon_name) in enumerate(align_defs):
                 row, col = divmod(ai, 3)
                 ar = pygame.Rect(x + col * (aw + agap), y + row * 26, aw, 22)
                 state[akey] = ar
                 bg = BUTTON_HOVER if ar.collidepoint(mouse_pos) else BUTTON_BG
                 pygame.draw.rect(screen, bg, ar, border_radius=5)
                 pygame.draw.rect(screen, BUTTON_BORDER, ar, 1, border_radius=5)
-                t = font_small.render(alabel, True, TEXT_COLOR)
-                screen.blit(t, t.get_rect(center=ar.center))
-                _queue_tip(ar, None, tip)
+                draw_icon(screen, icon_name, ar, color=TEXT_COLOR, size=20)
+                _queue_tip(ar, icon_name)
             y += 2 * 26 + 8
         else:
             state["mirror_h_rect"] = pygame.Rect(0, 0, 0, 0)
