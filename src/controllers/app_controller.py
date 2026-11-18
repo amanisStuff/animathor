@@ -723,7 +723,8 @@ def main():
                 # Right-click a bottom-bar shape tool: its options popup above the button.
                 _shape_rects = state.get("draw_shape_rects", {})
                 _rc_hit = next((k for k, r in _shape_rects.items() if r.collidepoint(event.pos)), None)
-                if _rc_hit is not None:
+                _draw_keys = {k for k, _ in DRAW_SHAPES} | {k for k, _ in BOTTOM_TOOLS}
+                if _rc_hit is not None and tool_mode == "draw" and _rc_hit in _draw_keys:
                     if shape_menu_key == _rc_hit:
                         shape_menu_key = None
                     else:
@@ -886,19 +887,65 @@ def main():
                     tool_mode = "selection"; drawing = False; current_points = []; selected_point = None; drag_last = None; transform_drag = None; selection_submode = "transform"
                     curve_cut_mode = False
                 elif any(r.collidepoint(event.pos) for r in state.get("draw_shape_rects", {}).values()):
-                    # Bottom toolbar: pick a shape or a drawing tool.
-                    for _shape_key, _shape_rect in state.get("draw_shape_rects", {}).items():
-                        if _shape_rect.collidepoint(event.pos):
-                            if _shape_key in ("eraser", "bucket", "cutter"):
-                                draw_tool = _shape_key
-                            else:
-                                draw_shape = _shape_key
+                    _hit_key = next((k for k, r in state.get("draw_shape_rects", {}).items() if r.collidepoint(event.pos)), None)
+                    if _hit_key is not None:
+                        _mirror_align = {"mirror_h", "mirror_v", "align_left", "align_hcenter", "align_right", "align_top", "align_vmiddle", "align_bottom"}
+                        _draw_keys = {k for k, _ in DRAW_SHAPES} | {k for k, _ in BOTTOM_TOOLS}
+                        if tool_mode == "selection" and selection_submode == "transform" and _hit_key in _mirror_align and selected_strokes:
+                            sel = sorted(i for i in selected_strokes if 0 <= i < len(strokes))
+                            if sel:
+                                obb = combined_obb(strokes, sel)
+                                bb = combined_bbox(strokes, sel)
+                                if obb and bb:
+                                    if pivot_pos is not None:
+                                        cx, cy = pivot_pos
+                                    else:
+                                        cx, cy = (bb[0] + bb[2]) / 2.0, (bb[1] + bb[3]) / 2.0
+                                    push_undo()
+                                    if _hit_key == "mirror_h":
+                                        for si in sel:
+                                            strokes[si] = mirror_stroke(strokes[si], cx, cy, "h")
+                                    elif _hit_key == "mirror_v":
+                                        for si in sel:
+                                            strokes[si] = mirror_stroke(strokes[si], cx, cy, "v")
+                                    else:
+                                        tx1, ty1, tx2, ty2 = bb
+                                        tcx, tcy = (tx1 + tx2) / 2.0, (ty1 + ty2) / 2.0
+                                        for si in sel:
+                                            sbb = stroke_bbox(strokes[si])
+                                            if not sbb:
+                                                continue
+                                            sx1, sy1, sx2, sy2 = sbb
+                                            scx, scy = (sx1 + sx2) / 2.0, (sy1 + sy2) / 2.0
+                                            dx = dy = 0.0
+                                            if _hit_key == "align_left":
+                                                dx = tx1 - sx1
+                                            elif _hit_key == "align_hcenter":
+                                                dx = tcx - scx
+                                            elif _hit_key == "align_right":
+                                                dx = tx2 - sx2
+                                            elif _hit_key == "align_top":
+                                                dy = ty1 - sy1
+                                            elif _hit_key == "align_vmiddle":
+                                                dy = tcy - scy
+                                            elif _hit_key == "align_bottom":
+                                                dy = ty2 - sy2
+                                            if dx != 0.0 or dy != 0.0:
+                                                strokes[si] = translate_stroke(strokes[si], dx, dy)
+                            selected_point = None; selected_curve = None; selected_curves.clear(); transform_drag = None; drag_last = None; pending_transform_toggle = None
+                        elif tool_mode == "draw" or _hit_key in _draw_keys:
+                            # Bottom toolbar: pick a shape or a drawing tool.
+                            if _hit_key in ("eraser", "bucket", "cutter"):
+                                draw_tool = _hit_key
+                            elif _hit_key not in _mirror_align:
+                                draw_shape = _hit_key
                                 draw_tool = "pen"
-                            break
-                    tool_mode = "draw"
-                    drawing = False
-                    current_points = []
-                    selected_strokes.clear(); selected_point = None; transform_drag = None
+                            tool_mode = "draw"
+                            drawing = False
+                            current_points = []
+                            selected_strokes.clear(); selected_point = None; transform_drag = None
+                        # else: unhandled bottom-bar action for this view; ignore
+
                 elif event.pos[0] >= cfg.PANEL_X:
                     # Right panel interactions
                     if btn_boost.hit(event.pos) and tool_mode == "draw":

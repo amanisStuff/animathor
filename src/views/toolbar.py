@@ -72,22 +72,74 @@ _SHAPE_ICON = {
 
 
 def draw_bottom_shape_toolbar(screen, fonts, mouse_pos, state):
-    """Horizontal palette: shape tools plus eraser/fill, along the bottom."""
+    """Bottom bar; contents change with the current view/mode."""
     font, font_small, font_title = fonts
     bar_h = getattr(cfg, "BOTTOM_BAR_H", 56)
     bar = pygame.Rect(cfg.CANVAS_X, cfg.HEIGHT - bar_h, cfg.CANVAS_W, bar_h)
     pygame.draw.rect(screen, TOOLBAR_BG, bar)
     pygame.draw.line(screen, PANEL_BORDER, (bar.x, bar.y), (bar.right - 1, bar.y), 2)
 
+    tool_mode = state.get("tool_mode", "draw")
+    submode = state.get("selection_submode", "transform")
+
+    rects = {}
+    tip = None
+    pad, gap = 12, 6
+
+    if tool_mode == "selection":
+        if submode == "transform":
+            entries = [
+                ("mirror_h", "flip_h", "Flip H"),
+                ("mirror_v", "flip_v", "Flip V"),
+                ("align_left", "align_left", "Left"),
+                ("align_hcenter", "align_hcenter", "Center"),
+                ("align_right", "align_right", "Right"),
+                ("align_top", "align_top", "Top"),
+                ("align_vmiddle", "align_vmiddle", "Middle"),
+                ("align_bottom", "align_bottom", "Bottom"),
+            ]
+            n = max(1, len(entries))
+            bw = (bar.w - pad * 2 - gap * (n - 1)) // n
+            has_sel = bool(state.get("selected_strokes"))
+            for i, (key, icon_name, label) in enumerate(entries):
+                r = pygame.Rect(bar.x + pad + i * (bw + gap), bar.y + 5, bw, bar.h - 10)
+                rects[key] = r
+                hover = r.collidepoint(mouse_pos)
+                enabled = has_sel
+                bg = BUTTON_HOVER if (hover and enabled) else BUTTON_BG
+                pygame.draw.rect(screen, bg, r, border_radius=7)
+                pygame.draw.rect(screen, BUTTON_BORDER, r, 1, border_radius=7)
+                color = TEXT_COLOR if enabled else (170, 176, 184)
+                draw_icon(screen, icon_name, pygame.Rect(r.x + 6, r.centery - 10, 20, 20),
+                          color=color, size=20, enabled=enabled)
+                t = font_small.render(label, True, color)
+                screen.blit(t, t.get_rect(midleft=(r.x + 30, r.centery)))
+                if hover:
+                    tip = BUTTON_TIPS.get(icon_name, label)
+        elif submode == "nodes":
+            msg = font_small.render("Nodes view: drag nodes and handles on the canvas", True, MUTED_COLOR)
+            screen.blit(msg, msg.get_rect(midleft=(bar.x + pad, bar.centery)))
+        elif submode == "curve":
+            msg = font_small.render("Curve view: select curves and use Tool options to split, join, or redraw", True, MUTED_COLOR)
+            screen.blit(msg, msg.get_rect(midleft=(bar.x + pad, bar.centery)))
+        else:
+            msg = font_small.render("Selection view", True, MUTED_COLOR)
+            screen.blit(msg, msg.get_rect(midleft=(bar.x + pad, bar.centery)))
+        state["draw_shape_rects"] = rects
+        state["shape_menu_key"] = None
+        state["shape_menu_rect"] = pygame.Rect(0, 0, 0, 0)
+        state["shape_menu_item_rects"] = {}
+        if tip:
+            draw_tooltip(screen, mouse_pos, tip)
+        return
+
+    # Draw mode: shapes + drawing tools
     shape = state.get("draw_shape", "freehand")
     draw_tool = state.get("draw_tool", "pen")
     entries = list(DRAW_SHAPES) + list(BOTTOM_TOOLS)
     tool_keys = {k for k, _ in BOTTOM_TOOLS}
-    rects = {}
-    pad, gap = 12, 6
     n = max(1, len(entries))
     bw = (bar.w - pad * 2 - gap * (n - 1)) // n
-    tip = None
     for i, (key, label) in enumerate(entries):
         r = pygame.Rect(bar.x + pad + i * (bw + gap), bar.y + 5, bw, bar.h - 10)
         rects[key] = r
