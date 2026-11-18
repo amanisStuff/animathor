@@ -491,11 +491,13 @@ def _fit_face_beziers_adaptive(dense, tol, max_segs=64, forced_indices=None):
         if not fitted:
             return
         cubic = fitted[0]
-        if i1 - i0 < 2 or len(segments) >= max_segs:
-            segments.append(cubic)
-            return
         forced_inside = [fi for fi in forced if i0 < fi < i1]
         err, wi = _cubic_fit_error(run, cubic)
+        # max_segs is a soft budget: forced nodes and high-error features
+        # (e.g. sharp corners) must still be preserved to avoid rounding.
+        if i1 - i0 < 2 or (len(segments) >= max_segs and not forced_inside and err <= tol):
+            segments.append(cubic)
+            return
         if err <= tol and not forced_inside:
             segments.append(cubic)
             return

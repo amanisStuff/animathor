@@ -331,12 +331,36 @@ def _loop_to_components(loop_segs, global_seg_offset=0, forced_corner_points=Non
     return segs, components, corner_anchors
 
 
+def _sharp_corner_indices(loop, angle_thresh_deg=25.0):
+    """Indices of vertices with a sharp turn in a closed loop (geometric corners)."""
+    n = len(loop)
+    if n < 3:
+        return []
+    out = []
+    for i in range(n):
+        a = loop[i - 1]
+        b = loop[i]
+        c = loop[(i + 1) % n]
+        v1 = (b[0] - a[0], b[1] - a[1])
+        v2 = (c[0] - b[0], c[1] - b[1])
+        l1 = math.hypot(*v1)
+        l2 = math.hypot(*v2)
+        if l1 < 1e-9 or l2 < 1e-9:
+            continue
+        dot = (v1[0] * v2[0] + v1[1] * v2[1]) / (l1 * l2)
+        dot = max(-1.0, min(1.0, dot))
+        turn = math.degrees(math.acos(dot))
+        if turn >= angle_thresh_deg:
+            out.append(i)
+    return out
+
+
 def boolean_result(shapes, op=UNION, samples=18, simplify_epsilon=1.5, max_segs=64):
     """Return (segs, components, corner_anchors) for the boolean result, or None.
 
     Result boundaries are split into connected components at non-symmetrical
-    (corner) junctions. Geometric intersection/crossing points are always
-    preserved as sharp corner nodes.
+    (corner) junctions. Geometric intersection/crossing points and sharp
+    boundary corners are always preserved as nodes.
     """
     loops, loops_flags = boolean_loops(shapes, op=op, samples=samples)
     if not loops:
@@ -346,7 +370,11 @@ def boolean_result(shapes, op=UNION, samples=18, simplify_epsilon=1.5, max_segs=
     all_corners = set()
     for idx, loop in enumerate(loops):
         flags = loops_flags[idx] if idx < len(loops_flags) else [False] * len(loop)
-        forced_indices = [i for i, f in enumerate(flags) if f]
+        forced_set = {i for i, f in enumerate(flags) if f}
+        # Preserve original sharp corners/ends on the boundary (not just intersections).
+        for i in _sharp_corner_indices(loop):
+            forced_set.add(i)
+        forced_indices = sorted(forced_set)
         forced_points = [loop[i] for i in forced_indices if 0 <= i < len(loop)]
         try:
             fitted = _fill._fit_face_beziers_adaptive(
