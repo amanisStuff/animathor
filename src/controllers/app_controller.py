@@ -116,6 +116,7 @@ def main():
     cut_points = []  # canvas-space points of the swipe
     cut_gap = 0  # optional visible gap left by the razor (canvas px, total)
     curve_cut_mode = False  # Split curve toggle in selection Curve mode
+    eyedropper_pick = False  # one-shot style picker in selection mode
 
     font = pygame.font.SysFont(None, 24)
     font_small = pygame.font.SysFont(None, 20)
@@ -357,6 +358,7 @@ def main():
             "curve_redraw_rect": curve_redraw_rect_cache,
             "curve_cut_rect": curve_cut_rect_cache,
             "curve_cut_mode": curve_cut_mode,
+            "eyedropper_pick": eyedropper_pick,
             "cut_gap": cut_gap,
             "cut_gap_slider": cut_gap_slider,
             "wave_toggle_rect": wave_toggle_rect_cache,
@@ -492,7 +494,9 @@ def main():
                     shift = bool(mods & pygame.KMOD_SHIFT)
                     # --- Esc: cancel/deselect first, quit only as fallback ---
                     if event.key == pygame.K_ESCAPE:
-                        if redrawing_curve is not None:
+                        if eyedropper_pick:
+                            eyedropper_pick = False
+                        elif redrawing_curve is not None:
                             redrawing_curve = None
                         elif marquee_select is not None:
                             marquee_select = None
@@ -618,19 +622,31 @@ def main():
                         tool_mode = "selection"; drawing = False; current_points = []
                         selected_point = None; drag_last = None; transform_drag = None
                         curve_cut_mode = False
+                        eyedropper_pick = False
+                    elif not ctrl and event.key == pygame.K_i:
+                        tool_mode = "selection"; drawing = False; current_points = []
+                        eyedropper_pick = True
+                        cutting = False; cut_points = []
+                        curve_cut_mode = False
+                        redrawing_curve = None
+                        selected_point = None; drag_last = None; transform_drag = None
                     elif not ctrl and event.key == pygame.K_b:
                         tool_mode = "draw"; draw_tool = "pen"; drawing = False; current_points = []
                         selected_strokes.clear(); selected_point = None; transform_drag = None
+                        eyedropper_pick = False
                     elif not ctrl and event.key == pygame.K_e:
                         tool_mode = "draw"; draw_tool = "eraser"; drawing = False; current_points = []
                         selected_strokes.clear(); selected_point = None; transform_drag = None
+                        eyedropper_pick = False
                     elif not ctrl and event.key == pygame.K_f:
                         tool_mode = "draw"; draw_tool = "bucket"; drawing = False; current_points = []
                         selected_strokes.clear(); selected_point = None; transform_drag = None
+                        eyedropper_pick = False
                     elif not ctrl and event.key == pygame.K_c:
                         tool_mode = "draw"; draw_tool = "cutter"; drawing = False; current_points = []
                         cutting = False; cut_points = []
                         selected_strokes.clear(); selected_point = None; transform_drag = None
+                        eyedropper_pick = False
                     elif not ctrl and event.key == pygame.K_s:
                         snap_enabled = not snap_enabled
                     elif event.key == pygame.K_SPACE:
@@ -1001,11 +1017,16 @@ def main():
                                 strokes.append(new_st)
                                 selected_strokes = {len(strokes) - 1}
                                 selected_point = None; selected_curve = None; transform_drag = None; drag_last = None; pending_transform_toggle = None
+                    elif tool_mode == "selection" and state.get("eyedropper_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
+                        eyedropper_pick = not eyedropper_pick
+                        state["eyedropper_pick"] = eyedropper_pick
+                        cutting = False; cut_points = []
                     elif tool_mode == "selection" and selection_submode == "curve" and state.get("curve_cut_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
                         curve_cut_mode = not curve_cut_mode
                         state["curve_cut_mode"] = curve_cut_mode
                         cutting = False; cut_points = []
                         selected_point = None; transform_drag = None; drag_last = None
+                        eyedropper_pick = False
                     elif tool_mode == "selection" and selection_submode == "curve" and state.get("curve_redraw_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
                         if selected_curve and selected_curve[0] in selected_strokes:
                             si, comp_i = selected_curve
@@ -1492,7 +1513,70 @@ def main():
                         transform_drag = None
                         mods = pygame.key.get_mods()
                         shift = bool(mods & pygame.KMOD_SHIFT)
-                        if selection_submode == "curve":
+                        if eyedropper_pick:
+                            hit = hit_test_stroke(cpos, strokes)
+                            if hit is not None and 0 <= hit < len(strokes):
+                                src_stroke = strokes[hit]
+                                src_comp_i = hit_test_component(src_stroke, cpos)
+                                if src_comp_i is None:
+                                    src_comp_i = 0
+                                src_sc, src_sw = _effective_component_style(src_stroke, src_comp_i)
+                                src_fc = src_stroke.get("fill_color")
+                                src_comps = _stroke_components(src_stroke)
+                                if 0 <= src_comp_i < len(src_comps):
+                                    src_waves = copy.deepcopy(_get_wave_styles(src_comps[src_comp_i]))
+                                else:
+                                    src_waves = []
+                                had_sel = bool(selected_strokes)
+                                if not had_sel:
+                                    selected_strokes = {hit}
+                                    if selection_submode == "curve":
+                                        selected_curve = (hit, src_comp_i)
+                                    else:
+                                        selected_curve = None
+                                else:
+                                    push_undo()
+                                    for si in list(selected_strokes):
+                                        if not (0 <= si < len(strokes)):
+                                            continue
+                                        st = strokes[si]
+                                        st["stroke_width"] = float(src_sw)
+                                        st["fill_color"] = copy.deepcopy(src_fc) if src_fc is not None else None
+                                        # In curve submode, apply stroke style/waves to the
+                                        # selected component but keep fill at stroke level.
+                                        if (selection_submode == "curve" and selected_curve
+                                                and selected_curve[0] == si and len(selected_strokes) == 1):
+                                            ci = selected_curve[1]
+                                            comps = _stroke_components(st)
+                                            if 0 <= ci < len(comps):
+                                                comps[ci] = copy.deepcopy(comps[ci])
+                                                comps[ci]["stroke_color"] = copy.deepcopy(src_sc)
+                                                comps[ci]["stroke_width"] = float(src_sw)
+                                                comps[ci].pop("wave", None)
+                                                comps[ci]["styles"] = [s for s in comps[ci].get("styles", []) if not (isinstance(s, dict) and s.get("type") == "wave")]
+                                                for wi, wv in enumerate(src_waves):
+                                                    _set_wave_style(comps[ci], wv, wi)
+                                                st["components"] = comps
+                                        else:
+                                            st["stroke_color"] = copy.deepcopy(src_sc)
+                                            comps = _stroke_components(st)
+                                            if comps:
+                                                new_comps = []
+                                                for comp in comps:
+                                                    comp = copy.deepcopy(comp)
+                                                    # clear per-component stroke overrides to apply uniformly
+                                                    comp.pop("stroke_color", None)
+                                                    comp.pop("stroke_width", None)
+                                                    comp.pop("wave", None)
+                                                    comp["styles"] = [s for s in comp.get("styles", []) if not (isinstance(s, dict) and s.get("type") == "wave")]
+                                                    for wi, wv in enumerate(src_waves):
+                                                        _set_wave_style(comp, wv, wi)
+                                                    new_comps.append(comp)
+                                                st["components"] = new_comps
+                                eyedropper_pick = False
+                                state["eyedropper_pick"] = False
+                            # If the click missed, stay in pick mode.
+                        elif selection_submode == "curve":
                             handled_curve = False
                             # Curve mode: select/edit curves (components) only; node editing is in Nodes mode
                             selected_point = None
