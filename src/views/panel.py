@@ -488,6 +488,60 @@ def draw_panel(screen, fonts, mouse_pos, state):
             state["bool_union_rect"] = pygame.Rect(0,0,0,0)
             state["bool_intersect_rect"] = pygame.Rect(0,0,0,0)
 
+        # Mirror (flip) and alignment tools (transform mode)
+        for _k in ("mirror_h_rect", "mirror_v_rect",
+                   "align_left_rect", "align_hcenter_rect", "align_right_rect",
+                   "align_top_rect", "align_vmiddle_rect", "align_bottom_rect"):
+            state.setdefault(_k, pygame.Rect(0, 0, 0, 0))
+        if submode == "transform" and sel_count >= 1:
+            screen.blit(font_small.render("Flip", True, TEXT_COLOR), (x, y)); y += 20
+            mgap = 6
+            mwidth = (PANEL_W - 40 - mgap) // 2
+            for mi, (mlabel, mkey, tip) in enumerate([
+                    ("Horizontal", "mirror_h_rect", "Flip Horizontal"),
+                    ("Vertical", "mirror_v_rect", "Flip Vertical")]):
+                mr = pygame.Rect(x + mi * (mwidth + mgap), y, mwidth, 24)
+                state[mkey] = mr
+                bg = BUTTON_HOVER if mr.collidepoint(mouse_pos) else BUTTON_BG
+                pygame.draw.rect(screen, bg, mr, border_radius=5)
+                pygame.draw.rect(screen, BUTTON_BORDER, mr, 1, border_radius=5)
+                t = font_small.render(mlabel, True, TEXT_COLOR)
+                screen.blit(t, t.get_rect(center=mr.center))
+                _queue_tip(mr, None, tip)
+            y += 24 + 8
+
+            screen.blit(font_small.render("Align", True, TEXT_COLOR), (x, y)); y += 20
+            agap = 6
+            aw = (PANEL_W - 40 - 2 * agap) // 3
+            align_defs = [
+                ("Left", "align_left_rect", "Align Left"),
+                ("Center", "align_hcenter_rect", "Align Horizontal Center"),
+                ("Right", "align_right_rect", "Align Right"),
+                ("Top", "align_top_rect", "Align Top"),
+                ("Middle", "align_vmiddle_rect", "Align Vertical Middle"),
+                ("Bottom", "align_bottom_rect", "Align Bottom"),
+            ]
+            for ai, (alabel, akey, tip) in enumerate(align_defs):
+                row, col = divmod(ai, 3)
+                ar = pygame.Rect(x + col * (aw + agap), y + row * 26, aw, 22)
+                state[akey] = ar
+                bg = BUTTON_HOVER if ar.collidepoint(mouse_pos) else BUTTON_BG
+                pygame.draw.rect(screen, bg, ar, border_radius=5)
+                pygame.draw.rect(screen, BUTTON_BORDER, ar, 1, border_radius=5)
+                t = font_small.render(alabel, True, TEXT_COLOR)
+                screen.blit(t, t.get_rect(center=ar.center))
+                _queue_tip(ar, None, tip)
+            y += 2 * 26 + 8
+        else:
+            state["mirror_h_rect"] = pygame.Rect(0, 0, 0, 0)
+            state["mirror_v_rect"] = pygame.Rect(0, 0, 0, 0)
+            state["align_left_rect"] = pygame.Rect(0, 0, 0, 0)
+            state["align_hcenter_rect"] = pygame.Rect(0, 0, 0, 0)
+            state["align_right_rect"] = pygame.Rect(0, 0, 0, 0)
+            state["align_top_rect"] = pygame.Rect(0, 0, 0, 0)
+            state["align_vmiddle_rect"] = pygame.Rect(0, 0, 0, 0)
+            state["align_bottom_rect"] = pygame.Rect(0, 0, 0, 0)
+
         # Curve/stroke-edit controls
         state.setdefault("curve_hide_rect", pygame.Rect(0,0,0,0))
         state.setdefault("curve_redraw_rect", pygame.Rect(0,0,0,0))

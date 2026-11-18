@@ -164,6 +164,14 @@ def main():
     elev_back_rect_cache = pygame.Rect(0, 0, 0, 0)
     bool_union_rect_cache = pygame.Rect(0, 0, 0, 0)
     bool_intersect_rect_cache = pygame.Rect(0, 0, 0, 0)
+    mirror_h_rect_cache = pygame.Rect(0, 0, 0, 0)
+    mirror_v_rect_cache = pygame.Rect(0, 0, 0, 0)
+    align_left_rect_cache = pygame.Rect(0, 0, 0, 0)
+    align_hcenter_rect_cache = pygame.Rect(0, 0, 0, 0)
+    align_right_rect_cache = pygame.Rect(0, 0, 0, 0)
+    align_top_rect_cache = pygame.Rect(0, 0, 0, 0)
+    align_vmiddle_rect_cache = pygame.Rect(0, 0, 0, 0)
+    align_bottom_rect_cache = pygame.Rect(0, 0, 0, 0)
     curve_hide_rect_cache = pygame.Rect(0, 0, 0, 0)
     curve_redraw_rect_cache = pygame.Rect(0, 0, 0, 0)
     curve_cut_rect_cache = pygame.Rect(0, 0, 0, 0)
@@ -326,6 +334,14 @@ def main():
             "elev_back_rect": elev_back_rect_cache,
             "bool_union_rect": bool_union_rect_cache,
             "bool_intersect_rect": bool_intersect_rect_cache,
+            "mirror_h_rect": mirror_h_rect_cache,
+            "mirror_v_rect": mirror_v_rect_cache,
+            "align_left_rect": align_left_rect_cache,
+            "align_hcenter_rect": align_hcenter_rect_cache,
+            "align_right_rect": align_right_rect_cache,
+            "align_top_rect": align_top_rect_cache,
+            "align_vmiddle_rect": align_vmiddle_rect_cache,
+            "align_bottom_rect": align_bottom_rect_cache,
             "trace_algorithm": trace_algorithm,
             "trace_algo_rects": trace_algo_rects_cache,
             "draw_shape": draw_shape,
@@ -1024,6 +1040,57 @@ def main():
                                 strokes.append(new_st)
                                 selected_strokes = {len(strokes) - 1}
                                 selected_point = None; selected_curve = None; selected_curves.clear(); transform_drag = None; drag_last = None; pending_transform_toggle = None
+                    elif tool_mode == "selection" and selection_submode == "transform" and selected_strokes and (
+                        state.get("mirror_h_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos) or
+                        state.get("mirror_v_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos) or
+                        state.get("align_left_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos) or
+                        state.get("align_hcenter_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos) or
+                        state.get("align_right_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos) or
+                        state.get("align_top_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos) or
+                        state.get("align_vmiddle_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos) or
+                        state.get("align_bottom_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos)
+                    ):
+                        sel = sorted(i for i in selected_strokes if 0 <= i < len(strokes))
+                        if sel:
+                            obb = combined_obb(strokes, sel)
+                            bb = combined_bbox(strokes, sel)
+                            if obb and bb:
+                                if pivot_pos is not None:
+                                    cx, cy = pivot_pos
+                                else:
+                                    cx, cy = (bb[0] + bb[2]) / 2.0, (bb[1] + bb[3]) / 2.0
+                                push_undo()
+                                if state.get("mirror_h_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
+                                    for si in sel:
+                                        strokes[si] = mirror_stroke(strokes[si], cx, cy, "h")
+                                elif state.get("mirror_v_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
+                                    for si in sel:
+                                        strokes[si] = mirror_stroke(strokes[si], cx, cy, "v")
+                                else:
+                                    tx1, ty1, tx2, ty2 = bb
+                                    tcx, tcy = (tx1 + tx2) / 2.0, (ty1 + ty2) / 2.0
+                                    for si in sel:
+                                        sbb = stroke_bbox(strokes[si])
+                                        if not sbb:
+                                            continue
+                                        sx1, sy1, sx2, sy2 = sbb
+                                        scx, scy = (sx1 + sx2) / 2.0, (sy1 + sy2) / 2.0
+                                        dx = dy = 0.0
+                                        if state.get("align_left_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
+                                            dx = tx1 - sx1
+                                        elif state.get("align_hcenter_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
+                                            dx = tcx - scx
+                                        elif state.get("align_right_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
+                                            dx = tx2 - sx2
+                                        elif state.get("align_top_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
+                                            dy = ty1 - sy1
+                                        elif state.get("align_vmiddle_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
+                                            dy = tcy - scy
+                                        elif state.get("align_bottom_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
+                                            dy = ty2 - sy2
+                                        if dx != 0.0 or dy != 0.0:
+                                            strokes[si] = translate_stroke(strokes[si], dx, dy)
+                        selected_point = None; selected_curve = None; selected_curves.clear(); transform_drag = None; drag_last = None; pending_transform_toggle = None
                     elif tool_mode == "selection" and state.get("eyedropper_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
                         eyedropper_pick = not eyedropper_pick
                         state["eyedropper_pick"] = eyedropper_pick
@@ -2351,6 +2418,14 @@ def main():
         elev_back_rect_cache = state.get("elev_back_rect", elev_back_rect_cache)
         bool_union_rect_cache = state.get("bool_union_rect", bool_union_rect_cache)
         bool_intersect_rect_cache = state.get("bool_intersect_rect", bool_intersect_rect_cache)
+        mirror_h_rect_cache = state.get("mirror_h_rect", mirror_h_rect_cache)
+        mirror_v_rect_cache = state.get("mirror_v_rect", mirror_v_rect_cache)
+        align_left_rect_cache = state.get("align_left_rect", align_left_rect_cache)
+        align_hcenter_rect_cache = state.get("align_hcenter_rect", align_hcenter_rect_cache)
+        align_right_rect_cache = state.get("align_right_rect", align_right_rect_cache)
+        align_top_rect_cache = state.get("align_top_rect", align_top_rect_cache)
+        align_vmiddle_rect_cache = state.get("align_vmiddle_rect", align_vmiddle_rect_cache)
+        align_bottom_rect_cache = state.get("align_bottom_rect", align_bottom_rect_cache)
         curve_hide_rect_cache = state.get("curve_hide_rect", curve_hide_rect_cache)
         curve_redraw_rect_cache = state.get("curve_redraw_rect", curve_redraw_rect_cache)
         curve_cut_rect_cache = state.get("curve_cut_rect", curve_cut_rect_cache)

@@ -429,6 +429,23 @@ def skew_stroke_local(stroke, center_pt, ang, skew_x, skew_y):
         out = dict(stroke); out["segs"] = moved; return out
     return moved
 
+def mirror_stroke(stroke, cx, cy, axis="h"):
+    """Mirror (flip) stroke across a vertical (axis='h') or horizontal (axis='v') line through (cx,cy)."""
+    segs = segs_of(stroke)
+    if axis == "v":
+        def _xf(pt):
+            return (pt[0], 2 * cy - pt[1])
+    else:
+        def _xf(pt):
+            return (2 * cx - pt[0], pt[1])
+    moved = [(_xf(p0), _xf(c1), _xf(c2), _xf(p3)) for (p0, c1, c2, p3) in segs]
+    if isinstance(stroke, dict):
+        out = _copy_stroke(stroke)
+        out["segs"] = moved
+        # segment geometry is mirrored but topology/indices are unchanged
+        return out
+    return moved
+
 def _anchor_handle_slots(seg_list, seg_index, anchor_name, closed):
     """Slots [(seg_index, 'c1'|'c2')] for handles attached to an anchor."""
     n = len(seg_list)
