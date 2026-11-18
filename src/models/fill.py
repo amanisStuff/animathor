@@ -62,6 +62,7 @@ def _stroke_boundary_polylines(stroke, samples=18):
     comps = _strokes._stroke_components(stroke)
     ranges = _strokes._component_ranges(stroke)
     polylines = []
+    cur = None
     for ci, (s0, s1) in enumerate(ranges):
         comp = comps[ci] if ci < len(comps) else {}
         idxs = [i for i in range(s0, min(s1, len(segs))) if i not in hidden]
@@ -70,9 +71,17 @@ def _stroke_boundary_polylines(stroke, samples=18):
         if _waves._component_wave_enabled(comp) and len(idxs) == (min(s1, len(segs)) - s0):
             poly = _waves.sample_distorted_component(stroke, ci)
             if poly and len(poly) >= 2:
-                polylines.append([tuple(p) for p in poly])
+                sampled = [tuple(p) for p in poly]
+                if cur is not None and _dist(cur[-1], sampled[0]) <= 1.0:
+                    for pt in sampled[1:]:
+                        if _dist(cur[-1], pt) > 1e-6:
+                            cur.append(pt)
+                else:
+                    if cur and len(cur) >= 2:
+                        polylines.append(cur)
+                    cur = list(sampled)
                 continue
-        cur = None
+            # fall through to segment sampling if distorted sampling failed
         for i in idxs:
             p0, c1, c2, p3 = segs[i]
             pts = [cubic_bezier_point(p0, c1, c2, p3, t / samples) for t in range(samples + 1)]
@@ -86,8 +95,8 @@ def _stroke_boundary_polylines(stroke, samples=18):
                 tp = tuple(pt)
                 if _dist(cur[-1], tp) > 1e-6:
                     cur.append(tp)
-        if cur and len(cur) >= 2:
-            polylines.append(cur)
+    if cur and len(cur) >= 2:
+        polylines.append(cur)
     return polylines
 
 
