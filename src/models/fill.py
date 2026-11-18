@@ -100,12 +100,15 @@ def _stroke_boundary_polylines(stroke, samples=18):
     return polylines
 
 
-def _build_planar_graph(polylines):
+def _build_planar_graph(polylines, return_intersections=False):
     """Split all segments at intersections and build a planar graph.
 
-    Returns (nodes, edges) where nodes maps id -> (x, y) and edges is a list of
-    (node_a, node_b). Intersection points become shared vertices, so curves that
-    merely cross (without connected endpoints) form a connected graph.
+    Returns ``(nodes, edges)`` where nodes maps id -> (x, y) and edges is a
+    list of (node_a, node_b). Intersection points become shared vertices, so
+    curves that merely cross form a connected graph. When
+    ``return_intersections`` is True, returns ``(nodes, edges, intersection_nodes)``
+    where ``intersection_nodes`` is a set of node ids created by segment-segment
+    crossings/T-junctions.
     """
     segments = []
     for pl in polylines:
@@ -114,10 +117,13 @@ def _build_planar_graph(polylines):
             if _dist(a, b) > 1e-6:
                 segments.append((a, b))
     if not segments:
+        if return_intersections:
+            return {}, [], set()
         return {}, []
 
     # For each segment keep the sorted list of (t, point) split positions.
     splits = [[(0.0, s[0]), (1.0, s[1])] for s in segments]
+    intersection_pts = []
     for i, (p, p2) in enumerate(segments):
         min1x, max1x = min(p[0], p2[0]), max(p[0], p2[0])
         min1y, max1y = min(p[1], p2[1]), max(p[1], p2[1])
@@ -134,6 +140,7 @@ def _build_planar_graph(polylines):
             t, u, ipt = inter
             splits[i].append((t, ipt))
             splits[j].append((u, ipt))
+            intersection_pts.append(ipt)
 
     nodes = {}
     grid = defaultdict(list)
@@ -186,6 +193,11 @@ def _build_planar_graph(polylines):
                 continue
             edge_set.add(ekey)
             edges.append((na, nb))
+    if return_intersections:
+        intersection_nodes = set()
+        for ipt in intersection_pts:
+            intersection_nodes.add(get_node(ipt))
+        return nodes, edges, intersection_nodes
     return nodes, edges
 
 
@@ -445,7 +457,7 @@ def _cubic_fit_error(points, cubic):
     return worst, worst_i
 
 
-def _fit_face_beziers_adaptive(dense, tol, max_segs=64):
+def _fit_face_beziers_adaptive(dense, tol, max_segs=64, forced_indices=None):
     """Fit a minimal chain of cubic Beziers to the closed `dense` outline.
 
     RDP measures *straight-line* error, so it selects several anchors per
@@ -454,12 +466,23 @@ def _fit_face_beziers_adaptive(dense, tol, max_segs=64):
     point when the actual cubic-fit error exceeds `tol`. Smooth spans collapse
     to one cubic; a sharp intersection corner is where a single cubic fits
     poorly, so it forces a split at that corner and the corner stays hard.
+
+    ``forced_indices`` (indices into ``dense``) must become segment boundaries.
     """
     n = len(dense)
     if n < 3:
         return None
     seq = [(float(p[0]), float(p[1])) for p in dense]
     seq.append(seq[0])  # close the loop: valid span indices 0..n
+    forced = set()
+    if forced_indices:
+        for idx in forced_indices:
+            try:
+                ii = int(idx) % n
+            except Exception:
+                continue
+            if ii != 0:
+                forced.add(ii)
     segments = []
 
     def fit_span(i0, i1):
@@ -471,11 +494,26 @@ def _fit_face_beziers_adaptive(dense, tol, max_segs=64):
         if i1 - i0 < 2 or len(segments) >= max_segs:
             segments.append(cubic)
             return
+        forced_inside = [fi for fi in forced if i0 < fi < i1]
         err, wi = _cubic_fit_error(run, cubic)
-        if err <= tol:
+        if err <= tol and not forced_inside:
             segments.append(cubic)
             return
         split = i0 + wi
+        if forced_inside:
+            # Prefer the forced point with highest deviation; ensures required nodes.
+            best_forced = max(forced_inside, key=lambda fi: _point_cubic_distance(seq[fi], cubic))
+            if err > tol and i0 < split < i1:
+                # If worst deviation is itself forced, keep it; else prefer a forced split.
+                split = best_forced if split not in forced_inside else split
+            else:
+                split = best_forced
+        if split <= i0 or split >= i1:
+            if forced_inside:
+                split = forced_inside[0]
+            else:
+                segments.append(cubic)
+                return
         if split <= i0 or split >= i1:
             segments.append(cubic)
             return

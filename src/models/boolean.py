@@ -127,16 +127,16 @@ def _point_in_shape(pt, shape_polylines):
 
 
 def boolean_loops(shapes, op=UNION, samples=18):
-    """Return a list of closed output loops (each a list of 2D points).
+    """Return (loops, loop_flags) for the boolean result boundary.
 
-    ``shapes`` is a sequence of stroke dicts (or raw segment lists). ``op`` is
-    ``"union"``, ``"intersection"`` or ``"difference"``. Returns an empty list
-    when the operation produces no region (e.g. intersection of disjoint
-    shapes).
+    ``loops`` is a list of closed output loops (each a list of 2D points).
+    ``loop_flags[i][j]`` is True when ``loops[i][j]`` is a geometric
+    intersection/crossing node that should be preserved as a sharp node.
+    Returns ``([], [])`` when the operation produces no region.
     """
     shapes = list(shapes)
     if len(shapes) < 2:
-        return []
+        return [], []
     op = (op or UNION).lower()
 
     shape_polys = []
@@ -148,17 +148,19 @@ def boolean_loops(shapes, op=UNION, samples=18):
             polys = []
         polys = [pl for pl in polys if len(pl) >= 2]
         if not polys:
-            return []
+            return [], []
         shape_polys.append(polys)
         all_polys.extend(polys)
 
-    nodes, edges = _fill._build_planar_graph(all_polys)
+    nodes, edges, intersection_nodes = _fill._build_planar_graph(
+        all_polys, return_intersections=True
+    )
     if len(edges) < 3:
-        return []
+        return [], []
 
     faces = _faces_with_ids(nodes, edges)
     if not faces:
-        return []
+        return [], []
 
     # For every directed edge, the face on its left.
     directed_owner = {}
@@ -199,7 +201,7 @@ def boolean_loops(shapes, op=UNION, samples=18):
             if other is None or not selected[other]:
                 boundary.add((u, v))
     if not boundary:
-        return []
+        return [], []
 
     # Boundary neighbors at each node, sorted counter-clockwise by angle.
     boundary_adj = defaultdict(list)
@@ -212,16 +214,17 @@ def boolean_loops(shapes, op=UNION, samples=18):
     two_pi = 2.0 * math.pi
     used = set()
     loops = []
+    loops_flags = []
     for start in list(boundary):
         if start in used:
             continue
-        loop = []
+        loop_ids = []
         cur = start
         steps = 0
         while cur not in used and steps <= len(boundary) + 2:
             used.add(cur)
             u, v = cur
-            loop.append(u)
+            loop_ids.append(u)
             nbrs = boundary_adj.get(v, [])
             if not nbrs:
                 break
@@ -244,9 +247,10 @@ def boolean_loops(shapes, op=UNION, samples=18):
                 break
             cur = (v, best)
             steps += 1
-        if len(loop) >= 3:
-            loops.append([nodes[v] for v in loop])
-    return loops
+        if len(loop_ids) >= 3:
+            loops.append([nodes[v] for v in loop_ids])
+            loops_flags.append([v in intersection_nodes for v in loop_ids])
+    return loops, loops_flags
 
 
 def _mirror_handle(anchor, handle):
@@ -261,14 +265,24 @@ def _is_symmetric_junction(seg_prev, seg_next, eps=1e-3):
     return math.hypot(m[0] - h[0], m[1] - h[1]) <= eps
 
 
-def _loop_to_components(loop_segs, global_seg_offset=0):
+def _loop_to_components(loop_segs, global_seg_offset=0, forced_corner_points=None):
     """Split a closed fitted loop into connected components at corner junctions.
 
     Returns (segs, components, corner_anchors) where components are consecutive
     curve segments joined by smooth/symmetrical nodes, and boundaries between
-    components are non-symmetrical (corner) nodes.
+    components are non-symmetrical (corner) nodes. Junctions at
+    ``forced_corner_points`` (e.g. shape-shape intersections) are always corners.
     """
     n = len(loop_segs)
+    forced_pts = [(float(p[0]), float(p[1])) for p in (forced_corner_points or [])]
+
+    def _is_forced(pt):
+        x, y = float(pt[0]), float(pt[1])
+        for fx, fy in forced_pts:
+            if math.hypot(x - fx, y - fy) <= 1e-3:
+                return True
+        return False
+
     if n == 0:
         return [], [], set()
     if n == 1:
@@ -276,12 +290,18 @@ def _loop_to_components(loop_segs, global_seg_offset=0):
         comp = {"segs": list(segs), "raw_points": [], "draw_max_points": 4, "algorithm": "fit"}
         # single-segment closed loop: closure junction classification
         corners = set()
-        if not _is_symmetric_junction(segs[0], segs[0]):
+        anchor = segs[0][0]
+        if _is_forced(anchor) or not _is_symmetric_junction(segs[0], segs[0]):
             corners.add((global_seg_offset, "p0"))
             corners.add((global_seg_offset, "p3"))
         return segs, [comp], corners
 
-    corner_j = [not _is_symmetric_junction(loop_segs[j - 1], loop_segs[j]) for j in range(n)]
+    corner_j = []
+    for j in range(n):
+        prev = loop_segs[j - 1]
+        nxt = loop_segs[j]
+        anchor = nxt[0]
+        corner_j.append(_is_forced(anchor) or not _is_symmetric_junction(prev, nxt))
     corner_indices = [j for j, is_c in enumerate(corner_j) if is_c]
     if not corner_indices:
         segs = list(loop_segs)
@@ -315,25 +335,30 @@ def boolean_result(shapes, op=UNION, samples=18, simplify_epsilon=1.5, max_segs=
     """Return (segs, components, corner_anchors) for the boolean result, or None.
 
     Result boundaries are split into connected components at non-symmetrical
-    (corner) junctions, preserving the editing philosophy of smooth interior
-    nodes and corner boundaries.
+    (corner) junctions. Geometric intersection/crossing points are always
+    preserved as sharp corner nodes.
     """
-    loops = boolean_loops(shapes, op=op, samples=samples)
+    loops, loops_flags = boolean_loops(shapes, op=op, samples=samples)
     if not loops:
         return None
     all_segs = []
     all_components = []
     all_corners = set()
-    for loop in loops:
+    for idx, loop in enumerate(loops):
+        flags = loops_flags[idx] if idx < len(loops_flags) else [False] * len(loop)
+        forced_indices = [i for i, f in enumerate(flags) if f]
+        forced_points = [loop[i] for i in forced_indices if 0 <= i < len(loop)]
         try:
             fitted = _fill._fit_face_beziers_adaptive(
-                loop, simplify_epsilon, max_segs=max_segs
+                loop, simplify_epsilon, max_segs=max_segs, forced_indices=forced_indices
             )
         except Exception:
             fitted = None
         if not fitted or len(fitted) < 3:
             continue
-        segs, comps, corners = _loop_to_components(fitted, global_seg_offset=len(all_segs))
+        segs, comps, corners = _loop_to_components(
+            fitted, global_seg_offset=len(all_segs), forced_corner_points=forced_points
+        )
         if not segs:
             continue
         all_segs.extend(segs)
