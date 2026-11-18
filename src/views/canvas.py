@@ -159,7 +159,312 @@ def draw_stroke_path_distorted(ctx, stroke):
         ctx.close_path()
     return True
 
-def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, selected_index=None, selected_indices=None, edit_mode=False, selection_submode="transform", selected_curve=None, selected_curves=None, snap_kind="connect", redrawing_curve=None, ref_img=None, view_zoom=None, view_pan=None, pivot_pos=None, for_export=False, transform_handle_mode="scale"):
+
+_GRADIENT_TYPES = ("linear", "radial", "conic", "spiral", "diamond", "square")
+
+
+def _is_fill_gradient(fill):
+    return isinstance(fill, dict) and fill.get("type") in _GRADIENT_TYPES
+
+
+def _gradient_bbox(stroke):
+    try:
+        pts = []
+        for seg in (stroke.get("segs") or []):
+            if not seg or len(seg) < 4:
+                continue
+            p0, p1, p2, p3 = seg[0], seg[1], seg[2], seg[3]
+            for p in (p0, p1, p2, p3):
+                if p is not None:
+                    pts.append((float(p[0]), float(p[1])))
+            for t in (0.25, 0.5, 0.75):
+                mt = 1.0 - t
+                x = mt*mt*mt*p0[0] + 3*mt*mt*t*p1[0] + 3*mt*t*t*p2[0] + t*t*t*p3[0]
+                y = mt*mt*mt*p0[1] + 3*mt*mt*t*p1[1] + 3*mt*t*t*p2[1] + t*t*t*p3[1]
+                pts.append((float(x), float(y)))
+        if pts:
+            xs = [p[0] for p in pts]
+            ys = [p[1] for p in pts]
+            x0, y0, x1, y1 = min(xs), min(ys), max(xs), max(ys)
+            if x1 - x0 < 1e-3:
+                x1 = x0 + 1.0
+            if y1 - y0 < 1e-3:
+                y1 = y0 + 1.0
+            return (x0, y0, x1, y1)
+    except Exception:
+        pass
+    return (0.0, 0.0, 1.0, 1.0)
+
+
+def _normalize_gradient_stops(stops):
+    norm_stops = []
+    for st in (stops or []):
+        if isinstance(st, dict):
+            pos = st.get("pos", 0.0)
+            col = st.get("color", [0, 0, 0, 1])
+        else:
+            try:
+                pos = float(st[0])
+                col = st[1]
+            except Exception:
+                continue
+        try:
+            pos = float(pos)
+        except Exception:
+            pos = 0.0
+        pos = 0.0 if pos < 0.0 else (1.0 if pos > 1.0 else pos)
+        if col is None:
+            rgba = (0.0, 0.0, 0.0, 1.0)
+        else:
+            try:
+                r = float(col[0]); g = float(col[1]); b = float(col[2])
+                a = float(col[3]) if len(col) >= 4 else 1.0
+            except Exception:
+                rgba = (0.0, 0.0, 0.0, 1.0)
+            else:
+                rgba = (r, g, b, a)
+        norm_stops.append((pos, rgba))
+    norm_stops.sort(key=lambda t: t[0])
+    if not norm_stops:
+        norm_stops = [(0.0, (0.0, 0.0, 0.0, 1.0)), (1.0, (1.0, 1.0, 1.0, 1.0))]
+    if len(norm_stops) == 1:
+        norm_stops = [(0.0, norm_stops[0][1]), (1.0, norm_stops[0][1])]
+    return norm_stops
+
+
+def _sample_gradient_stops_array(t, norm_stops):
+    """Sample sorted gradient stops at t (numpy array in [0,1]) -> (r,g,b,a) float arrays."""
+    try:
+        import numpy as np
+    except Exception:
+        return None
+    t = np.clip(np.asarray(t, dtype=np.float32), 0.0, 1.0)
+    pos = np.array([s[0] for s in norm_stops], dtype=np.float32)
+    cols = np.array([s[1] for s in norm_stops], dtype=np.float32)  # (N,4)
+    # indices of right stop for each t
+    idx = np.searchsorted(pos, t, side='right')
+    idx0 = np.clip(idx - 1, 0, len(pos) - 1)
+    idx1 = np.clip(idx, 0, len(pos) - 1)
+    p0 = pos[idx0]
+    p1 = pos[idx1]
+    denom = p1 - p0
+    # avoid divide by zero (equal positions)
+    lt = np.where(denom > 1e-6, (t - p0) / denom, 0.0).astype(np.float32)
+    lt = np.clip(lt, 0.0, 1.0)
+    c0 = cols[idx0]
+    c1 = cols[idx1]
+    lt4 = lt[..., None]
+    out = c0 + (c1 - c0) * lt4
+    return out  # (H,W,4) floats 0..1
+
+
+def _make_shaped_gradient_pattern(stroke, grad, gtype, norm_stops):
+    try:
+        import numpy as np
+    except Exception:
+        return None
+    x0, y0, x1, y1 = _gradient_bbox(stroke)
+    w = max(1e-3, x1 - x0)
+    h = max(1e-3, y1 - y0)
+    # raster size: reasonable cap for performance
+    max_dim = 512
+    scale = min(1.0, max_dim / max(w, h))
+    pw = max(2, int(math.ceil(w * scale)))
+    ph = max(2, int(math.ceil(h * scale)))
+
+    c = grad.get("center", [0.5, 0.5])
+    try:
+        rcx = float(c[0]); rcy = float(c[1])
+    except Exception:
+        rcx, rcy = 0.5, 0.5
+    rcx = max(0.0, min(1.0, rcx)); rcy = max(0.0, min(1.0, rcy))
+    radii = grad.get("radii", [0.5, 0.5])
+    try:
+        rx = float(radii[0]); ry = float(radii[1])
+    except Exception:
+        rx, ry = 0.5, 0.5
+    rx = max(0.01, abs(rx)); ry = max(0.01, abs(ry))
+    try:
+        ang_deg = float(grad.get("angle", 0.0) or 0.0)
+    except Exception:
+        ang_deg = 0.0
+    ang = math.radians(ang_deg)
+    caa, saa = math.cos(ang), math.sin(ang)
+
+    # pixel centers in bbox-local coords
+    xs = (np.arange(pw, dtype=np.float32) + 0.5) * (w / pw)
+    ys = (np.arange(ph, dtype=np.float32) + 0.5) * (h / ph)
+    xx, yy = np.meshgrid(xs, ys)
+    dx = xx - (rcx * w)
+    dy = yy - (rcy * h)
+    # rotate into gradient's local space (inverse rotation of shape)
+    lx = (dx * caa + dy * saa) / max(1e-6, rx * w)
+    ly = (-dx * saa + dy * caa) / max(1e-6, ry * h)
+
+    if gtype == "radial":
+        t = np.sqrt(lx * lx + ly * ly)
+    elif gtype == "conic":
+        # sweep angle; 0 along local +X axis
+        theta = np.arctan2(ly, lx)
+        t = (theta / (2.0 * math.pi)) + 0.5
+        t = t - np.floor(t)
+    elif gtype == "spiral":
+        try:
+            turns = float(grad.get("turns", 2.0) or 2.0)
+        except Exception:
+            turns = 2.0
+        if not (turns > 0.01):
+            turns = 2.0
+        theta = np.arctan2(ly, lx)
+        ang_t = (theta / (2.0 * math.pi)) + 0.5
+        r_t = np.sqrt(lx * lx + ly * ly)
+        t = ang_t + r_t * turns
+        t = t - np.floor(t)
+    elif gtype == "diamond":
+        t = np.abs(lx) + np.abs(ly)
+    elif gtype == "square":
+        t = np.maximum(np.abs(lx), np.abs(ly))
+    else:
+        t = np.sqrt(lx * lx + ly * ly)
+
+    t = np.clip(t, 0.0, 1.0)
+    rgba = _sample_gradient_stops_array(t, norm_stops)
+    if rgba is None:
+        return None
+    rgba = np.clip(rgba, 0.0, 1.0)
+    # Cairo ARGB32 premultiplied, native-endian (BGRA byte order on little-endian)
+    a = rgba[..., 3:4]
+    rgb = rgba[..., :3] * a
+    out = np.empty((ph, pw, 4), dtype=np.uint8)
+    out[..., 0] = (rgb[..., 2] * 255.0 + 0.5).astype(np.uint8)  # B
+    out[..., 1] = (rgb[..., 1] * 255.0 + 0.5).astype(np.uint8)  # G
+    out[..., 2] = (rgb[..., 0] * 255.0 + 0.5).astype(np.uint8)  # R
+    out[..., 3] = (a[..., 0] * 255.0 + 0.5).astype(np.uint8)    # A
+    out = np.ascontiguousarray(out)
+    try:
+        surf = cairo.ImageSurface.create_for_data(out, cairo.FORMAT_ARGB32, pw, ph, pw * 4)
+    except Exception:
+        return None
+    pat = cairo.SurfacePattern(surf)
+    try:
+        pat.set_filter(cairo.FILTER_BILINEAR)
+    except Exception:
+        pass
+    try:
+        m = cairo.Matrix()
+        m.scale(w / pw, h / ph)
+        m.translate(x0 / (w / pw), y0 / (h / ph))
+        m.invert()
+        pat.set_matrix(m)
+    except Exception:
+        pass
+    # keep numpy buffer alive as long as pattern/surface uses it
+    try:
+        pat._np_buf = out
+        surf._np_buf = out
+    except Exception:
+        pass
+    return pat
+
+
+def _make_gradient_pattern(stroke, grad):
+    if not isinstance(grad, dict):
+        return None
+    gtype = str(grad.get("type", "linear"))
+    stops = grad.get("stops") or []
+    if len(stops) < 2:
+        return None
+    x0, y0, x1, y1 = _gradient_bbox(stroke)
+    cx = (x0 + x1) * 0.5
+    cy = (y0 + y1) * 0.5
+    w = max(1e-3, x1 - x0)
+    h = max(1e-3, y1 - y0)
+    try:
+        norm_stops = _normalize_gradient_stops(stops)
+        if gtype == "linear":
+            angle = float(grad.get("angle", 0.0) or 0.0) * math.pi / 180.0
+            dx = math.cos(angle) * w * 0.5
+            dy = math.sin(angle) * h * 0.5
+            pat = cairo.LinearGradient(cx - dx, cy - dy, cx + dx, cy + dy)
+            for pos, rgba in norm_stops:
+                pat.add_color_stop_rgba(pos, *rgba)
+            return pat
+        elif gtype == "radial":
+            # Radial gradient with adjustable center, elliptical radii, and rotation.
+            c = grad.get("center", [0.5, 0.5])
+            try:
+                rcx = float(c[0]); rcy = float(c[1])
+            except Exception:
+                rcx, rcy = 0.5, 0.5
+            rcx = max(0.0, min(1.0, rcx))
+            rcy = max(0.0, min(1.0, rcy))
+            radii = grad.get("radii", [0.5, 0.5])
+            try:
+                rx = float(radii[0]); ry = float(radii[1])
+            except Exception:
+                rx, ry = 0.5, 0.5
+            rx = max(0.01, abs(rx))
+            ry = max(0.01, abs(ry))
+            try:
+                ang_deg = float(grad.get("angle", 0.0) or 0.0)
+            except Exception:
+                ang_deg = 0.0
+            ang = math.radians(ang_deg)
+            gcx = x0 + rcx * w
+            gcy = y0 + rcy * h
+            # Define gradient in unit space and map to rotated/scaled ellipse.
+            pat = cairo.RadialGradient(0.0, 0.0, 0.0, 0.0, 0.0, 1.0)
+            for pos, rgba in norm_stops:
+                pat.add_color_stop_rgba(pos, *rgba)
+            try:
+                m = cairo.Matrix()
+                # pattern space -> user space: scale to radii, rotate, translate to center
+                m.translate(gcx, gcy)
+                m.rotate(ang)
+                m.scale(max(1e-6, w * rx), max(1e-6, h * ry))
+                m.invert()
+                pat.set_matrix(m)
+            except Exception:
+                r = 0.5 * math.hypot(w, h)
+                pat = cairo.RadialGradient(cx, cy, 0.0, cx, cy, r)
+                for pos, rgba in norm_stops:
+                    pat.add_color_stop_rgba(pos, *rgba)
+            return pat
+        elif gtype in ("conic", "spiral", "diamond", "square"):
+            return _make_shaped_gradient_pattern(stroke, grad, gtype, norm_stops)
+        else:
+            # unknown -> try linear fallback
+            angle = float(grad.get("angle", 0.0) or 0.0) * math.pi / 180.0
+            dx = math.cos(angle) * w * 0.5
+            dy = math.sin(angle) * h * 0.5
+            pat = cairo.LinearGradient(cx - dx, cy - dy, cx + dx, cy + dy)
+            for pos, rgba in norm_stops:
+                pat.add_color_stop_rgba(pos, *rgba)
+            return pat
+    except Exception:
+        return None
+
+
+def _apply_fill_source(ctx, stroke, fill):
+    if fill is None:
+        return False
+    if _is_fill_gradient(fill):
+        pat = _make_gradient_pattern(stroke, fill)
+        if pat is None:
+            return False
+        try:
+            ctx.set_source(pat)
+            return True
+        except Exception:
+            return False
+    try:
+        ctx.set_source_rgba(*color_rgba(fill, (0.0, 0.0, 0.0, 1.0)))
+        return True
+    except Exception:
+        return False
+
+
+def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, selected_index=None, selected_indices=None, edit_mode=False, selection_submode="transform", selected_curve=None, selected_curves=None, snap_kind="connect", redrawing_curve=None, ref_img=None, view_zoom=None, view_pan=None, pivot_pos=None, for_export=False, transform_handle_mode="scale", gradient_edit_info=None):
     # Backward compat: selected_index (single) or selected_indices (collection)
     if selected_indices is None and selected_index is not None:
         selected_indices = selected_index
@@ -323,6 +628,7 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
         stroke_color = stroke.get("stroke_color", (0.1, 0.1, 0.15)) if isinstance(stroke, dict) else (0.1, 0.1, 0.15)
         stroke_width = stroke.get("stroke_width", 3.0) if isinstance(stroke, dict) else 3.0
         fill_color = stroke.get("fill_color") if isinstance(stroke, dict) else None
+        fill_gradient = stroke.get("fill_gradient") if isinstance(stroke, dict) else None
         hidden = set(stroke.get("hidden_segs", set()) or set()) if isinstance(stroke, dict) else set()
         is_selected_stroke = (idx in sel_set and edit_mode)
         show_hidden = edit_mode and selection_submode in ("curve", "nodes") and bool(hidden)
@@ -402,20 +708,26 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
 
         visible_segs = [i for i in range(len(segs)) if i not in hidden]
         has_stroke = (stroke_width is not None and float(stroke_width) > 0.0 and color_alpha(stroke_color, 1.0) > 0.0)
-        if fill_color is not None and draw_stroke_path(ctx, stroke):
-            ctx.set_source_rgba(*color_rgba(fill_color, (0.0, 0.0, 0.0, 1.0)))
-            if _stroke_needs_variable_width(stroke, visible_segs):
-                ctx.fill()
-                if has_stroke or _stroke_has_component_styles(stroke):
-                    _draw_stroke_segments(ctx, stroke, visible_segs, stroke_color, stroke_width)
-            else:
-                if has_stroke or _stroke_has_component_styles(stroke):
-                    ctx.fill_preserve()
-                    if _stroke_has_component_styles(stroke):
-                        ctx.new_path()
-                    _draw_stroke_segments(ctx, stroke, visible_segs, stroke_color, stroke_width)
-                else:
+        fill_spec = fill_gradient if fill_gradient is not None else fill_color
+        if fill_spec is not None and draw_stroke_path(ctx, stroke):
+            if not _apply_fill_source(ctx, stroke, fill_spec):
+                fill_spec = None
+            if fill_spec is not None:
+                if _stroke_needs_variable_width(stroke, visible_segs):
                     ctx.fill()
+                    if has_stroke or _stroke_has_component_styles(stroke):
+                        _draw_stroke_segments(ctx, stroke, visible_segs, stroke_color, stroke_width)
+                else:
+                    if has_stroke or _stroke_has_component_styles(stroke):
+                        ctx.fill_preserve()
+                        if _stroke_has_component_styles(stroke):
+                            ctx.new_path()
+                        _draw_stroke_segments(ctx, stroke, visible_segs, stroke_color, stroke_width)
+                    else:
+                        ctx.fill()
+            else:
+                ctx.new_path()
+                _draw_stroke_segments(ctx, stroke, visible_segs, stroke_color, stroke_width)
         else:
             _draw_stroke_segments(ctx, stroke, visible_segs, stroke_color, stroke_width)
 
@@ -552,6 +864,88 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
                     ctx.set_dash([])
                 except Exception:
                     pass
+
+    # Gradient on-canvas edit handles (linear direction line / shaped gradient center, radii & rotation)
+    if edit_mode and gradient_edit_info and isinstance(gradient_edit_info, dict):
+        try:
+            gtype = gradient_edit_info.get("type")
+            hs = gradient_edit_info.get("handles") or {}
+            if gtype == "linear" and "p1" in hs and "p2" in hs:
+                p1 = hs["p1"]; p2 = hs["p2"]
+                ctx.set_source_rgba(0.1, 0.45, 0.95, 0.95)
+                ctx.set_line_width(2.0)
+                ctx.move_to(p1[0], p1[1]); ctx.line_to(p2[0], p2[1])
+                ctx.stroke()
+                # endpoint handles
+                for name in ("p1", "p2"):
+                    pt = hs.get(name)
+                    if pt is None:
+                        continue
+                    ctx.set_source_rgb(1, 1, 1); ctx.arc(pt[0], pt[1], 5.5, 0, 2*math.pi); ctx.fill()
+                    ctx.set_source_rgb(0.1, 0.45, 0.95); ctx.set_line_width(1.8); ctx.arc(pt[0], pt[1], 5.5, 0, 2*math.pi); ctx.stroke()
+                # center marker
+                cpt = hs.get("center")
+                if cpt is not None:
+                    ctx.set_source_rgb(1, 1, 1); ctx.arc(cpt[0], cpt[1], 4.0, 0, 2*math.pi); ctx.fill()
+                    ctx.set_source_rgb(0.1, 0.45, 0.95); ctx.set_line_width(1.5); ctx.arc(cpt[0], cpt[1], 4.0, 0, 2*math.pi); ctx.stroke()
+            elif gtype in ("radial", "conic", "spiral", "diamond", "square"):
+                cpt = hs.get("center")
+                rx_pt = hs.get("rx")
+                ry_pt = hs.get("ry")
+                edge_pt = hs.get("edge")
+                rot_pt = hs.get("rot")
+                if cpt is not None:
+                    gcx, gcy = cpt
+                    rpx = float(gradient_edit_info.get("radii_px", (0.0, 0.0))[0] or 0.0)
+                    rpy = float(gradient_edit_info.get("radii_px", (0.0, 0.0))[1] or 0.0)
+                    ang = float(gradient_edit_info.get("angle", 0.0) or 0.0)
+                    if rpx > 0.5 and rpy > 0.5:
+                        ctx.save()
+                        ctx.translate(gcx, gcy)
+                        ctx.rotate(ang)
+                        ctx.scale(rpx, rpy)
+                        ctx.new_sub_path()
+                        if gtype == "square":
+                            ctx.rectangle(-1.0, -1.0, 2.0, 2.0)
+                        elif gtype == "diamond":
+                            ctx.move_to(0.0, -1.0); ctx.line_to(1.0, 0.0); ctx.line_to(0.0, 1.0); ctx.line_to(-1.0, 0.0); ctx.close_path()
+                        else:
+                            ctx.arc(0.0, 0.0, 1.0, 0, 2*math.pi)
+                        ctx.restore()
+                        ctx.set_source_rgba(0.1, 0.45, 0.95, 0.9)
+                        ctx.set_line_width(1.8)
+                        ctx.stroke()
+                        # axis lines
+                        if rx_pt is not None:
+                            ctx.move_to(gcx, gcy); ctx.line_to(rx_pt[0], rx_pt[1])
+                        if ry_pt is not None:
+                            ctx.move_to(gcx, gcy); ctx.line_to(ry_pt[0], ry_pt[1])
+                        ctx.set_source_rgba(0.1, 0.45, 0.95, 0.7)
+                        ctx.set_line_width(1.2)
+                        ctx.stroke()
+                    # rotation handle stem and marker
+                    if rot_pt is not None and rx_pt is not None:
+                        ctx.set_source_rgba(0.1, 0.45, 0.95, 0.8)
+                        ctx.set_line_width(1.2)
+                        ctx.move_to(rx_pt[0], rx_pt[1]); ctx.line_to(rot_pt[0], rot_pt[1])
+                        ctx.stroke()
+                        ctx.set_source_rgb(1, 1, 1); ctx.arc(rot_pt[0], rot_pt[1], 5.0, 0, 2*math.pi); ctx.fill()
+                        ctx.set_source_rgb(0.15, 0.7, 0.35); ctx.set_line_width(1.8); ctx.arc(rot_pt[0], rot_pt[1], 5.0, 0, 2*math.pi); ctx.stroke()
+                    # handles
+                    for name, pt in hs.items():
+                        if pt is None:
+                            continue
+                        if name == "center":
+                            ctx.set_source_rgb(1, 1, 1); ctx.arc(pt[0], pt[1], 5.5, 0, 2*math.pi); ctx.fill()
+                            ctx.set_source_rgb(0.95, 0.45, 0.1); ctx.set_line_width(1.8); ctx.arc(pt[0], pt[1], 5.5, 0, 2*math.pi); ctx.stroke()
+                        elif name in ("rx", "ry", "edge"):
+                            ctx.set_source_rgb(1, 1, 1); ctx.rectangle(pt[0]-4.5, pt[1]-4.5, 9, 9); ctx.fill_preserve()
+                            ctx.set_source_rgb(0.1, 0.45, 0.95); ctx.set_line_width(1.5); ctx.stroke()
+                        elif name == "rot":
+                            # drawn above as styled rotation handle; skip generic draw
+                            pass
+        except Exception:
+            pass
 
     if active_stroke and len(active_stroke) >= 2:
         ctx.set_source_rgb(*ACTIVE_COLOR)

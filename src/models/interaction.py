@@ -567,6 +567,7 @@ def _split_stroke_at_cuts(stroke, cuts, gap=0.0):
     base_sc = stroke.get("stroke_color", (0.1, 0.1, 0.15)) if is_dict else (0.1, 0.1, 0.15)
     base_sw = stroke.get("stroke_width", 3.0) if is_dict else 3.0
     fill = stroke.get("fill_color") if is_dict else None
+    fill_grad = stroke.get("fill_gradient") if is_dict else None
     algo = stroke.get("algorithm", "fit") if is_dict else "fit"
     closed = (len(segs) > 1 and
               math.hypot(segs[0][0][0] - segs[-1][3][0],
@@ -606,6 +607,9 @@ def _split_stroke_at_cuts(stroke, cuts, gap=0.0):
         piece_segs = [a["seg"] for a in piece]
         st = new_stroke(piece_segs, stroke_color=base_sc, stroke_width=base_sw,
                         fill_color=fill, algorithm=algo)
+        if is_dict and fill_grad is not None:
+            import copy as _copy
+            st["fill_gradient"] = _copy.deepcopy(fill_grad)
         # Rebuild components so per-component styles (e.g. waves) survive.
         comps = []
         group_ci = None

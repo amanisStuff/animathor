@@ -23,7 +23,7 @@ for _n in dir(_dep):
 
 # Coordinate helpers (own controller submodule)
 from controllers.coordinates import in_canvas, to_canvas, clamp_to_canvas, to_screen  # noqa: E402,F401
-from models.geometry import bbox_handle_anchor_local, bbox_handle_local_positions
+from models.geometry import bbox_handle_anchor_local, bbox_handle_local_positions, gradient_edit_handles, hit_test_gradient_handle, gradient_edit_bbox, get_fill_gradient, is_fill_gradient, normalize_gradient, clamp, default_linear_gradient, default_radial_gradient, default_shaped_gradient
 from models.strokes import scale_stroke_local, rotate_stroke_around, skew_stroke_local
 
 
@@ -95,6 +95,7 @@ def main():
     selection_submode = "transform"  # "transform", "nodes", or "curve"
     transform_handle_mode = "scale"  # "scale" or "rotate" (Inkscape-like toggle inside transform)
     transform_drag = None  # {"handle": name, "start_mouse": (x,y), "start_strokes": {i: copy}, "center": (cx,cy), "start_bbox": bbox, "mode": str}
+    gradient_drag = None  # {"handle": name, "stroke_is": [int], "grad_type": str, "bbox": (x0,y0,x1,y1)}
     pivot_pos = None  # custom rotation/scale pivot (world coords); None = bbox center
     pivot_drag = None  # {"offset": (dx,dy)} while dragging pivot
     pending_transform_toggle = None  # click-on-selected-body candidate to toggle scale/rotate
@@ -144,6 +145,13 @@ def main():
     picker_rects = {"sv": pygame.Rect(0,0,0,0), "hue": pygame.Rect(0,0,0,0),
                     "tab_stroke": pygame.Rect(0,0,0,0), "tab_fill": pygame.Rect(0,0,0,0),
                     "nofill": pygame.Rect(0,0,0,0), "alpha": pygame.Rect(0,0,0,0)}
+    fill_type_rects_cache = {}
+    fill_stop_rects_cache = {}
+    fill_stop_add_rect_cache = pygame.Rect(0, 0, 0, 0)
+    fill_stop_remove_rect_cache = pygame.Rect(0, 0, 0, 0)
+    fill_stop_pos_rect_cache = pygame.Rect(0, 0, 0, 0)
+    fill_gradient_stop = 0
+    fill_stop_pos_drag = False
     trace_algo_rects_cache = {}
     draw_shape_rects_cache = {k: pygame.Rect(0, 0, 0, 0)
                               for k, _ in list(DRAW_SHAPES) + list(BOTTOM_TOOLS)}
@@ -226,6 +234,46 @@ def main():
     def snap_radius():
         # A radius of 0 makes the interaction helpers skip snapping entirely.
         return SNAP_RADIUS if snap_enabled else 0
+
+    def _snap_move_delta(sel_indices, dx, dy):
+        """Snap a translation (dx,dy) so selection bbox anchors align to other geometry."""
+        sr = snap_radius()
+        if sr <= 0 or not sel_indices or (dx == 0 and dy == 0):
+            return dx, dy
+        sel_set = set(sel_indices)
+        other = [s for i, s in enumerate(strokes) if i not in sel_set]
+        if not other:
+            return dx, dy
+        xs, ys = [], []
+        for si in sel_set:
+            if 0 <= si < len(strokes):
+                bb = stroke_bbox(strokes[si])
+                if bb:
+                    x1, y1, x2, y2 = bb
+                    xs.extend([x1, x2]); ys.extend([y1, y2])
+        if not xs:
+            return dx, dy
+        x1, x2 = min(xs), max(xs)
+        y1, y2 = min(ys), max(ys)
+        cx, cy = (x1 + x2) * 0.5, (y1 + y2) * 0.5
+        anchors = [
+            (x1, y1), (cx, y1), (x2, y1),
+            (x1, cy), (cx, cy), (x2, cy),
+            (x1, y2), (cx, y2), (x2, y2),
+        ]
+        best_adj = None
+        best_d = sr + 1.0
+        for ax, ay in anchors:
+            tx, ty = ax + dx, ay + dy
+            sp = nearest_snap_point((tx, ty), other, sr)
+            if sp is not None:
+                d = math.hypot(sp[0] - tx, sp[1] - ty)
+                if d < best_d:
+                    best_d = d
+                    best_adj = (sp[0] - tx, sp[1] - ty)
+        if best_adj is not None:
+            return dx + best_adj[0], dy + best_adj[1]
+        return dx, dy
 
     def bucket_pick(rect, pos, kind):
         """Set the bucket color from an SV square or hue bar position."""
@@ -326,6 +374,10 @@ def main():
             "sv_rect": picker_rects["sv"], "hue_rect": picker_rects["hue"],
             "tab_stroke_rect": picker_rects["tab_stroke"], "tab_fill_rect": picker_rects["tab_fill"],
             "nofill_rect": picker_rects["nofill"], "alpha_rect": picker_rects["alpha"],
+            "fill_type_rects": dict(fill_type_rects_cache), "fill_stop_rects": dict(fill_stop_rects_cache),
+            "fill_stop_add_rect": fill_stop_add_rect_cache, "fill_stop_remove_rect": fill_stop_remove_rect_cache,
+            "fill_stop_pos_rect": fill_stop_pos_rect_cache, "fill_gradient_stop": fill_gradient_stop,
+            "fill_stop_pos_drag": fill_stop_pos_drag,
             "selection_submode": selection_submode,
             "nodes_toggle_rect": nodes_toggle_rect_cache,
             "elev_front_rect": elev_front_rect_cache,
@@ -736,6 +788,7 @@ def main():
                 state["shape_menu_key"] = shape_menu_key
                 state["shape_menu_anchor"] = shape_menu_anchor
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                color_target = state.get("color_target", color_target)
                 # space+LMB -> pan
                 if space_panning and in_canvas(event.pos):
                     pan_drag = {"start_mouse": event.pos, "start_pan": (getattr(cfg, "VIEW_PAN_X", 0.0), getattr(cfg, "VIEW_PAN_Y", 0.0))}
@@ -1074,7 +1127,8 @@ def main():
                                 push_undo()
                                 primary = strokes[sel[0]]
                                 fill_col = primary.get("fill_color") if isinstance(primary, dict) else None
-                                if fill_col is None:
+                                fill_grad = copy.deepcopy(primary.get("fill_gradient")) if isinstance(primary, dict) and primary.get("fill_gradient") is not None else None
+                                if fill_col is None and fill_grad is None:
                                     fill_col = (0.45, 0.72, 1.0, 1.0)
                                 new_st = new_stroke(
                                     result_segs,
@@ -1084,6 +1138,10 @@ def main():
                                     corner_anchors=result_corners,
                                     algorithm="fit",
                                 )
+                                if fill_grad is not None:
+                                    new_st["fill_gradient"] = fill_grad
+                                    if fill_col is None:
+                                        new_st["fill_color"] = None
                                 if result_comps:
                                     new_st["components"] = result_comps
                                 for i in reversed(sel):
@@ -1364,6 +1422,9 @@ def main():
                             comp_style_target = None
                             if selection_submode == "curve" and selected_curve and len(selected_strokes) == 1 and selected_curve[0] in selected_strokes:
                                 comp_style_target = selected_curve
+                            if comp_style_target is not None:
+                                color_target = "stroke"
+                                state["color_target"] = "stroke"
                             if not (selection_submode == "curve" and comp_style_target is None):
                                 sel_list = sorted(selected_strokes)
                                 primary_i = sel_list[0]
@@ -1375,6 +1436,7 @@ def main():
                                         strokes[si]["components"] = comps
                                 if primary_obj is not None and state["tab_stroke_rect"].collidepoint(event.pos):
                                     color_target = "stroke"
+                                    state["color_target"] = color_target
                                     if comp_style_target is not None:
                                         sc, _sw = _effective_component_style(primary_obj, comp_style_target[1])
                                         sc = sc or (0.1, 0.1, 0.15)
@@ -1384,20 +1446,185 @@ def main():
                                     state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
                                 elif primary_obj is not None and state["tab_fill_rect"].collidepoint(event.pos) and comp_style_target is None:
                                     color_target = "fill"
-                                    fc = primary_obj.get("fill_color", None) or (1.0, 1.0, 1.0)
+                                    state["color_target"] = color_target
+                                    fg = get_fill_gradient(primary_obj) if 'get_fill_gradient' in globals() else (primary_obj.get("fill_gradient") if isinstance(primary_obj.get("fill_gradient"), dict) and primary_obj.get("fill_gradient", {}).get("type") in ("linear","radial") else None)
+                                    if fg is not None:
+                                        stop_i = int(state.get("fill_gradient_stop", 0) or 0)
+                                        fc = get_gradient_stop_color(fg, stop_i) if 'get_gradient_stop_color' in globals() else (1.0, 1.0, 1.0, 1.0)
+                                    else:
+                                        fc = primary_obj.get("fill_color", None) or (1.0, 1.0, 1.0)
                                     picker_h, picker_s, picker_v = rgb_to_hsv(*fc)
                                     state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
                                 elif primary_obj is not None and state.get("nofill_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos) and color_target == "fill" and comp_style_target is None:
                                     for si in sel_list:
                                         if 0 <= si < len(strokes):
                                             strokes[si]["fill_color"] = None
+                                            strokes[si]["fill_gradient"] = None
+                                elif primary_obj is not None and color_target == "fill" and comp_style_target is None and any(r.collidepoint(event.pos) for r in (state.get("fill_type_rects") or {}).values()):
+                                    ftype = next((k for k, r in (state.get("fill_type_rects") or {}).items() if r.collidepoint(event.pos)), None)
+                                    if ftype is not None:
+                                        cur_stop_i = int(state.get("fill_gradient_stop", 0) or 0)
+                                        grad_types = ("linear", "radial", "conic", "spiral", "diamond", "square")
+                                        for si in sel_list:
+                                            if 0 <= si < len(strokes):
+                                                st = strokes[si]
+                                                fg = get_fill_gradient(st) if 'get_fill_gradient' in globals() else (st.get("fill_gradient") if isinstance(st.get("fill_gradient"), dict) else None)
+                                                if ftype == "solid":
+                                                    if fg is not None:
+                                                        si_clamped = clamp_gradient_stop_index(fg, cur_stop_i) if 'clamp_gradient_stop_index' in globals() else max(0, min(cur_stop_i, max(0, len(fg.get("stops") or []) - 1)))
+                                                        col0 = get_gradient_stop_color(fg, si_clamped) if 'get_gradient_stop_color' in globals() else (0.0, 0.0, 0.0, 1.0)
+                                                    else:
+                                                        col0 = st.get("fill_color") or (0.45, 0.72, 1.0, 1.0)
+                                                    st["fill_color"] = tuple(color_rgba(col0, (0.45, 0.72, 1.0, 1.0)))
+                                                    st["fill_gradient"] = None
+                                                elif ftype in grad_types:
+                                                    if fg is not None and str(fg.get("type")) in grad_types:
+                                                        ng = dict(fg)
+                                                        ng["type"] = ftype
+                                                        if ftype == "linear" and "angle" not in ng:
+                                                            ng["angle"] = 0.0
+                                                        if ftype in ("radial", "conic", "spiral", "diamond", "square"):
+                                                            if "center" not in ng:
+                                                                ng["center"] = [0.5, 0.5]
+                                                            if "radii" not in ng:
+                                                                ng["radii"] = [0.5, 0.5]
+                                                            if "angle" not in ng:
+                                                                ng["angle"] = 0.0
+                                                            if ftype == "spiral" and "turns" not in ng:
+                                                                ng["turns"] = 2.0
+                                                        if 'normalize_gradient' in globals():
+                                                            try:
+                                                                ng = normalize_gradient(ng)
+                                                            except Exception:
+                                                                pass
+                                                        st["fill_gradient"] = ng
+                                                    else:
+                                                        base = st.get("fill_color") or (0.2, 0.4, 0.9, 1.0)
+                                                        c0 = color_rgba(base, (0.2, 0.4, 0.9, 1.0))
+                                                        c1 = (1.0, 1.0, 1.0, float(c0[3]))
+                                                        if ftype == "linear" and 'default_linear_gradient' in globals():
+                                                            st["fill_gradient"] = default_linear_gradient(c0, c1, 0.0)
+                                                        elif ftype == "radial" and 'default_radial_gradient' in globals():
+                                                            st["fill_gradient"] = default_radial_gradient((1.0, 1.0, 1.0, float(c0[3])), c0)
+                                                        elif 'default_shaped_gradient' in globals():
+                                                            st["fill_gradient"] = default_shaped_gradient(ftype, (1.0, 1.0, 1.0, float(c0[3])), c0)
+                                                        else:
+                                                            st["fill_gradient"] = {"type": ftype, "center": [0.5, 0.5], "radii": [0.5, 0.5], "angle": 0.0, "stops": [{"pos": 0.0, "color": list(c0)}, {"pos": 1.0, "color": list(c1)}]}
+                                                    st["fill_color"] = None
+                                        pfg = get_fill_gradient(primary_obj) if 'get_fill_gradient' in globals() else (primary_obj.get("fill_gradient") if isinstance(primary_obj.get("fill_gradient"), dict) else None)
+                                        if pfg is not None:
+                                            state["fill_gradient_stop"] = clamp_gradient_stop_index(pfg, cur_stop_i) if 'clamp_gradient_stop_index' in globals() else max(0, min(cur_stop_i, max(0, len(pfg.get("stops") or []) - 1)))
+                                            fc = get_gradient_stop_color(pfg, int(state.get("fill_gradient_stop", 0) or 0)) if 'get_gradient_stop_color' in globals() else (1.0, 1.0, 1.0, 1.0)
+                                            picker_h, picker_s, picker_v = rgb_to_hsv(*fc)
+                                            state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
+                                        elif ftype == "solid":
+                                            fc = primary_obj.get("fill_color") or (0.45, 0.72, 1.0, 1.0)
+                                            picker_h, picker_s, picker_v = rgb_to_hsv(*fc)
+                                            state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
+                                            state["fill_gradient_stop"] = 0
+                                elif primary_obj is not None and color_target == "fill" and comp_style_target is None and state.get("fill_stop_add_rect", pygame.Rect(0, 0, 0, 0)).collidepoint(event.pos):
+                                    cur_stop_i = int(state.get("fill_gradient_stop", 0) or 0)
+                                    for si in sel_list:
+                                        if 0 <= si < len(strokes):
+                                            fg = get_fill_gradient(strokes[si]) if 'get_fill_gradient' in globals() else None
+                                            if fg is not None and 'add_gradient_stop' in globals():
+                                                si_clamped = clamp_gradient_stop_index(fg, cur_stop_i) if 'clamp_gradient_stop_index' in globals() else cur_stop_i
+                                                ng, ni = add_gradient_stop(fg, si_clamped)
+                                                strokes[si]["fill_gradient"] = ng
+                                                strokes[si]["fill_color"] = None
+                                    pfg = get_fill_gradient(primary_obj) if 'get_fill_gradient' in globals() else (primary_obj.get("fill_gradient") if isinstance(primary_obj.get("fill_gradient"), dict) else None)
+                                    if pfg is not None:
+                                        si_clamped = clamp_gradient_stop_index(pfg, cur_stop_i) if 'clamp_gradient_stop_index' in globals() else cur_stop_i
+                                        ni = min(si_clamped + 1, max(0, len(pfg.get("stops") or []) - 1))
+                                        state["fill_gradient_stop"] = ni
+                                        fc = get_gradient_stop_color(pfg, ni) if 'get_gradient_stop_color' in globals() else (1.0, 1.0, 1.0, 1.0)
+                                        picker_h, picker_s, picker_v = rgb_to_hsv(*fc)
+                                        state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
+                                elif primary_obj is not None and color_target == "fill" and comp_style_target is None and state.get("fill_stop_remove_rect", pygame.Rect(0, 0, 0, 0)).collidepoint(event.pos):
+                                    cur_stop_i = int(state.get("fill_gradient_stop", 0) or 0)
+                                    for si in sel_list:
+                                        if 0 <= si < len(strokes):
+                                            fg = get_fill_gradient(strokes[si]) if 'get_fill_gradient' in globals() else None
+                                            if fg is not None and 'remove_gradient_stop' in globals():
+                                                si_clamped = clamp_gradient_stop_index(fg, cur_stop_i) if 'clamp_gradient_stop_index' in globals() else cur_stop_i
+                                                ng, ni = remove_gradient_stop(fg, si_clamped)
+                                                strokes[si]["fill_gradient"] = ng
+                                                strokes[si]["fill_color"] = None
+                                    pfg = get_fill_gradient(primary_obj) if 'get_fill_gradient' in globals() else (primary_obj.get("fill_gradient") if isinstance(primary_obj.get("fill_gradient"), dict) else None)
+                                    if pfg is not None:
+                                        ni = clamp_gradient_stop_index(pfg, cur_stop_i) if 'clamp_gradient_stop_index' in globals() else max(0, min(cur_stop_i, max(0, len(pfg.get("stops") or []) - 1)))
+                                        state["fill_gradient_stop"] = ni
+                                        fc = get_gradient_stop_color(pfg, ni) if 'get_gradient_stop_color' in globals() else (1.0, 1.0, 1.0, 1.0)
+                                        picker_h, picker_s, picker_v = rgb_to_hsv(*fc)
+                                        state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
+                                elif primary_obj is not None and color_target == "fill" and comp_style_target is None and state.get("fill_stop_pos_rect", pygame.Rect(0, 0, 0, 0)).collidepoint(event.pos):
+                                    fg = get_fill_gradient(primary_obj) if 'get_fill_gradient' in globals() else (primary_obj.get("fill_gradient") if isinstance(primary_obj.get("fill_gradient"), dict) else None)
+                                    if fg is not None:
+                                        cur_stop_i = int(state.get("fill_gradient_stop", 0) or 0)
+                                        pr = state.get("fill_stop_pos_rect", pygame.Rect(0, 0, 0, 0))
+                                        # If a stop marker on the ramp is clicked, select that stop.
+                                        stops_for_pick = get_gradient_stops(fg) if 'get_gradient_stops' in globals() else list(fg.get("stops") or [])
+                                        if stops_for_pick:
+                                            best_i = None
+                                            best_d = 1e9
+                                            for si_pick, st_pick in enumerate(stops_for_pick):
+                                                try:
+                                                    sp = float((st_pick or {}).get("pos", 0.0)) if isinstance(st_pick, dict) else float(st_pick[0])
+                                                except Exception:
+                                                    sp = 0.0
+                                                sp = clamp(sp, 0.0, 1.0)
+                                                sxp = pr.x + sp * max(1, pr.w - 1)
+                                                d = abs(event.pos[0] - sxp)
+                                                if d <= 7 and d < best_d:
+                                                    best_d = d
+                                                    best_i = si_pick
+                                            if best_i is not None:
+                                                cur_stop_i = int(best_i)
+                                                state["fill_gradient_stop"] = cur_stop_i
+                                        rel = (event.pos[0] - pr.x) / max(1, pr.w - 1)
+                                        rel = clamp(rel, 0.0, 1.0)
+                                        if 'set_gradient_stop_pos' in globals():
+                                            for si in sel_list:
+                                                if 0 <= si < len(strokes):
+                                                    sfg = get_fill_gradient(strokes[si]) if 'get_fill_gradient' in globals() else None
+                                                    if sfg is not None:
+                                                        sidx = clamp_gradient_stop_index(sfg, cur_stop_i) if 'clamp_gradient_stop_index' in globals() else cur_stop_i
+                                                        ng, _ni = set_gradient_stop_pos(sfg, sidx, rel)
+                                                        strokes[si]["fill_gradient"] = ng
+                                                        strokes[si]["fill_color"] = None
+                                            pfg2 = get_fill_gradient(primary_obj) if 'get_fill_gradient' in globals() else None
+                                            if pfg2 is not None:
+                                                sidx = clamp_gradient_stop_index(pfg2, cur_stop_i) if 'clamp_gradient_stop_index' in globals() else cur_stop_i
+                                                _ngp, ni = set_gradient_stop_pos(pfg2, sidx, rel)
+                                                state["fill_gradient_stop"] = ni
+                                                fc = get_gradient_stop_color(_ngp, ni) if 'get_gradient_stop_color' in globals() else (1.0, 1.0, 1.0, 1.0)
+                                                picker_h, picker_s, picker_v = rgb_to_hsv(*fc)
+                                                state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
+                                        fill_stop_pos_drag = True
+                                        state["fill_stop_pos_drag"] = True
+                                elif primary_obj is not None and color_target == "fill" and comp_style_target is None and any(r.collidepoint(event.pos) for r in (state.get("fill_stop_rects") or {}).values()):
+                                    # reverse so if any overlap occurs, topmost/latest wins
+                                    items = list((state.get("fill_stop_rects") or {}).items())
+                                    skey = next((k for k, r in reversed(items) if r.collidepoint(event.pos)), None)
+                                    if skey is not None:
+                                        try:
+                                            state["fill_gradient_stop"] = int(skey)
+                                        except Exception:
+                                            state["fill_gradient_stop"] = 0
+                                        fg = get_fill_gradient(primary_obj) if 'get_fill_gradient' in globals() else None
+                                        if fg is not None:
+                                            si_clamped = clamp_gradient_stop_index(fg, int(state.get("fill_gradient_stop", 0) or 0)) if 'clamp_gradient_stop_index' in globals() else int(state.get("fill_gradient_stop", 0) or 0)
+                                            state["fill_gradient_stop"] = si_clamped
+                                            fc = get_gradient_stop_color(fg, si_clamped) if 'get_gradient_stop_color' in globals() else (1.0, 1.0, 1.0, 1.0)
+                                            picker_h, picker_s, picker_v = rgb_to_hsv(*fc)
+                                            state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
                                 elif primary_obj is not None and state["sv_rect"].collidepoint(event.pos):
                                     picker_drag_sv = True
                                     sv = state["sv_rect"]
                                     picker_s = clamp((event.pos[0] - sv.x) / max(1, sv.w - 1), 0.0, 1.0)
                                     picker_v = clamp(1.0 - (event.pos[1] - sv.y) / max(1, sv.h - 1), 0.0, 1.0)
                                     col = hsv_to_rgb(picker_h, picker_s, picker_v)
-                                    if comp_style_target is not None and color_target == "stroke":
+                                    if comp_style_target is not None:
                                         si, ci = comp_style_target
                                         if 0 <= si < len(strokes):
                                             cur_sc, _ = _effective_component_style(strokes[si], ci)
@@ -1410,8 +1637,15 @@ def main():
                                                     alpha = color_alpha(strokes[si].get("stroke_color"), 1.0)
                                                     strokes[si]["stroke_color"] = (col[0], col[1], col[2], alpha)
                                                 else:
-                                                    alpha = color_alpha(strokes[si].get("fill_color"), 1.0)
-                                                    strokes[si]["fill_color"] = (col[0], col[1], col[2], alpha)
+                                                    fg = get_fill_gradient(strokes[si]) if 'get_fill_gradient' in globals() else None
+                                                    if fg is not None:
+                                                        stop_i = int(state.get("fill_gradient_stop", 0) or 0)
+                                                        alpha = color_alpha(get_gradient_stop_color(fg, stop_i) if 'get_gradient_stop_color' in globals() else (0,0,0,1), 1.0)
+                                                        strokes[si]["fill_gradient"] = set_gradient_stop_color(fg, stop_i, (col[0], col[1], col[2], alpha)) if 'set_gradient_stop_color' in globals() else fg
+                                                    else:
+                                                        alpha = color_alpha(strokes[si].get("fill_color"), 1.0)
+                                                        strokes[si]["fill_color"] = (col[0], col[1], col[2], alpha)
+                                                        strokes[si]["fill_gradient"] = None
                                     state["picker_drag_sv"] = True
                                     state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
                                 elif primary_obj is not None and state["hue_rect"].collidepoint(event.pos):
@@ -1419,7 +1653,7 @@ def main():
                                     hr = state["hue_rect"]
                                     picker_h = clamp((event.pos[0] - hr.x) / max(1, hr.w - 1), 0.0, 1.0) * 360.0
                                     col = hsv_to_rgb(picker_h, picker_s, picker_v)
-                                    if comp_style_target is not None and color_target == "stroke":
+                                    if comp_style_target is not None:
                                         si, ci = comp_style_target
                                         if 0 <= si < len(strokes):
                                             cur_sc, _ = _effective_component_style(strokes[si], ci)
@@ -1432,14 +1666,21 @@ def main():
                                                     alpha = color_alpha(strokes[si].get("stroke_color"), 1.0)
                                                     strokes[si]["stroke_color"] = (col[0], col[1], col[2], alpha)
                                                 else:
-                                                    alpha = color_alpha(strokes[si].get("fill_color"), 1.0)
-                                                    strokes[si]["fill_color"] = (col[0], col[1], col[2], alpha)
+                                                    fg = get_fill_gradient(strokes[si]) if 'get_fill_gradient' in globals() else None
+                                                    if fg is not None:
+                                                        stop_i = int(state.get("fill_gradient_stop", 0) or 0)
+                                                        alpha = color_alpha(get_gradient_stop_color(fg, stop_i) if 'get_gradient_stop_color' in globals() else (0,0,0,1), 1.0)
+                                                        strokes[si]["fill_gradient"] = set_gradient_stop_color(fg, stop_i, (col[0], col[1], col[2], alpha)) if 'set_gradient_stop_color' in globals() else fg
+                                                    else:
+                                                        alpha = color_alpha(strokes[si].get("fill_color"), 1.0)
+                                                        strokes[si]["fill_color"] = (col[0], col[1], col[2], alpha)
+                                                        strokes[si]["fill_gradient"] = None
                                     state["picker_drag_hue"] = True
                                     state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
                                 elif primary_obj is not None and state.get("alpha_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
                                     ar = state["alpha_rect"]
                                     new_alpha = clamp((event.pos[0] - ar.x) / max(1, ar.w - 1), 0.0, 1.0)
-                                    if comp_style_target is not None and color_target == "stroke":
+                                    if comp_style_target is not None:
                                         si, ci = comp_style_target
                                         if 0 <= si < len(strokes):
                                             cur_sc, _ = _effective_component_style(strokes[si], ci)
@@ -1450,8 +1691,14 @@ def main():
                                             if 0 <= si < len(strokes):
                                                 if color_target == "stroke":
                                                     strokes[si]["stroke_color"] = set_color_alpha(strokes[si].get("stroke_color", (0.1,0.1,0.15,1.0)), new_alpha)
-                                                elif strokes[si].get("fill_color") is not None:
-                                                    strokes[si]["fill_color"] = set_color_alpha(strokes[si].get("fill_color"), new_alpha)
+                                                else:
+                                                    fg = get_fill_gradient(strokes[si]) if 'get_fill_gradient' in globals() else None
+                                                    if fg is not None:
+                                                        stop_i = int(state.get("fill_gradient_stop", 0) or 0)
+                                                        cstop = get_gradient_stop_color(fg, stop_i) if 'get_gradient_stop_color' in globals() else (0,0,0,1)
+                                                        strokes[si]["fill_gradient"] = set_gradient_stop_color(fg, stop_i, (cstop[0], cstop[1], cstop[2], new_alpha)) if 'set_gradient_stop_color' in globals() else fg
+                                                    elif strokes[si].get("fill_color") is not None:
+                                                        strokes[si]["fill_color"] = set_color_alpha(strokes[si].get("fill_color"), new_alpha)
                                     picker_drag_alpha = True
                                     state["picker_drag_alpha"] = True
                                 elif primary_obj is not None:
@@ -1460,7 +1707,7 @@ def main():
                                     for i, r in enumerate(rects):
                                         if r.w > 0 and r.collidepoint(event.pos) and i < len(STROKE_SWATCHES):
                                             col = STROKE_SWATCHES[i]
-                                            if comp_style_target is not None and color_target == "stroke":
+                                            if comp_style_target is not None:
                                                 si, ci = comp_style_target
                                                 if 0 <= si < len(strokes):
                                                     cur_sc, _ = _effective_component_style(strokes[si], ci)
@@ -1473,8 +1720,15 @@ def main():
                                                             alpha = color_alpha(strokes[si].get("stroke_color"), 1.0)
                                                             strokes[si]["stroke_color"] = (col[0], col[1], col[2], alpha)
                                                         else:
-                                                            alpha = color_alpha(strokes[si].get("fill_color"), 1.0)
-                                                            strokes[si]["fill_color"] = (col[0], col[1], col[2], alpha)
+                                                            fg = get_fill_gradient(strokes[si]) if 'get_fill_gradient' in globals() else None
+                                                            if fg is not None:
+                                                                stop_i = int(state.get("fill_gradient_stop", 0) or 0)
+                                                                alpha = color_alpha(get_gradient_stop_color(fg, stop_i) if 'get_gradient_stop_color' in globals() else (0,0,0,1), 1.0)
+                                                                strokes[si]["fill_gradient"] = set_gradient_stop_color(fg, stop_i, (col[0], col[1], col[2], alpha)) if 'set_gradient_stop_color' in globals() else fg
+                                                            else:
+                                                                alpha = color_alpha(strokes[si].get("fill_color"), 1.0)
+                                                                strokes[si]["fill_color"] = (col[0], col[1], col[2], alpha)
+                                                                strokes[si]["fill_gradient"] = None
                                             picker_h, picker_s, picker_v = rgb_to_hsv(*col)
                                             state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
                                             break
@@ -1483,6 +1737,9 @@ def main():
                         comp_style_target = None
                         if selection_submode == "curve" and selected_curve and len(selected_strokes) == 1 and selected_curve[0] in selected_strokes:
                             comp_style_target = selected_curve
+                        if comp_style_target is not None:
+                            color_target = "stroke"
+                            state["color_target"] = "stroke"
                         if selection_submode == "curve" and comp_style_target is None:
                             pass
                         else:
@@ -1498,6 +1755,7 @@ def main():
                                 pass
                             elif state["tab_stroke_rect"].collidepoint(event.pos):
                                 color_target = "stroke"
+                                state["color_target"] = color_target
                                 if comp_style_target is not None:
                                     sc, _sw = _effective_component_style(primary_obj, comp_style_target[1])
                                     sc = sc or (0.1, 0.1, 0.15)
@@ -1507,20 +1765,183 @@ def main():
                                 state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
                             elif state["tab_fill_rect"].collidepoint(event.pos) and comp_style_target is None:
                                 color_target = "fill"
-                                fc = primary_obj.get("fill_color", None) or (1.0, 1.0, 1.0)
+                                state["color_target"] = color_target
+                                fg = get_fill_gradient(primary_obj) if 'get_fill_gradient' in globals() else (primary_obj.get("fill_gradient") if isinstance(primary_obj.get("fill_gradient"), dict) and primary_obj.get("fill_gradient", {}).get("type") in ("linear","radial") else None)
+                                if fg is not None:
+                                    stop_i = int(state.get("fill_gradient_stop", 0) or 0)
+                                    fc = get_gradient_stop_color(fg, stop_i) if 'get_gradient_stop_color' in globals() else (1.0, 1.0, 1.0, 1.0)
+                                else:
+                                    fc = primary_obj.get("fill_color", None) or (1.0, 1.0, 1.0)
                                 picker_h, picker_s, picker_v = rgb_to_hsv(*fc)
                                 state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
                             elif state.get("nofill_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos) and color_target == "fill" and comp_style_target is None:
                                 for si in sel_list:
                                     if 0 <= si < len(strokes):
                                         strokes[si]["fill_color"] = None
+                                        strokes[si]["fill_gradient"] = None
+                            elif color_target == "fill" and comp_style_target is None and any(r.collidepoint(event.pos) for r in (state.get("fill_type_rects") or {}).values()):
+                                ftype = next((k for k, r in (state.get("fill_type_rects") or {}).items() if r.collidepoint(event.pos)), None)
+                                if ftype is not None:
+                                    cur_stop_i = int(state.get("fill_gradient_stop", 0) or 0)
+                                    grad_types = ("linear", "radial", "conic", "spiral", "diamond", "square")
+                                    for si in sel_list:
+                                        if 0 <= si < len(strokes):
+                                            st = strokes[si]
+                                            fg = get_fill_gradient(st) if 'get_fill_gradient' in globals() else (st.get("fill_gradient") if isinstance(st.get("fill_gradient"), dict) else None)
+                                            if ftype == "solid":
+                                                if fg is not None:
+                                                    si_clamped = clamp_gradient_stop_index(fg, cur_stop_i) if 'clamp_gradient_stop_index' in globals() else max(0, min(cur_stop_i, max(0, len(fg.get("stops") or []) - 1)))
+                                                    col0 = get_gradient_stop_color(fg, si_clamped) if 'get_gradient_stop_color' in globals() else (0.0, 0.0, 0.0, 1.0)
+                                                else:
+                                                    col0 = st.get("fill_color") or (0.45, 0.72, 1.0, 1.0)
+                                                st["fill_color"] = tuple(color_rgba(col0, (0.45, 0.72, 1.0, 1.0)))
+                                                st["fill_gradient"] = None
+                                            elif ftype in grad_types:
+                                                if fg is not None and str(fg.get("type")) in grad_types:
+                                                    ng = dict(fg)
+                                                    ng["type"] = ftype
+                                                    if ftype == "linear" and "angle" not in ng:
+                                                        ng["angle"] = 0.0
+                                                    if ftype in ("radial", "conic", "spiral", "diamond", "square"):
+                                                        if "center" not in ng:
+                                                            ng["center"] = [0.5, 0.5]
+                                                        if "radii" not in ng:
+                                                            ng["radii"] = [0.5, 0.5]
+                                                        if "angle" not in ng:
+                                                            ng["angle"] = 0.0
+                                                        if ftype == "spiral" and "turns" not in ng:
+                                                            ng["turns"] = 2.0
+                                                    if 'normalize_gradient' in globals():
+                                                        try:
+                                                            ng = normalize_gradient(ng)
+                                                        except Exception:
+                                                            pass
+                                                    st["fill_gradient"] = ng
+                                                else:
+                                                    base = st.get("fill_color") or (0.2, 0.4, 0.9, 1.0)
+                                                    c0 = color_rgba(base, (0.2, 0.4, 0.9, 1.0))
+                                                    c1 = (1.0, 1.0, 1.0, float(c0[3]))
+                                                    if ftype == "linear" and 'default_linear_gradient' in globals():
+                                                        st["fill_gradient"] = default_linear_gradient(c0, c1, 0.0)
+                                                    elif ftype == "radial" and 'default_radial_gradient' in globals():
+                                                        st["fill_gradient"] = default_radial_gradient((1.0, 1.0, 1.0, float(c0[3])), c0)
+                                                    elif 'default_shaped_gradient' in globals():
+                                                        st["fill_gradient"] = default_shaped_gradient(ftype, (1.0, 1.0, 1.0, float(c0[3])), c0)
+                                                    else:
+                                                        st["fill_gradient"] = {"type": ftype, "center": [0.5, 0.5], "radii": [0.5, 0.5], "angle": 0.0, "stops": [{"pos": 0.0, "color": list(c0)}, {"pos": 1.0, "color": list(c1)}]}
+                                                st["fill_color"] = None
+                                    pfg = get_fill_gradient(primary_obj) if 'get_fill_gradient' in globals() else (primary_obj.get("fill_gradient") if isinstance(primary_obj.get("fill_gradient"), dict) else None)
+                                    if pfg is not None:
+                                        state["fill_gradient_stop"] = clamp_gradient_stop_index(pfg, cur_stop_i) if 'clamp_gradient_stop_index' in globals() else max(0, min(cur_stop_i, max(0, len(pfg.get("stops") or []) - 1)))
+                                        fc = get_gradient_stop_color(pfg, int(state.get("fill_gradient_stop", 0) or 0)) if 'get_gradient_stop_color' in globals() else (1.0, 1.0, 1.0, 1.0)
+                                        picker_h, picker_s, picker_v = rgb_to_hsv(*fc)
+                                        state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
+                                    elif ftype == "solid":
+                                        fc = primary_obj.get("fill_color") or (0.45, 0.72, 1.0, 1.0)
+                                        picker_h, picker_s, picker_v = rgb_to_hsv(*fc)
+                                        state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
+                                        state["fill_gradient_stop"] = 0
+                            elif color_target == "fill" and comp_style_target is None and state.get("fill_stop_add_rect", pygame.Rect(0, 0, 0, 0)).collidepoint(event.pos):
+                                cur_stop_i = int(state.get("fill_gradient_stop", 0) or 0)
+                                for si in sel_list:
+                                    if 0 <= si < len(strokes):
+                                        fg = get_fill_gradient(strokes[si]) if 'get_fill_gradient' in globals() else None
+                                        if fg is not None and 'add_gradient_stop' in globals():
+                                            si_clamped = clamp_gradient_stop_index(fg, cur_stop_i) if 'clamp_gradient_stop_index' in globals() else cur_stop_i
+                                            ng, ni = add_gradient_stop(fg, si_clamped)
+                                            strokes[si]["fill_gradient"] = ng
+                                            strokes[si]["fill_color"] = None
+                                pfg = get_fill_gradient(primary_obj) if 'get_fill_gradient' in globals() else (primary_obj.get("fill_gradient") if isinstance(primary_obj.get("fill_gradient"), dict) else None)
+                                if pfg is not None:
+                                    ni = min((clamp_gradient_stop_index(pfg, cur_stop_i) if 'clamp_gradient_stop_index' in globals() else cur_stop_i) + 1, max(0, len(pfg.get("stops") or []) - 1))
+                                    state["fill_gradient_stop"] = ni
+                                    fc = get_gradient_stop_color(pfg, ni) if 'get_gradient_stop_color' in globals() else (1.0, 1.0, 1.0, 1.0)
+                                    picker_h, picker_s, picker_v = rgb_to_hsv(*fc)
+                                    state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
+                            elif color_target == "fill" and comp_style_target is None and state.get("fill_stop_remove_rect", pygame.Rect(0, 0, 0, 0)).collidepoint(event.pos):
+                                cur_stop_i = int(state.get("fill_gradient_stop", 0) or 0)
+                                for si in sel_list:
+                                    if 0 <= si < len(strokes):
+                                        fg = get_fill_gradient(strokes[si]) if 'get_fill_gradient' in globals() else None
+                                        if fg is not None and 'remove_gradient_stop' in globals():
+                                            si_clamped = clamp_gradient_stop_index(fg, cur_stop_i) if 'clamp_gradient_stop_index' in globals() else cur_stop_i
+                                            ng, ni = remove_gradient_stop(fg, si_clamped)
+                                            strokes[si]["fill_gradient"] = ng
+                                            strokes[si]["fill_color"] = None
+                                pfg = get_fill_gradient(primary_obj) if 'get_fill_gradient' in globals() else (primary_obj.get("fill_gradient") if isinstance(primary_obj.get("fill_gradient"), dict) else None)
+                                if pfg is not None:
+                                    ni = clamp_gradient_stop_index(pfg, cur_stop_i) if 'clamp_gradient_stop_index' in globals() else max(0, min(cur_stop_i, max(0, len(pfg.get("stops") or []) - 1)))
+                                    state["fill_gradient_stop"] = ni
+                                    fc = get_gradient_stop_color(pfg, ni) if 'get_gradient_stop_color' in globals() else (1.0, 1.0, 1.0, 1.0)
+                                    picker_h, picker_s, picker_v = rgb_to_hsv(*fc)
+                                    state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
+                            elif color_target == "fill" and comp_style_target is None and state.get("fill_stop_pos_rect", pygame.Rect(0, 0, 0, 0)).collidepoint(event.pos):
+                                fg = get_fill_gradient(primary_obj) if 'get_fill_gradient' in globals() else (primary_obj.get("fill_gradient") if isinstance(primary_obj.get("fill_gradient"), dict) else None)
+                                if fg is not None:
+                                    cur_stop_i = int(state.get("fill_gradient_stop", 0) or 0)
+                                    pr = state.get("fill_stop_pos_rect", pygame.Rect(0, 0, 0, 0))
+                                    # If a stop marker on the ramp is clicked, select that stop.
+                                    stops_for_pick = get_gradient_stops(fg) if 'get_gradient_stops' in globals() else list(fg.get("stops") or [])
+                                    if stops_for_pick:
+                                        best_i = None
+                                        best_d = 1e9
+                                        for si_pick, st_pick in enumerate(stops_for_pick):
+                                            try:
+                                                sp = float((st_pick or {}).get("pos", 0.0)) if isinstance(st_pick, dict) else float(st_pick[0])
+                                            except Exception:
+                                                sp = 0.0
+                                            sp = clamp(sp, 0.0, 1.0)
+                                            sxp = pr.x + sp * max(1, pr.w - 1)
+                                            d = abs(event.pos[0] - sxp)
+                                            if d <= 7 and d < best_d:
+                                                best_d = d
+                                                best_i = si_pick
+                                        if best_i is not None:
+                                            cur_stop_i = int(best_i)
+                                            state["fill_gradient_stop"] = cur_stop_i
+                                    rel = (event.pos[0] - pr.x) / max(1, pr.w - 1)
+                                    rel = clamp(rel, 0.0, 1.0)
+                                    if 'set_gradient_stop_pos' in globals():
+                                        for si in sel_list:
+                                            if 0 <= si < len(strokes):
+                                                sfg = get_fill_gradient(strokes[si]) if 'get_fill_gradient' in globals() else None
+                                                if sfg is not None:
+                                                    sidx = clamp_gradient_stop_index(sfg, cur_stop_i) if 'clamp_gradient_stop_index' in globals() else cur_stop_i
+                                                    ng, _ni = set_gradient_stop_pos(sfg, sidx, rel)
+                                                    strokes[si]["fill_gradient"] = ng
+                                                    strokes[si]["fill_color"] = None
+                                        pfg2 = get_fill_gradient(primary_obj) if 'get_fill_gradient' in globals() else None
+                                        if pfg2 is not None:
+                                            sidx = clamp_gradient_stop_index(pfg2, cur_stop_i) if 'clamp_gradient_stop_index' in globals() else cur_stop_i
+                                            _ngp, ni = set_gradient_stop_pos(pfg2, sidx, rel)
+                                            state["fill_gradient_stop"] = ni
+                                            fc = get_gradient_stop_color(_ngp, ni) if 'get_gradient_stop_color' in globals() else (1.0, 1.0, 1.0, 1.0)
+                                            picker_h, picker_s, picker_v = rgb_to_hsv(*fc)
+                                            state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
+                                    fill_stop_pos_drag = True
+                                    state["fill_stop_pos_drag"] = True
+                            elif color_target == "fill" and comp_style_target is None and any(r.collidepoint(event.pos) for r in (state.get("fill_stop_rects") or {}).values()):
+                                items = list((state.get("fill_stop_rects") or {}).items())
+                                skey = next((k for k, r in reversed(items) if r.collidepoint(event.pos)), None)
+                                if skey is not None:
+                                    try:
+                                        state["fill_gradient_stop"] = int(skey)
+                                    except Exception:
+                                        state["fill_gradient_stop"] = 0
+                                    fg = get_fill_gradient(primary_obj) if 'get_fill_gradient' in globals() else None
+                                    if fg is not None:
+                                        si_clamped = clamp_gradient_stop_index(fg, int(state.get("fill_gradient_stop", 0) or 0)) if 'clamp_gradient_stop_index' in globals() else int(state.get("fill_gradient_stop", 0) or 0)
+                                        state["fill_gradient_stop"] = si_clamped
+                                        fc = get_gradient_stop_color(fg, si_clamped) if 'get_gradient_stop_color' in globals() else (1.0, 1.0, 1.0, 1.0)
+                                        picker_h, picker_s, picker_v = rgb_to_hsv(*fc)
+                                        state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
                             elif state["sv_rect"].collidepoint(event.pos):
                                 picker_drag_sv = True
                                 sv = state["sv_rect"]
                                 picker_s = clamp((event.pos[0] - sv.x) / max(1, sv.w - 1), 0.0, 1.0)
                                 picker_v = clamp(1.0 - (event.pos[1] - sv.y) / max(1, sv.h - 1), 0.0, 1.0)
                                 col = hsv_to_rgb(picker_h, picker_s, picker_v)
-                                if comp_style_target is not None and color_target == "stroke":
+                                if comp_style_target is not None:
                                     si, ci = comp_style_target
                                     if 0 <= si < len(strokes):
                                         cur_sc, _ = _effective_component_style(strokes[si], ci)
@@ -1533,8 +1954,15 @@ def main():
                                                 alpha = color_alpha(strokes[si].get("stroke_color"), 1.0)
                                                 strokes[si]["stroke_color"] = (col[0], col[1], col[2], alpha)
                                             else:
-                                                alpha = color_alpha(strokes[si].get("fill_color"), 1.0)
-                                                strokes[si]["fill_color"] = (col[0], col[1], col[2], alpha)
+                                                fg = get_fill_gradient(strokes[si]) if 'get_fill_gradient' in globals() else None
+                                                if fg is not None:
+                                                    stop_i = int(state.get("fill_gradient_stop", 0) or 0)
+                                                    alpha = color_alpha(get_gradient_stop_color(fg, stop_i) if 'get_gradient_stop_color' in globals() else (0,0,0,1), 1.0)
+                                                    strokes[si]["fill_gradient"] = set_gradient_stop_color(fg, stop_i, (col[0], col[1], col[2], alpha)) if 'set_gradient_stop_color' in globals() else fg
+                                                else:
+                                                    alpha = color_alpha(strokes[si].get("fill_color"), 1.0)
+                                                    strokes[si]["fill_color"] = (col[0], col[1], col[2], alpha)
+                                                    strokes[si]["fill_gradient"] = None
                                 state["picker_drag_sv"] = True
                                 state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
                             elif state["hue_rect"].collidepoint(event.pos):
@@ -1542,7 +1970,7 @@ def main():
                                 hr = state["hue_rect"]
                                 picker_h = clamp((event.pos[0] - hr.x) / max(1, hr.w - 1), 0.0, 1.0) * 360.0
                                 col = hsv_to_rgb(picker_h, picker_s, picker_v)
-                                if comp_style_target is not None and color_target == "stroke":
+                                if comp_style_target is not None:
                                     si, ci = comp_style_target
                                     if 0 <= si < len(strokes):
                                         cur_sc, _ = _effective_component_style(strokes[si], ci)
@@ -1555,14 +1983,21 @@ def main():
                                                 alpha = color_alpha(strokes[si].get("stroke_color"), 1.0)
                                                 strokes[si]["stroke_color"] = (col[0], col[1], col[2], alpha)
                                             else:
-                                                alpha = color_alpha(strokes[si].get("fill_color"), 1.0)
-                                                strokes[si]["fill_color"] = (col[0], col[1], col[2], alpha)
+                                                fg = get_fill_gradient(strokes[si]) if 'get_fill_gradient' in globals() else None
+                                                if fg is not None:
+                                                    stop_i = int(state.get("fill_gradient_stop", 0) or 0)
+                                                    alpha = color_alpha(get_gradient_stop_color(fg, stop_i) if 'get_gradient_stop_color' in globals() else (0,0,0,1), 1.0)
+                                                    strokes[si]["fill_gradient"] = set_gradient_stop_color(fg, stop_i, (col[0], col[1], col[2], alpha)) if 'set_gradient_stop_color' in globals() else fg
+                                                else:
+                                                    alpha = color_alpha(strokes[si].get("fill_color"), 1.0)
+                                                    strokes[si]["fill_color"] = (col[0], col[1], col[2], alpha)
+                                                    strokes[si]["fill_gradient"] = None
                                 state["picker_drag_hue"] = True
                                 state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
                             elif state.get("alpha_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
                                 ar = state["alpha_rect"]
                                 new_alpha = clamp((event.pos[0] - ar.x) / max(1, ar.w - 1), 0.0, 1.0)
-                                if comp_style_target is not None and color_target == "stroke":
+                                if comp_style_target is not None:
                                     si, ci = comp_style_target
                                     if 0 <= si < len(strokes):
                                         cur_sc, _ = _effective_component_style(strokes[si], ci)
@@ -1573,8 +2008,14 @@ def main():
                                         if 0 <= si < len(strokes):
                                             if color_target == "stroke":
                                                 strokes[si]["stroke_color"] = set_color_alpha(strokes[si].get("stroke_color", (0.1,0.1,0.15,1.0)), new_alpha)
-                                            elif strokes[si].get("fill_color") is not None:
-                                                strokes[si]["fill_color"] = set_color_alpha(strokes[si].get("fill_color"), new_alpha)
+                                            else:
+                                                fg = get_fill_gradient(strokes[si]) if 'get_fill_gradient' in globals() else None
+                                                if fg is not None:
+                                                    stop_i = int(state.get("fill_gradient_stop", 0) or 0)
+                                                    cstop = get_gradient_stop_color(fg, stop_i) if 'get_gradient_stop_color' in globals() else (0,0,0,1)
+                                                    strokes[si]["fill_gradient"] = set_gradient_stop_color(fg, stop_i, (cstop[0], cstop[1], cstop[2], new_alpha)) if 'set_gradient_stop_color' in globals() else fg
+                                                elif strokes[si].get("fill_color") is not None:
+                                                    strokes[si]["fill_color"] = set_color_alpha(strokes[si].get("fill_color"), new_alpha)
                                 picker_drag_alpha = True
                                 state["picker_drag_alpha"] = True
                             else:
@@ -1583,7 +2024,7 @@ def main():
                                 for i, r in enumerate(rects):
                                     if r.w > 0 and r.collidepoint(event.pos) and i < len(STROKE_SWATCHES):
                                         col = STROKE_SWATCHES[i]
-                                        if comp_style_target is not None and color_target == "stroke":
+                                        if comp_style_target is not None:
                                             si, ci = comp_style_target
                                             if 0 <= si < len(strokes):
                                                 cur_sc, _ = _effective_component_style(strokes[si], ci)
@@ -1596,8 +2037,15 @@ def main():
                                                         alpha = color_alpha(strokes[si].get("stroke_color"), 1.0)
                                                         strokes[si]["stroke_color"] = (col[0], col[1], col[2], alpha)
                                                     else:
-                                                        alpha = color_alpha(strokes[si].get("fill_color"), 1.0)
-                                                        strokes[si]["fill_color"] = (col[0], col[1], col[2], alpha)
+                                                        fg = get_fill_gradient(strokes[si]) if 'get_fill_gradient' in globals() else None
+                                                        if fg is not None:
+                                                            stop_i = int(state.get("fill_gradient_stop", 0) or 0)
+                                                            alpha = color_alpha(get_gradient_stop_color(fg, stop_i) if 'get_gradient_stop_color' in globals() else (0,0,0,1), 1.0)
+                                                            strokes[si]["fill_gradient"] = set_gradient_stop_color(fg, stop_i, (col[0], col[1], col[2], alpha)) if 'set_gradient_stop_color' in globals() else fg
+                                                        else:
+                                                            alpha = color_alpha(strokes[si].get("fill_color"), 1.0)
+                                                            strokes[si]["fill_color"] = (col[0], col[1], col[2], alpha)
+                                                            strokes[si]["fill_gradient"] = None
                                         picker_h, picker_s, picker_v = rgb_to_hsv(*col)
                                         state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
                                         break
@@ -1675,6 +2123,7 @@ def main():
                                     src_comp_i = 0
                                 src_sc, src_sw = _effective_component_style(src_stroke, src_comp_i)
                                 src_fc = src_stroke.get("fill_color")
+                                src_fg = copy.deepcopy(src_stroke.get("fill_gradient")) if isinstance(src_stroke, dict) else None
                                 src_comps = _stroke_components(src_stroke)
                                 if 0 <= src_comp_i < len(src_comps):
                                     src_waves = copy.deepcopy(_get_wave_styles(src_comps[src_comp_i]))
@@ -1695,6 +2144,7 @@ def main():
                                         st = strokes[si]
                                         st["stroke_width"] = float(src_sw)
                                         st["fill_color"] = copy.deepcopy(src_fc) if src_fc is not None else None
+                                        st["fill_gradient"] = copy.deepcopy(src_fg) if src_fg is not None else None
                                         # In curve submode, apply stroke style/waves to the
                                         # selected component but keep fill at stroke level.
                                         if (selection_submode == "curve" and selected_curve
@@ -1777,10 +2227,52 @@ def main():
                             pending_transform_toggle = None
                             if selected_strokes:
                                 bb = combined_obb(strokes, selected_strokes)
+                                # Gradient on-canvas handle hit-test (when editing fill gradient)
+                                if not handled and state.get("color_target", color_target) == "fill":
+                                    _g_primary = None
+                                    _g_grad = None
+                                    for _gsi in sorted(selected_strokes):
+                                        if 0 <= _gsi < len(strokes):
+                                            _gst = strokes[_gsi]
+                                            _gfg = _gst.get("fill_gradient") if isinstance(_gst, dict) else None
+                                            try:
+                                                _gfg = get_fill_gradient(_gst) or _gfg
+                                            except Exception:
+                                                pass
+                                            if isinstance(_gfg, dict) and str(_gfg.get("type")) in ("linear", "radial", "conic", "spiral", "diamond", "square"):
+                                                _g_primary = _gsi
+                                                _g_grad = _gfg
+                                                break
+                                    if _g_primary is not None and _g_grad is not None:
+                                        _ghit, _ginfo = hit_test_gradient_handle(strokes[_g_primary], _g_grad, cpos)
+                                        if _ghit is not None:
+                                            push_undo()
+                                            _gtype = str(_g_grad.get("type", "linear"))
+                                            _edit_strokes = []
+                                            for _gsi in sorted(selected_strokes):
+                                                if 0 <= _gsi < len(strokes):
+                                                    _gst = strokes[_gsi]
+                                                    _fg2 = _gst.get("fill_gradient") if isinstance(_gst, dict) else None
+                                                    try:
+                                                        _fg2 = get_fill_gradient(_gst) or _fg2
+                                                    except Exception:
+                                                        pass
+                                                    if isinstance(_fg2, dict) and str(_fg2.get("type")) == _gtype:
+                                                        _edit_strokes.append(_gsi)
+                                            if not _edit_strokes:
+                                                _edit_strokes = [_g_primary]
+                                            gradient_drag = {
+                                                "handle": _ghit,
+                                                "stroke_is": _edit_strokes,
+                                                "grad_type": _gtype,
+                                                "primary_i": _g_primary,
+                                                "bbox": (_ginfo or {}).get("bbox"),
+                                            }
+                                            handled = True
                                 if bb:
                                     eff_pivot = pivot_pos if pivot_pos is not None else (bb["cx"], bb["cy"])
                                     # hit pivot marker first (draggable rotation/scale center)
-                                    if math.hypot(cpos[0] - eff_pivot[0], cpos[1] - eff_pivot[1]) <= 10.0:
+                                    if not handled and math.hypot(cpos[0] - eff_pivot[0], cpos[1] - eff_pivot[1]) <= 10.0:
                                         pivot_drag = {"start": cpos, "start_pivot": eff_pivot}
                                         handled = True
                                     if not handled:
@@ -1807,7 +2299,7 @@ def main():
                                                 "primed": True,
                                             }
                                             handled = True
-                                elif hit_test_stroke(cpos, strokes) in selected_strokes:
+                                elif not handled and hit_test_stroke(cpos, strokes) in selected_strokes:
                                     pending_transform_toggle = {"start": cpos, "moved": False, "primed": True}
                                     handled = True
                             if not handled:
@@ -1957,11 +2449,14 @@ def main():
                         w["enabled"] = True
                         _set_wave_style(comps[comp_i], w, wi)
                         strokes[si]["components"] = comps
-                elif (picker_drag_sv or picker_drag_hue or picker_drag_alpha) and selected_strokes and (selection_submode == "transform" or (selection_submode == "curve" and selected_curve and color_target == "stroke")):
+                elif (picker_drag_sv or picker_drag_hue or picker_drag_alpha) and selected_strokes and (selection_submode == "transform" or (selection_submode == "curve" and selected_curve)):
+                    color_target = state.get("color_target", color_target)
                     sel_list = sorted(selected_strokes)
                     comp_style_target = None
-                    if selection_submode == "curve" and selected_curve and len(selected_strokes) == 1 and selected_curve[0] in selected_strokes and color_target == "stroke":
+                    if selection_submode == "curve" and selected_curve and len(selected_strokes) == 1 and selected_curve[0] in selected_strokes:
                         comp_style_target = selected_curve
+                        color_target = "stroke"
+                        state["color_target"] = "stroke"
                     def _apply_comp_stroke_color_drag(si, ci, rgb, alpha):
                         comps = _stroke_components(strokes[si])
                         if 0 <= ci < len(comps):
@@ -1985,8 +2480,15 @@ def main():
                                         alpha = color_alpha(strokes[si].get("stroke_color"), 1.0)
                                         strokes[si]["stroke_color"] = (col[0], col[1], col[2], alpha)
                                     else:
-                                        alpha = color_alpha(strokes[si].get("fill_color"), 1.0)
-                                        strokes[si]["fill_color"] = (col[0], col[1], col[2], alpha)
+                                        fg = get_fill_gradient(strokes[si]) if 'get_fill_gradient' in globals() else None
+                                        if fg is not None:
+                                            stop_i = int(state.get("fill_gradient_stop", 0) or 0)
+                                            alpha = color_alpha(get_gradient_stop_color(fg, stop_i) if 'get_gradient_stop_color' in globals() else (0,0,0,1), 1.0)
+                                            strokes[si]["fill_gradient"] = set_gradient_stop_color(fg, stop_i, (col[0], col[1], col[2], alpha)) if 'set_gradient_stop_color' in globals() else fg
+                                        else:
+                                            alpha = color_alpha(strokes[si].get("fill_color"), 1.0)
+                                            strokes[si]["fill_color"] = (col[0], col[1], col[2], alpha)
+                                            strokes[si]["fill_gradient"] = None
                         state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
                     elif picker_drag_hue:
                         hr = state["hue_rect"]
@@ -2005,8 +2507,15 @@ def main():
                                         alpha = color_alpha(strokes[si].get("stroke_color"), 1.0)
                                         strokes[si]["stroke_color"] = (col[0], col[1], col[2], alpha)
                                     else:
-                                        alpha = color_alpha(strokes[si].get("fill_color"), 1.0)
-                                        strokes[si]["fill_color"] = (col[0], col[1], col[2], alpha)
+                                        fg = get_fill_gradient(strokes[si]) if 'get_fill_gradient' in globals() else None
+                                        if fg is not None:
+                                            stop_i = int(state.get("fill_gradient_stop", 0) or 0)
+                                            alpha = color_alpha(get_gradient_stop_color(fg, stop_i) if 'get_gradient_stop_color' in globals() else (0,0,0,1), 1.0)
+                                            strokes[si]["fill_gradient"] = set_gradient_stop_color(fg, stop_i, (col[0], col[1], col[2], alpha)) if 'set_gradient_stop_color' in globals() else fg
+                                        else:
+                                            alpha = color_alpha(strokes[si].get("fill_color"), 1.0)
+                                            strokes[si]["fill_color"] = (col[0], col[1], col[2], alpha)
+                                            strokes[si]["fill_gradient"] = None
                         state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
                     elif picker_drag_alpha:
                         ar = state.get("alpha_rect", pygame.Rect(0,0,0,0))
@@ -2022,8 +2531,42 @@ def main():
                                 if 0 <= si < len(strokes):
                                     if color_target == "stroke":
                                         strokes[si]["stroke_color"] = set_color_alpha(strokes[si].get("stroke_color", (0.1,0.1,0.15,1.0)), new_alpha)
-                                    elif strokes[si].get("fill_color") is not None:
-                                        strokes[si]["fill_color"] = set_color_alpha(strokes[si].get("fill_color"), new_alpha)
+                                    else:
+                                        fg = get_fill_gradient(strokes[si]) if 'get_fill_gradient' in globals() else None
+                                        if fg is not None:
+                                            stop_i = int(state.get("fill_gradient_stop", 0) or 0)
+                                            cstop = get_gradient_stop_color(fg, stop_i) if 'get_gradient_stop_color' in globals() else (0,0,0,1)
+                                            strokes[si]["fill_gradient"] = set_gradient_stop_color(fg, stop_i, (cstop[0], cstop[1], cstop[2], new_alpha)) if 'set_gradient_stop_color' in globals() else fg
+                                        elif strokes[si].get("fill_color") is not None:
+                                            strokes[si]["fill_color"] = set_color_alpha(strokes[si].get("fill_color"), new_alpha)
+                elif fill_stop_pos_drag and selected_strokes and (selection_submode == "transform" or (selection_submode == "curve" and selected_curve and color_target == "fill")):
+                    pr = state.get("fill_stop_pos_rect", pygame.Rect(0, 0, 0, 0))
+                    if pr.w > 1:
+                        rel = (event.pos[0] - pr.x) / max(1, pr.w - 1)
+                    else:
+                        rel = 0.0
+                    rel = clamp(rel, 0.0, 1.0)
+                    cur_stop_i = int(state.get("fill_gradient_stop", 0) or 0)
+                    sel_list = sorted(set(int(x) for x in (selected_strokes or [])))
+                    primary_si = sel_list[0] if sel_list else -1
+                    primary_obj = strokes[primary_si] if (0 <= primary_si < len(strokes)) else None
+                    if primary_obj is not None and 'set_gradient_stop_pos' in globals():
+                        for si in sel_list:
+                            if 0 <= si < len(strokes):
+                                sfg = get_fill_gradient(strokes[si]) if 'get_fill_gradient' in globals() else None
+                                if sfg is not None:
+                                    sidx = clamp_gradient_stop_index(sfg, cur_stop_i) if 'clamp_gradient_stop_index' in globals() else cur_stop_i
+                                    ng, _ni = set_gradient_stop_pos(sfg, sidx, rel)
+                                    strokes[si]["fill_gradient"] = ng
+                                    strokes[si]["fill_color"] = None
+                        pfg2 = get_fill_gradient(primary_obj) if 'get_fill_gradient' in globals() else None
+                        if pfg2 is not None:
+                            sidx = clamp_gradient_stop_index(pfg2, cur_stop_i) if 'clamp_gradient_stop_index' in globals() else cur_stop_i
+                            _ngp, ni = set_gradient_stop_pos(pfg2, sidx, rel)
+                            state["fill_gradient_stop"] = ni
+                            fc = get_gradient_stop_color(_ngp, ni) if 'get_gradient_stop_color' in globals() else (1.0, 1.0, 1.0, 1.0)
+                            picker_h, picker_s, picker_v = rgb_to_hsv(*fc)
+                            state["picker_h"] = picker_h; state["picker_s"] = picker_s; state["picker_v"] = picker_v
                 elif redrawing_curve is not None and redrawing_curve.get("started") and pygame.mouse.get_pressed()[0]:
                     cpos = clamp_to_canvas(event.pos)
                     pts = redrawing_curve.get("points", [])
@@ -2059,17 +2602,123 @@ def main():
                             # apply initial delta
                             dx = cpos[0] - drag_last[0]; dy = cpos[1] - drag_last[1]
                             if dx != 0 or dy != 0:
+                                dx, dy = _snap_move_delta(selected_strokes, dx, dy)
+                            if dx != 0 or dy != 0:
                                 for si in list(selected_strokes):
                                     if 0 <= si < len(strokes):
                                         strokes[si] = translate_stroke(strokes[si], dx, dy)
+                                drag_last = (drag_last[0] + dx, drag_last[1] + dy)
+                            else:
                                 drag_last = cpos
                     # if not yet moved, wait for threshold or mouseup (toggle)
+                elif tool_mode == "selection" and gradient_drag is not None and selected_strokes and pygame.mouse.get_pressed()[0]:
+                    cpos = clamp_to_canvas(event.pos)
+                    gd = gradient_drag
+                    ghandle = gd.get("handle")
+                    gtype = gd.get("grad_type")
+                    for si in list(gd.get("stroke_is") or []):
+                        if not (0 <= si < len(strokes)):
+                            continue
+                        st = strokes[si]
+                        fg = st.get("fill_gradient") if isinstance(st, dict) else None
+                        try:
+                            fg = get_fill_gradient(st) or fg
+                        except Exception:
+                            pass
+                        if not isinstance(fg, dict) or str(fg.get("type")) != str(gtype):
+                            continue
+                        try:
+                            bx0, by0, bx1, by1 = gradient_edit_bbox(st)
+                        except Exception:
+                            bx0, by0, bx1, by1 = 0.0, 0.0, 1.0, 1.0
+                        bw = max(1e-6, bx1 - bx0)
+                        bh = max(1e-6, by1 - by0)
+                        bcx = (bx0 + bx1) * 0.5
+                        bcy = (by0 + by1) * 0.5
+                        if gtype == "linear":
+                            if ghandle == "p1":
+                                ang = math.degrees(math.atan2(bcy - cpos[1], bcx - cpos[0]))
+                            else:
+                                ang = math.degrees(math.atan2(cpos[1] - bcy, cpos[0] - bcx))
+                            fg2 = dict(fg)
+                            fg2["angle"] = float(ang)
+                            try:
+                                fg2 = normalize_gradient(fg2)
+                            except Exception:
+                                pass
+                            st["fill_gradient"] = fg2
+                        elif gtype in ("radial", "conic", "spiral", "diamond", "square"):
+                            fg2 = dict(fg)
+                            # current center in world for radius/rotation drags
+                            cc = fg2.get("center", [0.5, 0.5])
+                            try:
+                                rcx = float(cc[0]); rcy = float(cc[1])
+                            except Exception:
+                                rcx, rcy = 0.5, 0.5
+                            gcx = bx0 + clamp(rcx, 0.0, 1.0) * bw
+                            gcy = by0 + clamp(rcy, 0.0, 1.0) * bh
+                            rr = fg2.get("radii", [0.5, 0.5])
+                            try:
+                                rrx = float(rr[0]); rry = float(rr[1])
+                            except Exception:
+                                rrx, rry = 0.5, 0.5
+                            try:
+                                gang = float(fg2.get("angle", 0.0) or 0.0)
+                            except Exception:
+                                gang = 0.0
+                            aang = math.radians(gang)
+                            caa, saa = math.cos(aang), math.sin(aang)
+                            dxm = cpos[0] - gcx
+                            dym = cpos[1] - gcy
+                            # local axis projections (rotated shape axes)
+                            lx = dxm * caa + dym * saa
+                            ly = -dxm * saa + dym * caa
+                            if ghandle == "center":
+                                ncx = clamp((cpos[0] - bx0) / bw, 0.0, 1.0)
+                                ncy = clamp((cpos[1] - by0) / bh, 0.0, 1.0)
+                                fg2["center"] = [ncx, ncy]
+                            elif ghandle == "rot":
+                                fg2["angle"] = float(math.degrees(math.atan2(dym, dxm)))
+                            elif ghandle == "rx":
+                                fg2["radii"] = [max(0.01, abs(lx) / bw), max(0.01, abs(rry))]
+                            elif ghandle == "ry":
+                                fg2["radii"] = [max(0.01, abs(rrx)), max(0.01, abs(ly) / bh)]
+                            elif ghandle == "edge":
+                                fg2["radii"] = [max(0.01, abs(lx) / bw), max(0.01, abs(ly) / bh)]
+                            else:
+                                # fallback: move center
+                                ncx = clamp((cpos[0] - bx0) / bw, 0.0, 1.0)
+                                ncy = clamp((cpos[1] - by0) / bh, 0.0, 1.0)
+                                fg2["center"] = [ncx, ncy]
+                            try:
+                                fg2 = normalize_gradient(fg2)
+                            except Exception:
+                                pass
+                            st["fill_gradient"] = fg2
+                    # keep UI fill state in sync for primary gradient
+                    if selected_strokes:
+                        try:
+                            _ps = sorted(selected_strokes)[0]
+                            if 0 <= _ps < len(strokes):
+                                refresh_selection_ui_state(_ps)
+                        except Exception:
+                            pass
                 elif tool_mode == "selection" and transform_drag is not None and selected_strokes and pygame.mouse.get_pressed()[0]:
                     cpos = clamp_to_canvas(event.pos)
                     td = transform_drag
                     cx, cy = td["center"]  # pivot/rotation center
                     sx0, sy0 = td["start_mouse"]
                     h = td["handle"]
+                    # snap scale/skew handle drags to nearby geometry
+                    if h != "rot" and not str(h).startswith("rot_"):
+                        _sr = snap_radius()
+                        if _sr > 0:
+                            _sel_set = set(selected_strokes)
+                            _other = [s for _i, s in enumerate(strokes) if _i not in _sel_set]
+                            if _other:
+                                _sp = nearest_snap_point(cpos, _other, _sr)
+                                if _sp is not None:
+                                    cpos = _sp
                     start_strokes = td.get("start_strokes", {})
                     bb0 = td.get("start_bbox")
                     mode = td.get("mode", "scale")
@@ -2168,9 +2817,13 @@ def main():
                         else:
                             dx = cpos[0] - drag_last[0]; dy = cpos[1] - drag_last[1]
                             if dx != 0 or dy != 0:
+                                dx, dy = _snap_move_delta(selected_strokes, dx, dy)
+                            if dx != 0 or dy != 0:
                                 for si in list(selected_strokes):
                                     if 0 <= si < len(strokes):
                                         strokes[si] = translate_stroke(strokes[si], dx, dy)
+                                drag_last = (drag_last[0] + dx, drag_last[1] + dy)
+                            else:
                                 drag_last = cpos
                     else:
                         drag_last = cpos
@@ -2237,6 +2890,7 @@ def main():
                         transform_handle_mode = "rotate" if transform_handle_mode == "scale" else "scale"
                     pending_transform_toggle = None
                 transform_drag = None
+                gradient_drag = None
                 if marquee_select is not None and tool_mode == "selection":
                     r = normalize_rect(marquee_select["start"], marquee_select.get("current", marquee_select["start"]))
                     if abs(r[2]-r[0]) >= 3 or abs(r[3]-r[1]) >= 3:
@@ -2375,23 +3029,41 @@ def main():
                 elif drawing and tool_mode == "draw" and draw_tool == "eraser":
                     drawing = False
                     current_points = []
-                drag_last = None; selected_point = None; transform_drag = None; pivot_drag = None
-                picker_drag_sv = False; picker_drag_hue = False; picker_drag_alpha = False; ref_opacity_drag = False
+                drag_last = None; selected_point = None; transform_drag = None; gradient_drag = None; pivot_drag = None
+                picker_drag_sv = False; picker_drag_hue = False; picker_drag_alpha = False; ref_opacity_drag = False; fill_stop_pos_drag = False
                 bucket_picker_drag = None
                 wave_slider_drag = None
                 wave_custom_drag = None
                 state["wave_custom_drag"] = None
-                state["picker_drag_sv"] = False; state["picker_drag_hue"] = False; state["picker_drag_alpha"] = False
+                state["picker_drag_sv"] = False; state["picker_drag_hue"] = False; state["picker_drag_alpha"] = False; state["fill_stop_pos_drag"] = False
                 ref_drag = None
                 max_points_per_curve = slider.value
 
         # Draw scene (Cairo) and blit at canvas offset
         active = current_points if (drawing and tool_mode == "draw") else (redrawing_curve.get("points") if redrawing_curve else None)
         _eff_pivot = None
+        _grad_edit_info = None
         if tool_mode == "selection" and selection_submode == "transform" and selected_strokes:
             _pobb = combined_obb(strokes, selected_strokes)
             if _pobb:
                 _eff_pivot = pivot_pos if pivot_pos is not None else (_pobb["cx"], _pobb["cy"])
+            if state.get("color_target", color_target) == "fill":
+                for _gsi in sorted(selected_strokes):
+                    if 0 <= _gsi < len(strokes):
+                        _gst = strokes[_gsi]
+                        _gfg = _gst.get("fill_gradient") if isinstance(_gst, dict) else None
+                        try:
+                            _gfg = get_fill_gradient(_gst) or _gfg
+                        except Exception:
+                            pass
+                        if isinstance(_gfg, dict) and str(_gfg.get("type")) in ("linear", "radial", "conic", "spiral", "diamond", "square"):
+                            try:
+                                _grad_edit_info = gradient_edit_handles(_gst, _gfg)
+                                if isinstance(_grad_edit_info, dict):
+                                    _grad_edit_info["stroke_i"] = _gsi
+                            except Exception:
+                                _grad_edit_info = None
+                            break
         draw_scene(
             cairo_surface, strokes, active, snap_point=hover_snap,
             selected_indices=selected_strokes, edit_mode=(tool_mode == "selection"),
@@ -2401,6 +3073,7 @@ def main():
             ref_img=reference_image,
             pivot_pos=_eff_pivot,
             transform_handle_mode=transform_handle_mode,
+            gradient_edit_info=_grad_edit_info,
         )
         frame = surface_to_pygame(cairo_surface)
         screen.fill((230, 233, 238))
@@ -2443,6 +3116,13 @@ def main():
         picker_rects["tab_fill"] = state.get("tab_fill_rect", picker_rects["tab_fill"])
         picker_rects["nofill"] = state.get("nofill_rect", picker_rects["nofill"])
         picker_rects["alpha"] = state.get("alpha_rect", picker_rects["alpha"])
+        fill_type_rects_cache = dict(state.get("fill_type_rects", fill_type_rects_cache) or {})
+        fill_stop_rects_cache = dict(state.get("fill_stop_rects", fill_stop_rects_cache) or {})
+        fill_stop_add_rect_cache = state.get("fill_stop_add_rect", fill_stop_add_rect_cache)
+        fill_stop_remove_rect_cache = state.get("fill_stop_remove_rect", fill_stop_remove_rect_cache)
+        fill_stop_pos_rect_cache = state.get("fill_stop_pos_rect", fill_stop_pos_rect_cache)
+        fill_gradient_stop = int(state.get("fill_gradient_stop", fill_gradient_stop) or 0)
+        fill_stop_pos_drag = bool(state.get("fill_stop_pos_drag", fill_stop_pos_drag))
         trace_algo_rects_cache = state.get("trace_algo_rects", trace_algo_rects_cache)
         draw_shape_rects_cache = state.get("draw_shape_rects", draw_shape_rects_cache)
         panel_toggle_rect_cache = state.get("panel_toggle_rect", panel_toggle_rect_cache)

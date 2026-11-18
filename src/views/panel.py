@@ -1099,12 +1099,32 @@ def draw_panel(screen, fonts, mouse_pos, state):
             y += 32
 
             # current color for target
+            fill_grad = None
+            fill_grad_stop = int(state.get("fill_gradient_stop", 0) or 0)
             if color_target == "stroke":
                 cur_color = eff_sc if stroke_color_enabled else (stroke.get("stroke_color", (0.1, 0.1, 0.15)) if stroke else (0.1,0.1,0.15))
                 cur_color = cur_color or (0.1, 0.1, 0.15)
+                display_color = cur_color
             else:
-                cur_color = stroke.get("fill_color", None) if stroke else None
-            display_color = cur_color if cur_color is not None else (1.0, 1.0, 1.0)
+                fill_grad = get_fill_gradient(stroke) if (stroke is not None and 'get_fill_gradient' in globals()) else (stroke.get("fill_gradient") if isinstance(stroke, dict) and isinstance(stroke.get("fill_gradient"), dict) and stroke.get("fill_gradient", {}).get("type") in ("linear","radial") else None)
+                if fill_grad is not None:
+                    stops_n = 0
+                    try:
+                        if 'get_gradient_stops' in globals() and callable(globals().get('get_gradient_stops')):
+                            stops_n = len(get_gradient_stops(fill_grad) or [])
+                        else:
+                            stops_n = len(fill_grad.get("stops") or [])
+                    except Exception:
+                        stops_n = len(fill_grad.get("stops") or [])
+                    if stops_n <= 0:
+                        fill_grad_stop = 0
+                    else:
+                        fill_grad_stop = max(0, min(fill_grad_stop, stops_n - 1))
+                    state["fill_gradient_stop"] = fill_grad_stop
+                    cur_color = get_gradient_stop_color(fill_grad, fill_grad_stop) if 'get_gradient_stop_color' in globals() else (1.0,1.0,1.0,1.0)
+                else:
+                    cur_color = stroke.get("fill_color", None) if stroke else None
+                display_color = cur_color if cur_color is not None else (1.0, 1.0, 1.0)
             h, s, vcol = rgb_to_hsv(*display_color)
             # keep picker state in sync if not dragging
             if not state.get("picker_drag_sv") and not state.get("picker_drag_hue"):
@@ -1119,13 +1139,47 @@ def draw_panel(screen, fonts, mouse_pos, state):
             preview = pygame.Rect(x, y, 34, 34)
             pygame.draw.rect(screen, (255, 255, 255), preview, border_radius=6)
             inner = preview.inflate(-6, -6)
-            if color_target == "fill" and cur_color is None:
+            has_fill_now = (cur_color is not None) or (color_target == "fill" and fill_grad is not None)
+            if color_target == "fill" and not has_fill_now:
                 pygame.draw.rect(screen, (250, 250, 250), inner, border_radius=4)
                 pygame.draw.line(screen, (200, 60, 60), inner.topleft, inner.bottomright, 2)
                 hex_txt = "None"
             else:
-                rgb_show = tuple(int(c * 255) for c in display_color)
-                pygame.draw.rect(screen, rgb_show, inner, border_radius=4)
+                if color_target == "fill" and fill_grad is not None:
+                    # gradient preview (multi-stop)
+                    stops = get_gradient_stops(fill_grad) if 'get_gradient_stops' in globals() else (fill_grad.get("stops") or [])
+                    for ix in range(inner.w):
+                        t = ix / max(1, inner.w - 1)
+                        sc = (0.0, 0.0, 0.0, 1.0)
+                        try:
+                            ordered = sorted(stops, key=lambda s: float((s or {}).get("pos", 0.0))) if stops else []
+                            if not ordered:
+                                sc = (0.0, 0.0, 0.0, 1.0)
+                            elif t <= float(ordered[0].get("pos", 0.0)):
+                                sc = color_rgba(ordered[0].get("color"), (0, 0, 0, 1))
+                            elif t >= float(ordered[-1].get("pos", 1.0)):
+                                sc = color_rgba(ordered[-1].get("color"), (1, 1, 1, 1))
+                            else:
+                                sc = color_rgba(ordered[-1].get("color"), (1, 1, 1, 1))
+                                for a, b in zip(ordered, ordered[1:]):
+                                    pa = float(a.get("pos", 0.0)); pb = float(b.get("pos", 1.0))
+                                    if pa <= t <= pb:
+                                        lt = 0.0 if pb - pa <= 1e-9 else (t - pa) / (pb - pa)
+                                        ca = color_rgba(a.get("color"), (0, 0, 0, 1))
+                                        cb = color_rgba(b.get("color"), (1, 1, 1, 1))
+                                        sc = tuple(ca[k] + (cb[k] - ca[k]) * lt for k in range(4))
+                                        break
+                        except Exception:
+                            sc = (0.0, 0.0, 0.0, 1.0)
+                        a = float(sc[3]) if len(sc) >= 4 else 1.0
+                        bgv = 235 if (ix // 6) % 2 == 0 else 210
+                        r = int((sc[0] * a + (bgv / 255.0) * (1 - a)) * 255)
+                        g = int((sc[1] * a + (bgv / 255.0) * (1 - a)) * 255)
+                        b = int((sc[2] * a + (bgv / 255.0) * (1 - a)) * 255)
+                        pygame.draw.line(screen, (r, g, b), (inner.x + ix, inner.y), (inner.x + ix, inner.bottom - 1))
+                else:
+                    rgb_show = tuple(int(c * 255) for c in color_rgb(display_color))
+                    pygame.draw.rect(screen, rgb_show, inner, border_radius=4)
                 hex_txt = rgb_to_hex(display_color)
             pygame.draw.rect(screen, BUTTON_BORDER, preview, 1, border_radius=6)
             screen.blit(font_small.render(hex_txt, True, TEXT_COLOR), (x + 42, y + 9))
@@ -1133,7 +1187,7 @@ def draw_panel(screen, fonts, mouse_pos, state):
             if color_target == "fill":
                 nofill = pygame.Rect(x + 150, y + 4, 70, 26)
                 state["nofill_rect"] = nofill
-                nf_active = (cur_color is None)
+                nf_active = not has_fill_now
                 pygame.draw.rect(screen, TOOL_ACTIVE if nf_active else BUTTON_BG, nofill, border_radius=6)
                 pygame.draw.rect(screen, ACCENT if nf_active else BUTTON_BORDER, nofill, 1, border_radius=6)
                 nt = font_small.render("No fill", True, ACCENT if nf_active else TEXT_COLOR)
@@ -1141,6 +1195,206 @@ def draw_panel(screen, fonts, mouse_pos, state):
             else:
                 state["nofill_rect"] = pygame.Rect(0, 0, 0, 0)
             y += 40
+            # Fill type + gradient stop controls
+            state.setdefault("fill_type_rects", {})
+            state.setdefault("fill_stop_rects", {})
+            state.setdefault("fill_stop_add_rect", pygame.Rect(0, 0, 0, 0))
+            state.setdefault("fill_stop_remove_rect", pygame.Rect(0, 0, 0, 0))
+            state.setdefault("fill_stop_pos_rect", pygame.Rect(0, 0, 0, 0))
+            if color_target == "fill":
+                fill_mode = "none"
+                if fill_grad is not None:
+                    fill_mode = str(fill_grad.get("type", "linear"))
+                elif stroke is not None and stroke.get("fill_color") is not None:
+                    fill_mode = "solid"
+                # two rows: common types + shaped gradient types (spiral, conic, diamond, square)
+                label_rows = [
+                    [("solid", "Solid"), ("linear", "Linear"), ("radial", "Radial")],
+                    [("conic", "Conic"), ("spiral", "Spiral"), ("diamond", "Diamond"), ("square", "Square")],
+                ]
+                # clear previous rects to avoid stale keys
+                state["fill_type_rects"] = {}
+                for row in label_rows:
+                    n = max(1, len(row))
+                    bw = (PANEL_W - 40 - (n - 1) * 4) // n
+                    for i, (key, label) in enumerate(row):
+                        r = pygame.Rect(x + i * (bw + 4), y, bw, 22)
+                        state["fill_type_rects"][key] = r
+                        active = (fill_mode == key)
+                        bg = TOOL_ACTIVE if active else (BUTTON_HOVER if r.collidepoint(mouse_pos) else BUTTON_BG)
+                        pygame.draw.rect(screen, bg, r, border_radius=5)
+                        pygame.draw.rect(screen, ACCENT if active else BUTTON_BORDER, r, 1, border_radius=5)
+                        t = font_small.render(label, True, ACCENT if active else TEXT_COLOR)
+                        screen.blit(t, t.get_rect(center=r.center))
+                    y += 26
+                y += 4
+
+                # gradient stops (multi-stop)
+                state["fill_stop_rects"] = {}
+                state["fill_stop_add_rect"] = pygame.Rect(0, 0, 0, 0)
+                state["fill_stop_remove_rect"] = pygame.Rect(0, 0, 0, 0)
+                state["fill_stop_pos_rect"] = pygame.Rect(0, 0, 0, 0)
+                if fill_grad is not None:
+                    _get_stops = globals().get("get_gradient_stops")
+                    if callable(_get_stops):
+                        try:
+                            stops = _get_stops(fill_grad) or []
+                        except Exception:
+                            stops = list(fill_grad.get("stops") or [])
+                    else:
+                        stops = list(fill_grad.get("stops") or [])
+                    if not stops:
+                        stops = [{"pos": 0.0, "color": [0.0, 0.0, 0.0, 1.0]},
+                                 {"pos": 1.0, "color": [1.0, 1.0, 1.0, 1.0]}]
+                    nstops = len(stops)
+                    try:
+                        fill_grad_stop = int(state.get("fill_gradient_stop", 0) or 0)
+                    except Exception:
+                        fill_grad_stop = 0
+                    fill_grad_stop = max(0, min(fill_grad_stop, nstops - 1))
+                    state["fill_gradient_stop"] = fill_grad_stop
+
+                    avail_w = PANEL_W - 40
+                    btn_w = 22
+                    gap = 6
+                    sw_area_w = max(60, avail_w - 2 * (btn_w + gap))
+                    # Choose swatch size/gap so all stops remain visible and individually clickable.
+                    sw_gap = 6
+                    if nstops > 1:
+                        sw = int((sw_area_w - (nstops - 1) * sw_gap) / nstops)
+                    else:
+                        sw = 26
+                    if sw < 18:
+                        sw_gap = 4
+                        sw = int((sw_area_w - (nstops - 1) * sw_gap) / max(1, nstops))
+                    if sw < 14:
+                        sw_gap = 2
+                        sw = int((sw_area_w - (nstops - 1) * sw_gap) / max(1, nstops))
+                    sw = max(12, min(26, sw))
+                    total_sw_w = nstops * sw + max(0, nstops - 1) * sw_gap
+                    start_x = x
+                    if total_sw_w > sw_area_w and nstops > 1:
+                        # Compress spacing as a last resort to avoid overlapping hit targets.
+                        sw_gap = max(1, int((sw_area_w - nstops * sw) / (nstops - 1)))
+                        total_sw_w = nstops * sw + max(0, nstops - 1) * sw_gap
+                    if total_sw_w < sw_area_w:
+                        start_x = x  # left-align; keeps layout stable
+                    for i in range(nstops):
+                        r = pygame.Rect(start_x + i * (sw + sw_gap), y, sw, sw)
+                        # Keep within swatch area without stacking on top of another stop.
+                        if r.right > x + sw_area_w:
+                            r.x = x + sw_area_w - sw
+                        state["fill_stop_rects"][str(i)] = r
+                        st = stops[i]
+                        if isinstance(st, dict):
+                            cstop = color_rgba(st.get("color"), (0, 0, 0, 1))
+                        else:
+                            try:
+                                cstop = color_rgba(st[1], (0, 0, 0, 1))
+                            except Exception:
+                                cstop = (0.0, 0.0, 0.0, 1.0)
+                        draw_swatch(screen, r, cstop, i == fill_grad_stop, mouse_pos)
+                    bx = x + sw_area_w + gap
+                    add_r = pygame.Rect(bx, y, btn_w, sw)
+                    rem_r = pygame.Rect(bx + btn_w + 4, y, btn_w, sw)
+                    state["fill_stop_add_rect"] = add_r
+                    state["fill_stop_remove_rect"] = rem_r
+                    for r, label, enabled_btn in ((add_r, "+", True), (rem_r, "-", nstops > 2)):
+                        if enabled_btn:
+                            bg = BUTTON_HOVER if r.collidepoint(mouse_pos) else BUTTON_BG
+                            border = BUTTON_BORDER
+                            col = TEXT_COLOR
+                        else:
+                            bg = (235, 238, 242)
+                            border = (220, 224, 230)
+                            col = MUTED_COLOR
+                        pygame.draw.rect(screen, bg, r, border_radius=5)
+                        pygame.draw.rect(screen, border, r, 1, border_radius=5)
+                        t = font_small.render(label, True, col)
+                        screen.blit(t, t.get_rect(center=r.center))
+                    y += sw + 6
+
+                    # selected stop position (distance)
+                    sel_st = stops[fill_grad_stop] if 0 <= fill_grad_stop < nstops else stops[0]
+                    try:
+                        sel_pos = float((sel_st or {}).get("pos", 0.0)) if isinstance(sel_st, dict) else float(sel_st[0])
+                    except Exception:
+                        sel_pos = 0.0
+                    sel_pos = clamp(sel_pos, 0.0, 1.0)
+                    pos_label = font_small.render(f"Stop {fill_grad_stop + 1}  Pos {int(round(sel_pos * 100))}%", True, TEXT_COLOR)
+                    screen.blit(pos_label, (x, y))
+                    y += 16
+                    pos_h = 10
+                    pos_rect = pygame.Rect(x, y, PANEL_W - 40, pos_h)
+                    state["fill_stop_pos_rect"] = pos_rect
+                    for ix in range(pos_rect.w):
+                        tt = ix / max(1, pos_rect.w - 1)
+                        samp = (128, 128, 128)
+                        try:
+                            ordered = []
+                            for s in stops:
+                                if isinstance(s, dict):
+                                    ordered.append((float(s.get("pos", 0.0)), color_rgba(s.get("color"), (0, 0, 0, 1))))
+                                else:
+                                    try:
+                                        ordered.append((float(s[0]), color_rgba(s[1], (0, 0, 0, 1))))
+                                    except Exception:
+                                        pass
+                            ordered.sort(key=lambda t: t[0])
+                            if ordered:
+                                if tt <= ordered[0][0]:
+                                    sc = ordered[0][1]
+                                elif tt >= ordered[-1][0]:
+                                    sc = ordered[-1][1]
+                                else:
+                                    sc = ordered[-1][1]
+                                    for a, b in zip(ordered, ordered[1:]):
+                                        pa, ca = a; pb, cb = b
+                                        if pa <= tt <= pb:
+                                            lt = 0.0 if pb - pa <= 1e-9 else (tt - pa) / (pb - pa)
+                                            sc = tuple(ca[k] + (cb[k] - ca[k]) * lt for k in range(4))
+                                            break
+                                bgv = 235 if (ix // 6) % 2 == 0 else 210
+                                a = float(sc[3]) if len(sc) >= 4 else 1.0
+                                samp = (int((sc[0] * a + (bgv / 255.0) * (1 - a)) * 255),
+                                        int((sc[1] * a + (bgv / 255.0) * (1 - a)) * 255),
+                                        int((sc[2] * a + (bgv / 255.0) * (1 - a)) * 255))
+                        except Exception:
+                            pass
+                        pygame.draw.line(screen, samp, (pos_rect.x + ix, pos_rect.y), (pos_rect.x + ix, pos_rect.bottom - 1))
+                    pygame.draw.rect(screen, BUTTON_BORDER, pos_rect, 1, border_radius=4)
+                    # Draw markers for all stops so unselected stop colors/positions remain visible.
+                    for i, st in enumerate(stops):
+                        try:
+                            sp = float((st or {}).get("pos", 0.0)) if isinstance(st, dict) else float(st[0])
+                        except Exception:
+                            sp = 0.0
+                        sp = clamp(sp, 0.0, 1.0)
+                        if isinstance(st, dict):
+                            scol = color_rgba(st.get("color"), (0, 0, 0, 1))
+                        else:
+                            try:
+                                scol = color_rgba(st[1], (0, 0, 0, 1))
+                            except Exception:
+                                scol = (0.0, 0.0, 0.0, 1.0)
+                        sx = pos_rect.x + int(sp * (pos_rect.w - 1))
+                        if i == fill_grad_stop:
+                            pygame.draw.rect(screen, (255, 255, 255), (sx - 3, pos_rect.y - 2, 6, pos_rect.h + 4), 2, border_radius=2)
+                            pygame.draw.rect(screen, (0, 0, 0), (sx - 3, pos_rect.y - 2, 6, pos_rect.h + 4), 1, border_radius=2)
+                        else:
+                            mr = pygame.Rect(sx - 3, pos_rect.y - 1, 6, pos_rect.h + 2)
+                            # show the stop's own color on the marker for visibility
+                            sr, sg, sb = [int(clamp(c, 0.0, 1.0) * 255) for c in scol[:3]]
+                            pygame.draw.rect(screen, (sr, sg, sb), mr, border_radius=2)
+                            pygame.draw.rect(screen, (255, 255, 255), mr, 1, border_radius=2)
+                            pygame.draw.rect(screen, (40, 40, 40), mr.inflate(2, 2), 1, border_radius=3)
+                    y += pos_h + 8
+            else:
+                state["fill_type_rects"] = {}
+                state["fill_stop_rects"] = {}
+                state["fill_stop_add_rect"] = pygame.Rect(0, 0, 0, 0)
+                state["fill_stop_remove_rect"] = pygame.Rect(0, 0, 0, 0)
+                state["fill_stop_pos_rect"] = pygame.Rect(0, 0, 0, 0)
 
             # SV square
             sv_w = PANEL_W - 40
@@ -1215,6 +1469,11 @@ def draw_panel(screen, fonts, mouse_pos, state):
             if not fill_enabled:
                 state["tab_fill_rect"] = pygame.Rect(0,0,0,0)
                 state["nofill_rect"] = pygame.Rect(0,0,0,0)
+                state["fill_type_rects"] = {}
+                state["fill_stop_rects"] = {}
+                state["fill_stop_add_rect"] = pygame.Rect(0, 0, 0, 0)
+                state["fill_stop_remove_rect"] = pygame.Rect(0, 0, 0, 0)
+                state["fill_stop_pos_rect"] = pygame.Rect(0, 0, 0, 0)
                 if not stroke_color_enabled:
                     state["tab_stroke_rect"] = pygame.Rect(0,0,0,0)
             if not (stroke_color_enabled or fill_enabled):
@@ -1223,9 +1482,19 @@ def draw_panel(screen, fonts, mouse_pos, state):
                 state["alpha_rect"] = pygame.Rect(0,0,0,0)
                 state["stroke_swatch_rects"] = [pygame.Rect(0,0,0,0) for _ in STROKE_SWATCHES]
                 state["fill_swatch_rects"] = [pygame.Rect(0,0,0,0) for _ in STROKE_SWATCHES]
+                state["fill_type_rects"] = {}
+                state["fill_stop_rects"] = {}
+                state["fill_stop_add_rect"] = pygame.Rect(0, 0, 0, 0)
+                state["fill_stop_remove_rect"] = pygame.Rect(0, 0, 0, 0)
+                state["fill_stop_pos_rect"] = pygame.Rect(0, 0, 0, 0)
             elif component_stroke_enabled and not fill_enabled:
                 # only stroke color editable for selected curve; fill swatches/controls off
                 state["fill_swatch_rects"] = [pygame.Rect(0,0,0,0) for _ in STROKE_SWATCHES]
+                state["fill_type_rects"] = {}
+                state["fill_stop_rects"] = {}
+                state["fill_stop_add_rect"] = pygame.Rect(0, 0, 0, 0)
+                state["fill_stop_remove_rect"] = pygame.Rect(0, 0, 0, 0)
+                state["fill_stop_pos_rect"] = pygame.Rect(0, 0, 0, 0)
             state["component_style_target"] = comp_style_target if component_stroke_enabled else None
 
         sel_label = "-" if sel_count == 0 else (str(next(iter(sel_strokes)) + 1) if sel_count == 1 else f"{sel_count}")

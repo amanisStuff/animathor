@@ -72,6 +72,468 @@ def rgb_to_hex(rgb):
     r, g, b = [int(clamp(x, 0, 1) * 255) for x in color_rgb(rgb)]
     return f"#{r:02X}{g:02X}{b:02X}"
 
+
+GRADIENT_TYPES = ("linear", "radial", "conic", "spiral", "diamond", "square")
+
+
+def is_fill_gradient(fill):
+    return isinstance(fill, dict) and fill.get("type") in GRADIENT_TYPES
+
+
+def gradient_edit_bbox(stroke):
+    """Axis-aligned bbox used for gradient rendering/editing handles."""
+    try:
+        pts = []
+        for seg in (stroke.get("segs") or []):
+            if not seg or len(seg) < 4:
+                continue
+            p0, p1, p2, p3 = seg[0], seg[1], seg[2], seg[3]
+            for p in (p0, p1, p2, p3):
+                if p is not None:
+                    pts.append((float(p[0]), float(p[1])))
+            for t in (0.25, 0.5, 0.75):
+                mt = 1.0 - t
+                x = mt*mt*mt*p0[0] + 3*mt*mt*t*p1[0] + 3*mt*t*t*p2[0] + t*t*t*p3[0]
+                y = mt*mt*mt*p0[1] + 3*mt*mt*t*p1[1] + 3*mt*t*t*p2[1] + t*t*t*p3[1]
+                pts.append((float(x), float(y)))
+        if pts:
+            xs = [p[0] for p in pts]
+            ys = [p[1] for p in pts]
+            x0, y0, x1, y1 = min(xs), min(ys), max(xs), max(ys)
+            if x1 - x0 < 1e-3:
+                x1 = x0 + 1.0
+            if y1 - y0 < 1e-3:
+                y1 = y0 + 1.0
+            return (x0, y0, x1, y1)
+    except Exception:
+        pass
+    return (0.0, 0.0, 1.0, 1.0)
+
+
+def gradient_edit_handles(stroke, grad):
+    """Return interactive on-canvas handles for editing a gradient.
+
+    Linear: line through bbox center along angle with endpoint handles.
+    Shaped (radial/conic/spiral/diamond/square): center, rotated rx/ry/edge
+    radius handles, and a rotation handle to rotate the gradient shape.
+    """
+    if not is_fill_gradient(grad):
+        return {"type": None, "bbox": None, "handles": {}}
+    gtype = str(grad.get("type", "linear"))
+    x0, y0, x1, y1 = gradient_edit_bbox(stroke)
+    cx = (x0 + x1) * 0.5
+    cy = (y0 + y1) * 0.5
+    w = max(1e-3, x1 - x0)
+    h = max(1e-3, y1 - y0)
+    handles = {}
+    if gtype == "linear":
+        try:
+            angle = float(grad.get("angle", 0.0) or 0.0) * math.pi / 180.0
+        except Exception:
+            angle = 0.0
+        dx = math.cos(angle) * w * 0.5
+        dy = math.sin(angle) * h * 0.5
+        p1 = (cx - dx, cy - dy)
+        p2 = (cx + dx, cy + dy)
+        handles["p1"] = p1
+        handles["p2"] = p2
+        handles["center"] = (cx, cy)
+        return {"type": "linear", "bbox": (x0, y0, x1, y1), "angle": angle, "handles": handles}
+    else:
+        c = grad.get("center", [0.5, 0.5])
+        try:
+            rcx = float(c[0]); rcy = float(c[1])
+        except Exception:
+            rcx, rcy = 0.5, 0.5
+        rcx = clamp(rcx, 0.0, 1.0); rcy = clamp(rcy, 0.0, 1.0)
+        radii = grad.get("radii", [0.5, 0.5])
+        try:
+            rx = float(radii[0]); ry = float(radii[1])
+        except Exception:
+            rx, ry = 0.5, 0.5
+        rx = max(0.01, abs(rx)); ry = max(0.01, abs(ry))
+        try:
+            ang_deg = float(grad.get("angle", 0.0) or 0.0)
+        except Exception:
+            ang_deg = 0.0
+        ang = ang_deg * math.pi / 180.0
+        caa, saa = math.cos(ang), math.sin(ang)
+        gcx = x0 + rcx * w
+        gcy = y0 + rcy * h
+        rpx = rx * w
+        rpy = ry * h
+        # rotated local axes in world space
+        ax_x, ax_y = caa, saa
+        ay_x, ay_y = -saa, caa
+        handles["center"] = (gcx, gcy)
+        handles["rx"] = (gcx + ax_x * rpx, gcy + ax_y * rpx)
+        handles["ry"] = (gcx + ay_x * rpy, gcy + ay_y * rpy)
+        handles["edge"] = (gcx + ax_x * rpx + ay_x * rpy, gcy + ax_y * rpx + ay_y * rpy)
+        # rotation handle: outside the shape along local +X axis
+        rot_off = max(18.0, rpx * 0.25)
+        rot_r = rpx + rot_off
+        handles["rot"] = (gcx + ax_x * rot_r, gcy + ax_y * rot_r)
+        return {
+            "type": gtype,
+            "bbox": (x0, y0, x1, y1),
+            "center": (gcx, gcy),
+            "radii_px": (rpx, rpy),
+            "angle": ang,
+            "axes": ((ax_x, ax_y), (ay_x, ay_y)),
+            "handles": handles,
+        }
+
+
+def hit_test_gradient_handle(stroke, grad, pos, radius=8.0):
+    info = gradient_edit_handles(stroke, grad)
+    hs = info.get("handles") or {}
+    gtype = info.get("type")
+    if gtype == "linear":
+        order = ["p1", "p2", "center"]
+    elif gtype in ("radial", "conic", "spiral", "diamond", "square"):
+        order = ["center", "rot", "rx", "ry", "edge"]
+    else:
+        order = list(hs.keys())
+    for name in order:
+        pt = hs.get(name)
+        if pt is None:
+            continue
+        if math.hypot(float(pos[0]) - pt[0], float(pos[1]) - pt[1]) <= radius:
+            return name, info
+    return None, info
+
+
+def default_linear_gradient(c0=(0.0, 0.0, 0.0, 1.0), c1=(1.0, 1.0, 1.0, 1.0), angle=0.0):
+    return {
+        "type": "linear",
+        "angle": float(angle),
+        "stops": [
+            {"pos": 0.0, "color": list(color_rgba(c0, (0.0, 0.0, 0.0, 1.0)))},
+            {"pos": 1.0, "color": list(color_rgba(c1, (1.0, 1.0, 1.0, 1.0)))},
+        ],
+    }
+
+
+def default_radial_gradient(c0=(1.0, 1.0, 1.0, 1.0), c1=(0.0, 0.0, 0.0, 1.0)):
+    return {
+        "type": "radial",
+        # center and radii are relative to the stroke bbox (0..1 across bbox, center at 0.5)
+        "center": [0.5, 0.5],
+        "radii": [0.5, 0.5],
+        "angle": 0.0,
+        "stops": [
+            {"pos": 0.0, "color": list(color_rgba(c0, (1.0, 1.0, 1.0, 1.0)))},
+            {"pos": 1.0, "color": list(color_rgba(c1, (0.0, 0.0, 0.0, 1.0)))},
+        ],
+    }
+
+
+def default_shaped_gradient(gtype="conic", c0=(1.0, 1.0, 1.0, 1.0), c1=(0.0, 0.0, 0.0, 1.0)):
+    gtype = str(gtype or "conic")
+    if gtype not in GRADIENT_TYPES or gtype == "linear":
+        gtype = "conic"
+    grad = {
+        "type": gtype,
+        "center": [0.5, 0.5],
+        "radii": [0.5, 0.5],
+        "angle": 0.0,
+        "stops": [
+            {"pos": 0.0, "color": list(color_rgba(c0, (1.0, 1.0, 1.0, 1.0)))},
+            {"pos": 1.0, "color": list(color_rgba(c1, (0.0, 0.0, 0.0, 1.0)))},
+        ],
+    }
+    if gtype == "spiral":
+        grad["turns"] = 2.0
+    return grad
+
+
+def get_fill_gradient(stroke):
+    if not isinstance(stroke, dict):
+        return None
+    g = stroke.get("fill_gradient")
+    return g if is_fill_gradient(g) else None
+
+
+def stroke_has_fill(stroke):
+    if not isinstance(stroke, dict):
+        return False
+    return stroke.get("fill_color") is not None or get_fill_gradient(stroke) is not None
+
+
+def _normalize_gradient_stop(st, fallback_pos=0.0):
+    if isinstance(st, dict):
+        pos = st.get("pos", fallback_pos)
+        col = st.get("color", (0.0, 0.0, 0.0, 1.0))
+    elif isinstance(st, (list, tuple)) and len(st) >= 2:
+        pos, col = st[0], st[1]
+    elif isinstance(st, (list, tuple)) and len(st) == 1:
+        pos, col = fallback_pos, st[0]
+    else:
+        pos, col = fallback_pos, (0.0, 0.0, 0.0, 1.0)
+    try:
+        pos = float(pos)
+    except Exception:
+        pos = float(fallback_pos)
+    pos = clamp(pos, 0.0, 1.0)
+    return {"pos": pos, "color": list(color_rgba(col, (0.0, 0.0, 0.0, 1.0)))}
+
+
+def get_gradient_stops(grad):
+    if not is_fill_gradient(grad):
+        return []
+    stops = grad.get("stops") or []
+    out = []
+    for i, st in enumerate(stops):
+        out.append(_normalize_gradient_stop(st, 0.0 if i == 0 else 1.0))
+    if not out:
+        out = [_normalize_gradient_stop({"pos": 0.0, "color": (0.0, 0.0, 0.0, 1.0)}),
+               _normalize_gradient_stop({"pos": 1.0, "color": (1.0, 1.0, 1.0, 1.0)})]
+    return out
+
+
+def normalize_gradient(grad):
+    if not is_fill_gradient(grad):
+        return grad
+    out = dict(grad)
+    stops = get_gradient_stops(grad)
+    if len(stops) < 2:
+        if len(stops) == 1:
+            s = stops[0]
+            stops = [dict(s, pos=0.0), dict(s, pos=1.0)]
+        else:
+            stops = [_normalize_gradient_stop({"pos": 0.0, "color": (0.0, 0.0, 0.0, 1.0)}),
+                     _normalize_gradient_stop({"pos": 1.0, "color": (1.0, 1.0, 1.0, 1.0)})]
+    out["stops"] = stops
+    gtype = str(out.get("type", "linear"))
+    if gtype not in GRADIENT_TYPES:
+        gtype = "linear"
+        out["type"] = gtype
+    if gtype == "linear":
+        try:
+            out["angle"] = float(out.get("angle", 0.0) or 0.0)
+        except Exception:
+            out["angle"] = 0.0
+    else:
+        # shaped/centered gradients: center, radii, angle (shape rotation)
+        c = out.get("center", [0.5, 0.5])
+        try:
+            cx = float(c[0]); cy = float(c[1])
+        except Exception:
+            cx, cy = 0.5, 0.5
+        cx = clamp(cx, 0.0, 1.0)
+        cy = clamp(cy, 0.0, 1.0)
+        out["center"] = [cx, cy]
+        r = out.get("radii", [0.5, 0.5])
+        try:
+            rx = float(r[0]); ry = float(r[1])
+        except Exception:
+            rx, ry = 0.5, 0.5
+        if not (rx > 1e-4): rx = 0.5
+        if not (ry > 1e-4): ry = 0.5
+        rx = clamp(abs(rx), 0.01, 2.0)
+        ry = clamp(abs(ry), 0.01, 2.0)
+        out["radii"] = [rx, ry]
+        try:
+            out["angle"] = float(out.get("angle", 0.0) or 0.0)
+        except Exception:
+            out["angle"] = 0.0
+        if gtype == "spiral":
+            try:
+                turns = float(out.get("turns", 2.0) or 2.0)
+            except Exception:
+                turns = 2.0
+            if not (turns > 0.01):
+                turns = 2.0
+            out["turns"] = clamp(abs(turns), 0.1, 20.0)
+    return out
+
+
+def clamp_gradient_stop_index(grad, index):
+    stops = get_gradient_stops(grad)
+    n = max(1, len(stops))
+    try:
+        i = int(index)
+    except Exception:
+        i = 0
+    return max(0, min(i, n - 1))
+
+
+def get_gradient_stop_color(grad, index=0):
+    stops = get_gradient_stops(grad)
+    if not stops:
+        return (0.0, 0.0, 0.0, 1.0)
+    i = clamp_gradient_stop_index({"type": grad.get("type", "linear"), "stops": stops} if is_fill_gradient(grad) else {"type": "linear", "stops": stops}, index)
+    return color_rgba(stops[i].get("color"), (0.0, 0.0, 0.0, 1.0))
+
+
+def set_gradient_stop_color(grad, index, color):
+    if not is_fill_gradient(grad):
+        return grad
+    out = normalize_gradient(grad)
+    stops = list(out.get("stops") or [])
+    if not stops:
+        return out
+    i = clamp_gradient_stop_index(out, index)
+    st = dict(stops[i])
+    st["color"] = list(color_rgba(color, (0.0, 0.0, 0.0, 1.0)))
+    stops[i] = st
+    out["stops"] = stops
+    return out
+
+
+def get_gradient_stop_pos(grad, index=0):
+    stops = get_gradient_stops(grad)
+    if not stops:
+        return 0.0
+    i = 0 if index <= 0 else min(int(index), len(stops) - 1)
+    try:
+        return clamp(float(stops[i].get("pos", 0.0)), 0.0, 1.0)
+    except Exception:
+        return 0.0
+
+
+def set_gradient_stop_pos(grad, index, pos):
+    """Set stop position without crossing neighboring stops; returns (gradient, new_index).
+
+    The selected stop's position is clamped between adjacent stops in positional
+    order so it cannot jump before/after the ones it's between.
+    """
+    if not is_fill_gradient(grad):
+        return grad, 0
+    out = normalize_gradient(grad)
+    stops = list(out.get("stops") or [])
+    if not stops:
+        return out, 0
+    try:
+        i = int(index)
+    except Exception:
+        i = 0
+    i = max(0, min(i, len(stops) - 1))
+    try:
+        p = float(pos)
+    except Exception:
+        p = get_gradient_stop_pos(out, i)
+    p = clamp(p, 0.0, 1.0)
+
+    # Constrain to positional neighbors so the stop cannot jump past them.
+    ordered = sorted(((float(st.get("pos", 0.0)), oi) for oi, st in enumerate(stops)))
+    pos_index = 0
+    for k, (_, oi) in enumerate(ordered):
+        if oi == i:
+            pos_index = k
+            break
+    if pos_index > 0:
+        p = max(p, float(stops[ordered[pos_index - 1][1]].get("pos", 0.0)))
+    if pos_index < len(ordered) - 1:
+        p = min(p, float(stops[ordered[pos_index + 1][1]].get("pos", 1.0)))
+    p = clamp(p, 0.0, 1.0)
+
+    st = dict(stops[i])
+    st["pos"] = p
+    stops[i] = st
+    # keep the moved stop's identity as selected index after sorting
+    decorated = list(enumerate(stops))
+    moved_orig = i
+    decorated.sort(key=lambda t: (float(t[1].get("pos", 0.0)), t[0]))
+    new_stops = [t[1] for t in decorated]
+    new_i = 0
+    for ni, (oi, _) in enumerate(decorated):
+        if oi == moved_orig:
+            new_i = ni
+            break
+    out["stops"] = new_stops
+    return out, new_i
+
+
+def add_gradient_stop(grad, index=None):
+    """Add a stop near the selected/last stop; returns (gradient, new_index)."""
+    if not is_fill_gradient(grad):
+        return grad, 0
+    out = normalize_gradient(grad)
+    stops = list(out.get("stops") or [])
+    if not stops:
+        stops = get_gradient_stops(out)
+    if index is None:
+        try:
+            index = len(stops) - 1
+        except Exception:
+            index = 0
+    try:
+        i = int(index)
+    except Exception:
+        i = 0
+    i = max(0, min(i, max(0, len(stops) - 1)))
+    # choose position and color: midpoint to the right neighbor if possible, else to the left
+    if i < len(stops) - 1:
+        p0 = float(stops[i].get("pos", 0.0))
+        p1 = float(stops[i + 1].get("pos", 1.0))
+        pos = (p0 + p1) * 0.5
+        c0 = color_rgba(stops[i].get("color"), (0, 0, 0, 1))
+        c1 = color_rgba(stops[i + 1].get("color"), (1, 1, 1, 1))
+        col = tuple((a + b) * 0.5 for a, b in zip(c0, c1))
+        insert_at = i + 1
+    elif i > 0:
+        p0 = float(stops[i - 1].get("pos", 0.0))
+        p1 = float(stops[i].get("pos", 1.0))
+        pos = (p0 + p1) * 0.5
+        c0 = color_rgba(stops[i - 1].get("color"), (0, 0, 0, 1))
+        c1 = color_rgba(stops[i].get("color"), (1, 1, 1, 1))
+        col = tuple((a + b) * 0.5 for a, b in zip(c0, c1))
+        insert_at = i
+    else:
+        pos = 0.5
+        col = color_rgba(stops[i].get("color"), (0.5, 0.5, 0.5, 1.0))
+        insert_at = i + 1
+    pos = clamp(pos, 0.0, 1.0)
+    new_stop = {"pos": pos, "color": list(color_rgba(col, (0.5, 0.5, 0.5, 1.0)))}
+    stops.insert(max(0, min(insert_at, len(stops))), new_stop)
+    out["stops"] = stops
+    # keep sorted for consistency
+    out, new_i = set_gradient_stop_pos(out, max(0, min(insert_at, len(stops) - 1)), pos)
+    return out, new_i
+
+
+def remove_gradient_stop(grad, index):
+    """Remove stop at index if more than 2 remain; returns (gradient, new_index)."""
+    if not is_fill_gradient(grad):
+        return grad, 0
+    out = normalize_gradient(grad)
+    stops = list(out.get("stops") or [])
+    if len(stops) <= 2:
+        return out, clamp_gradient_stop_index(out, index)
+    try:
+        i = int(index)
+    except Exception:
+        i = 0
+    i = max(0, min(i, len(stops) - 1))
+    del stops[i]
+    out["stops"] = stops
+    return out, max(0, min(i, len(stops) - 1))
+
+
+def clear_fill(stroke):
+    if not isinstance(stroke, dict):
+        return
+    stroke["fill_color"] = None
+    stroke["fill_gradient"] = None
+
+
+def set_solid_fill(stroke, color):
+    if not isinstance(stroke, dict):
+        return
+    stroke["fill_color"] = tuple(color_rgba(color, (0.0, 0.0, 0.0, 1.0))) if color is not None else None
+    stroke["fill_gradient"] = None
+
+
+def set_gradient_fill(stroke, grad):
+    if not isinstance(stroke, dict):
+        return
+    stroke["fill_gradient"] = grad if is_fill_gradient(grad) else None
+    # keep fill_color as None or as a representative; clear to avoid confusion
+    # but don't lose ability to detect "has fill" via gradient
+    if not is_fill_gradient(grad):
+        stroke["fill_gradient"] = None
+
 def points_bbox(points):
     if not points:
         return None

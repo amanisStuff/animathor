@@ -673,6 +673,12 @@ def _copy_stroke(stroke):
         out["cut_ends"] = dict(out.get("cut_ends") or {})
     if "components" in out:
         out["components"] = [dict(c) for c in (out.get("components") or [])]
+    if "fill_gradient" in out and out.get("fill_gradient") is not None:
+        try:
+            import copy as _copy
+            out["fill_gradient"] = _copy.deepcopy(out.get("fill_gradient"))
+        except Exception:
+            out["fill_gradient"] = out.get("fill_gradient")
     if "obb" in out and isinstance(out["obb"], dict):
         obb = dict(out["obb"])
         if "corners" in obb and obb["corners"] is not None:
