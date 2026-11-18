@@ -1065,11 +1065,12 @@ def main():
                             is_union = state.get("bool_union_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos)
                             op = "union" if is_union else "intersection"
                             try:
-                                from models.boolean import boolean_segs
-                                result_segs = boolean_segs([strokes[i] for i in sel], op=op)
+                                from models.boolean import boolean_result
+                                result = boolean_result([strokes[i] for i in sel], op=op)
                             except Exception:
-                                result_segs = None
-                            if result_segs:
+                                result = None
+                            if result:
+                                result_segs, result_comps, result_corners = result
                                 push_undo()
                                 primary = strokes[sel[0]]
                                 fill_col = primary.get("fill_color") if isinstance(primary, dict) else None
@@ -1080,8 +1081,11 @@ def main():
                                     stroke_color=(0.0, 0.0, 0.0, 0.0),
                                     stroke_width=0.0,
                                     fill_color=fill_col,
+                                    corner_anchors=result_corners,
                                     algorithm="fit",
                                 )
+                                if result_comps:
+                                    new_st["components"] = result_comps
                                 for i in reversed(sel):
                                     del strokes[i]
                                 strokes.append(new_st)

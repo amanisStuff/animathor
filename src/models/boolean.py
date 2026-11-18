@@ -238,16 +238,81 @@ def boolean_loops(shapes, op=UNION, samples=18):
     return loops
 
 
-def boolean_segs(shapes, op=UNION, samples=18, simplify_epsilon=1.5, max_segs=64):
-    """Return closed cubic segments for the boolean result, or ``None``.
+def _mirror_handle(anchor, handle):
+    return (2.0 * anchor[0] - handle[0], 2.0 * anchor[1] - handle[1])
 
-    Every output loop is fitted independently and concatenated into one chain.
-    The renderer's non-zero fill rule turns clockwise inner loops into holes.
+
+def _is_symmetric_junction(seg_prev, seg_next, eps=1e-3):
+    """True if the junction (seg_prev -> seg_next) has mirrored handles."""
+    anchor = seg_next[0]
+    h = seg_next[1]
+    m = _mirror_handle(anchor, seg_prev[2])
+    return math.hypot(m[0] - h[0], m[1] - h[1]) <= eps
+
+
+def _loop_to_components(loop_segs, global_seg_offset=0):
+    """Split a closed fitted loop into connected components at corner junctions.
+
+    Returns (segs, components, corner_anchors) where components are consecutive
+    curve segments joined by smooth/symmetrical nodes, and boundaries between
+    components are non-symmetrical (corner) nodes.
+    """
+    n = len(loop_segs)
+    if n == 0:
+        return [], [], set()
+    if n == 1:
+        segs = list(loop_segs)
+        comp = {"segs": list(segs), "raw_points": [], "draw_max_points": 4, "algorithm": "fit"}
+        # single-segment closed loop: closure junction classification
+        corners = set()
+        if not _is_symmetric_junction(segs[0], segs[0]):
+            corners.add((global_seg_offset, "p0"))
+            corners.add((global_seg_offset, "p3"))
+        return segs, [comp], corners
+
+    corner_j = [not _is_symmetric_junction(loop_segs[j - 1], loop_segs[j]) for j in range(n)]
+    corner_indices = [j for j, is_c in enumerate(corner_j) if is_c]
+    if not corner_indices:
+        segs = list(loop_segs)
+        comp = {"segs": list(segs), "raw_points": [], "draw_max_points": 4, "algorithm": "fit"}
+        return segs, [comp], set()
+
+    # Start at a corner so component boundaries fall on contiguous slices.
+    start = corner_indices[0]
+    rotated = loop_segs[start:] + loop_segs[:start]
+    rot_corner = corner_j[start:] + corner_j[:start]
+    boundaries = [i for i, v in enumerate(rot_corner) if v]
+    boundaries.append(n)
+
+    components = []
+    segs = []
+    corner_anchors = set()
+    for k in range(len(boundaries) - 1):
+        a, b = boundaries[k], boundaries[k + 1]
+        comp_segs = list(rotated[a:b])
+        components.append({"segs": list(comp_segs), "raw_points": [], "draw_max_points": 4, "algorithm": "fit"})
+        gi = global_seg_offset + a
+        # Corner junction at boundary a: start of this component / end of previous.
+        corner_anchors.add((gi, "p0"))
+        prev_gi = global_seg_offset + (a - 1 if a > 0 else n - 1)
+        corner_anchors.add((prev_gi, "p3"))
+        segs.extend(comp_segs)
+    return segs, components, corner_anchors
+
+
+def boolean_result(shapes, op=UNION, samples=18, simplify_epsilon=1.5, max_segs=64):
+    """Return (segs, components, corner_anchors) for the boolean result, or None.
+
+    Result boundaries are split into connected components at non-symmetrical
+    (corner) junctions, preserving the editing philosophy of smooth interior
+    nodes and corner boundaries.
     """
     loops = boolean_loops(shapes, op=op, samples=samples)
     if not loops:
         return None
-    segs = []
+    all_segs = []
+    all_components = []
+    all_corners = set()
     for loop in loops:
         try:
             fitted = _fill._fit_face_beziers_adaptive(
@@ -255,8 +320,24 @@ def boolean_segs(shapes, op=UNION, samples=18, simplify_epsilon=1.5, max_segs=64
             )
         except Exception:
             fitted = None
-        if fitted:
-            segs.extend(fitted)
-    if len(segs) < 3:
+        if not fitted or len(fitted) < 3:
+            continue
+        segs, comps, corners = _loop_to_components(fitted, global_seg_offset=len(all_segs))
+        if not segs:
+            continue
+        all_segs.extend(segs)
+        all_components.extend(comps)
+        all_corners.update(corners)
+    if len(all_segs) < 3:
         return None
-    return segs
+    return all_segs, all_components, all_corners
+
+
+def boolean_segs(shapes, op=UNION, samples=18, simplify_epsilon=1.5, max_segs=64):
+    """Return closed cubic segments for the boolean result, or ``None``.
+
+    Compatibility wrapper; see ``boolean_result`` for component/corner info.
+    """
+    res = boolean_result(shapes, op=op, samples=samples,
+                         simplify_epsilon=simplify_epsilon, max_segs=max_segs)
+    return res[0] if res else None
