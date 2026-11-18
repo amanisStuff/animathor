@@ -706,3 +706,127 @@ def _stroke_has_wave(stroke):
         if _component_wave_enabled(comp):
             return True
     return False
+
+
+def join_components_in_stroke(stroke, comp_indices):
+    """Merge consecutive selected components of *stroke* into single components.
+
+    *comp_indices* is an iterable of component indices to join. Only runs of
+    consecutive indices in component order are merged (e.g. selecting 0,1,3 joins
+    0+1 but leaves 3 alone). Returns ``(new_stroke, index_map)`` where
+    ``index_map[old_i]`` is the component index in the returned stroke. If
+    nothing can be merged, returns ``(stroke, None)``.
+    """
+    if not isinstance(stroke, dict):
+        return stroke, None
+    comps = _stroke_components(stroke)
+    n = len(comps)
+    wanted = sorted({int(i) for i in (comp_indices or []) if 0 <= int(i) < n})
+    if len(wanted) < 2:
+        return stroke, None
+    wanted_set = set(wanted)
+
+    # Build contiguous runs that should be merged.
+    runs = []
+    i = 0
+    while i < n:
+        if i in wanted_set:
+            j = i + 1
+            while j < n and j in wanted_set:
+                j += 1
+            runs.append((i, j))  # [i, j)
+            i = j
+        else:
+            runs.append((i, i + 1))
+            i += 1
+
+    if not any(e - s >= 2 for s, e in runs):
+        return stroke, None
+
+    new_comps = []
+    index_map = {}
+    # Track global seg indices of internal join boundaries (end of seg i / start i+1)
+    # created by merging components; these must become smooth/symmetrical interior nodes.
+    join_junction_seg_indices = set()
+    global_offset = 0
+    for s, e in runs:
+        if e - s == 1:
+            index_map[s] = len(new_comps)
+            segs_k = comps[s].get("segs") or []
+            if not segs_k:
+                ranges = _component_ranges(stroke)
+                if 0 <= s < len(ranges):
+                    a, b = ranges[s]
+                    segs_k = list(segs_of(stroke))[a:b]
+            global_offset += len(segs_k)
+            new_comps.append(comps[s])
+            continue
+        # Merge components s..e-1.
+        merged = dict(comps[s])
+        merged_segs = []
+        run_local_offset = 0
+        for k in range(s, e):
+            c = comps[k]
+            segs_k = c.get("segs") or []
+            if not segs_k:
+                ranges = _component_ranges(stroke)
+                if 0 <= k < len(ranges):
+                    a, b = ranges[k]
+                    segs_k = list(segs_of(stroke))[a:b]
+            segs_k = list(segs_k)
+            if merged_segs and segs_k:
+                # Junction between previous and this component inside the merged run.
+                join_junction_seg_indices.add(global_offset + run_local_offset - 1)
+            merged_segs.extend(segs_k)
+            run_local_offset += len(segs_k)
+        merged["segs"] = merged_segs
+        # A joined curve is a new structural unit; raw points from pre-split
+        # pieces were cleared on split and can't represent the whole.
+        merged["raw_points"] = []
+        new_idx = len(new_comps)
+        for k in range(s, e):
+            index_map[k] = new_idx
+        new_comps.append(merged)
+        global_offset += run_local_offset
+
+    out = _copy_stroke(stroke)
+    out["components"] = new_comps
+    # Keep top-level segs consistent with components.
+    all_segs = []
+    for c in new_comps:
+        all_segs.extend(list(c.get("segs") or []))
+    if all_segs:
+        out["segs"] = all_segs
+    # Enforce symmetry at internal join junctions: nodes that are not end/start
+    # of a curve must be symmetrical. Joining makes former endpoints interior, so
+    # mirror handles at the join (shape may change, which is acceptable).
+    corners = set(_corners(out))
+    segs_list = [list(s) for s in segs_of(out)]
+    n_segs = len(segs_list)
+    for i in sorted(join_junction_seg_indices):
+        if i < 0 or i + 1 >= n_segs:
+            continue
+        # Junction between seg i (p3/c2) and seg i+1 (p0/c1).
+        corners.discard((i, "p3"))
+        corners.discard((i + 1, "p0"))
+        anchor = segs_list[i][3]
+        # Keep left outgoing handle, mirror it to the right incoming handle.
+        segs_list[i + 1][1] = _mirror_handle(anchor, segs_list[i][2])
+        segs_list[i + 1][0] = anchor
+        segs_list[i][3] = anchor
+    if join_junction_seg_indices:
+        out["segs"] = [tuple(s) for s in segs_list]
+        # keep component segs consistent
+        pos = 0
+        for c in new_comps:
+            k = len(c.get("segs") or [])
+            c["segs"] = list(out["segs"][pos:pos + k])
+            pos += k
+        out["components"] = new_comps
+        out = _set_corners(out, corners)
+    # Structural change: clear hidden segs for safety (consistent with redraw).
+    out["hidden_segs"] = set()
+    # Point widths are keyed by segment indices; after a structural merge of
+    # components the global seg layout is unchanged, so keep them as-is.
+    return out, index_map
+

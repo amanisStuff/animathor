@@ -159,7 +159,7 @@ def draw_stroke_path_distorted(ctx, stroke):
         ctx.close_path()
     return True
 
-def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, selected_index=None, selected_indices=None, edit_mode=False, selection_submode="transform", selected_curve=None, snap_kind="connect", redrawing_curve=None, ref_img=None, view_zoom=None, view_pan=None, pivot_pos=None, for_export=False, transform_handle_mode="scale"):
+def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, selected_index=None, selected_indices=None, edit_mode=False, selection_submode="transform", selected_curve=None, selected_curves=None, snap_kind="connect", redrawing_curve=None, ref_img=None, view_zoom=None, view_pan=None, pivot_pos=None, for_export=False, transform_handle_mode="scale"):
     # Backward compat: selected_index (single) or selected_indices (collection)
     if selected_indices is None and selected_index is not None:
         selected_indices = selected_index
@@ -429,25 +429,31 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
     # Draw selection overlays (nodes for single selection, combined bbox for transform)
     if edit_mode and sel_set:
         selected_in_range = [i for i in sel_set if 0 <= i < len(strokes)]
-        # Highlight selected stroke/component in curve edit mode
-        if selection_submode == "curve" and selected_curve is not None:
-            si, comp_i = selected_curve
-            if si in selected_in_range and 0 <= si < len(strokes):
+        # Highlight selected stroke/component(s) in curve edit mode
+        if selection_submode == "curve":
+            sel_curves = selected_curves if selected_curves else (([selected_curve] if selected_curve is not None else []))
+            for scv in sel_curves:
+                try:
+                    si, comp_i = scv
+                except Exception:
+                    continue
+                if si not in selected_in_range or not (0 <= si < len(strokes)):
+                    continue
                 segs = segs_of(strokes[si])
                 ranges = _component_ranges(strokes[si])
-                if 0 <= comp_i < len(ranges):
-                    s0, s1 = ranges[comp_i]
-                    comp_range = range(s0, min(s1, len(segs)))
-                    # highlight component curve (node editing moved to Nodes mode)
-                    for seg_i in comp_range:
-                        p0, c1, c2, p3 = segs[seg_i]
-                        ctx.new_path()
-                        ctx.move_to(p0[0], p0[1])
-                        ctx.curve_to(c1[0], c1[1], c2[0], c2[1], p3[0], p3[1])
-                        ctx.set_source_rgba(1.0, 0.45, 0.1, 0.9)
-                        w = strokes[si].get("stroke_width", 3.0) if isinstance(strokes[si], dict) else 3.0
-                        ctx.set_line_width(max(4.0, w + 2.0))
-                        ctx.stroke()
+                if not (0 <= comp_i < len(ranges)):
+                    continue
+                s0, s1 = ranges[comp_i]
+                comp_range = range(s0, min(s1, len(segs)))
+                for seg_i in comp_range:
+                    p0, c1, c2, p3 = segs[seg_i]
+                    ctx.new_path()
+                    ctx.move_to(p0[0], p0[1])
+                    ctx.curve_to(c1[0], c1[1], c2[0], c2[1], p3[0], p3[1])
+                    ctx.set_source_rgba(1.0, 0.45, 0.1, 0.9)
+                    w = strokes[si].get("stroke_width", 3.0) if isinstance(strokes[si], dict) else 3.0
+                    ctx.set_line_width(max(4.0, w + 2.0))
+                    ctx.stroke()
         if selection_submode == "nodes" and len(selected_in_range) == 1:
             idx = selected_in_range[0]
             segs = segs_of(strokes[idx])

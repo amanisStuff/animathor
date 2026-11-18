@@ -356,13 +356,20 @@ def _insert_cut_nodes(stroke, cuts):
     out = _copy_stroke(stroke)
     out["segs"] = new_segs
 
-    # Anchors travel with their segment; cut nodes stay smooth (tangent
-    # continuous) because both halves come from the same cubic.
+    # Anchors travel with their segment. Newly created cut/split nodes become
+    # the start/end of the resulting curve components, so they should not be
+    # forced symmetrical (endpoints of curves need not be symmetrical).
     corners = set()
     for si, name in _corners(stroke):
         if si in seg_map:
             first, last = seg_map[si]
             corners.add((first if name == "p0" else last, name))
+    # Interior cut nodes: boundaries between split pieces of a segment.
+    for si, ts in params_by_seg.items():
+        first, last = seg_map[si]
+        for k in range(first, last):
+            corners.add((k, "p3"))
+            corners.add((k + 1, "p0"))
     out["corner_anchors"] = corners
 
     hidden = set()

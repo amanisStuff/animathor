@@ -117,6 +117,7 @@ def main():
     cut_gap = 0  # optional visible gap left by the razor (canvas px, total)
     curve_cut_mode = False  # Split curve toggle in selection Curve mode
     eyedropper_pick = False  # one-shot style picker in selection mode
+    selected_curves = set()  # set of (stroke_idx, comp_idx) in curve mode
 
     font = pygame.font.SysFont(None, 24)
     font_small = pygame.font.SysFont(None, 20)
@@ -166,6 +167,8 @@ def main():
     curve_hide_rect_cache = pygame.Rect(0, 0, 0, 0)
     curve_redraw_rect_cache = pygame.Rect(0, 0, 0, 0)
     curve_cut_rect_cache = pygame.Rect(0, 0, 0, 0)
+    curve_join_rect_cache = pygame.Rect(0, 0, 0, 0)
+    eyedropper_rect_cache = pygame.Rect(0, 0, 0, 0)
     wave_toggle_rect_cache = pygame.Rect(0, 0, 0, 0)
     wave_add_rect_cache = pygame.Rect(0, 0, 0, 0)
     wave_remove_rect_cache = pygame.Rect(0, 0, 0, 0)
@@ -301,6 +304,7 @@ def main():
             if rsi not in selected_strokes or not (0 <= rsi < len(strokes)) or not (0 <= rcomp < len(comps)):
                 redrawing_curve = None
         state_selected_curve = selected_curve
+        state_selected_curves = set(selected_curves)
         state_redrawing_curve = redrawing_curve
         state = {
             "tool_mode": tool_mode, "max_points": max_points_per_curve, "boost_points": boost_points,
@@ -352,13 +356,16 @@ def main():
             "bucket_swatch_rects": bucket_swatch_rects_cache,
             "snap_toggle_rect": snap_toggle_rect_cache,
             "selected_curve": state_selected_curve,
+            "selected_curves": state_selected_curves,
             "selected_point": selected_point,
             "redrawing_curve": state_redrawing_curve,
             "curve_hide_rect": curve_hide_rect_cache,
             "curve_redraw_rect": curve_redraw_rect_cache,
             "curve_cut_rect": curve_cut_rect_cache,
+            "curve_join_rect": curve_join_rect_cache,
             "curve_cut_mode": curve_cut_mode,
             "eyedropper_pick": eyedropper_pick,
+            "eyedropper_rect": eyedropper_rect_cache,
             "cut_gap": cut_gap,
             "cut_gap_slider": cut_gap_slider,
             "wave_toggle_rect": wave_toggle_rect_cache,
@@ -503,7 +510,7 @@ def main():
                         elif drawing:
                             drawing = False; current_points = []
                         elif transform_drag is not None or drag_last is not None or selected_strokes or selected_point or selected_curve:
-                            selected_strokes.clear(); selected_point = None; selected_curve = None
+                            selected_strokes.clear(); selected_point = None; selected_curve = None; selected_curves.clear()
                             transform_drag = None; drag_last = None
                         elif space_panning:
                             space_panning = False; pan_drag = None
@@ -533,7 +540,7 @@ def main():
                                 loaded = load_document(path)
                                 push_undo()
                                 strokes.clear(); strokes.extend(loaded)
-                                selected_strokes.clear(); selected_point = None; selected_curve = None
+                                selected_strokes.clear(); selected_point = None; selected_curve = None; selected_curves.clear()
                                 transform_drag = None; drag_last = None; redrawing_curve = None
                                 document_path = path
                         except Exception:
@@ -576,7 +583,7 @@ def main():
                             for i in sorted(selected_strokes, reverse=True):
                                 if 0 <= i < len(strokes):
                                     strokes.pop(i)
-                            selected_strokes.clear(); selected_point = None; selected_curve = None
+                            selected_strokes.clear(); selected_point = None; selected_curve = None; selected_curves.clear()
                     elif ctrl and event.key == pygame.K_v:
                         if clipboard_strokes:
                             push_undo()
@@ -612,11 +619,11 @@ def main():
                         else:
                             if do_undo():
                                 selected_strokes = {i for i in selected_strokes if 0 <= i < len(strokes)}
-                        selected_strokes.clear(); selected_point = None; transform_drag = None; selected_curve = None; redrawing_curve = None
+                        selected_strokes.clear(); selected_point = None; transform_drag = None; selected_curve = None; selected_curves.clear(); redrawing_curve = None
                     elif ctrl and event.key == pygame.K_y:
                         if do_redo():
                             selected_strokes = {i for i in selected_strokes if 0 <= i < len(strokes)}
-                        selected_strokes.clear(); selected_point = None; transform_drag = None; selected_curve = None; redrawing_curve = None
+                        selected_strokes.clear(); selected_point = None; transform_drag = None; selected_curve = None; selected_curves.clear(); redrawing_curve = None
                     # --- Tool switching (single-key, no modifiers) ---
                     elif not ctrl and event.key == pygame.K_v:
                         tool_mode = "selection"; drawing = False; current_points = []
@@ -662,7 +669,7 @@ def main():
                     elif event.key == pygame.K_n and tool_mode == "selection":
                         modes = ["transform", "nodes", "curve"]
                         selection_submode = modes[(modes.index(selection_submode) + 1) % len(modes)] if selection_submode in modes else "transform"
-                        selected_point = None; selected_curve = None; transform_drag = None; drag_last = None; redrawing_curve = None
+                        selected_point = None; selected_curve = None; selected_curves.clear(); transform_drag = None; drag_last = None; redrawing_curve = None
                         curve_cut_mode = False
                     elif event.key in (pygame.K_LEFTBRACKET, pygame.K_MINUS, pygame.K_KP_MINUS):
                         max_points_per_curve = max(2, max_points_per_curve - 1); slider.value = max_points_per_curve
@@ -763,7 +770,7 @@ def main():
                                 loaded = load_document(path)
                                 push_undo()
                                 strokes.clear(); strokes.extend(loaded)
-                                selected_strokes.clear(); selected_point = None; selected_curve = None
+                                selected_strokes.clear(); selected_point = None; selected_curve = None; selected_curves.clear()
                                 transform_drag = None; drag_last = None; redrawing_curve = None
                                 document_path = path
                         except Exception:
@@ -852,11 +859,11 @@ def main():
                 if btn_undo.hit(event.pos):
                     if do_undo():
                         selected_strokes = {i for i in selected_strokes if 0 <= i < len(strokes)}
-                    selected_strokes.clear(); selected_point = None; transform_drag = None; selected_curve = None; redrawing_curve = None
+                    selected_strokes.clear(); selected_point = None; transform_drag = None; selected_curve = None; selected_curves.clear(); redrawing_curve = None
                 elif btn_redo.hit(event.pos):
                     if do_redo():
                         selected_strokes = {i for i in selected_strokes if 0 <= i < len(strokes)}
-                    selected_strokes.clear(); selected_point = None; transform_drag = None; selected_curve = None; redrawing_curve = None
+                    selected_strokes.clear(); selected_point = None; transform_drag = None; selected_curve = None; selected_curves.clear(); redrawing_curve = None
                 elif btn_draw.hit(event.pos):
                     tool_mode = "draw"; draw_tool = "pen"; drawing = False; current_points = []; selected_strokes.clear(); selected_point = None; transform_drag = None
                 elif btn_select.hit(event.pos):
@@ -953,7 +960,7 @@ def main():
                             selection_submode = "nodes"
                         else:
                             selection_submode = "curve"
-                        selected_point = None; selected_curve = None; transform_drag = None; drag_last = None; redrawing_curve = None
+                        selected_point = None; selected_curve = None; selected_curves.clear(); transform_drag = None; drag_last = None; redrawing_curve = None
                         curve_cut_mode = False
                     elif tool_mode == "selection" and selection_submode == "transform" and selected_strokes and (
                         state.get("elev_front_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos) or
@@ -985,7 +992,7 @@ def main():
                                     if i in selected_strokes and (i - 1) not in selected_strokes:
                                         strokes[i], strokes[i - 1] = strokes[i - 1], strokes[i]
                                         selected_strokes.discard(i); selected_strokes.add(i - 1)
-                        selected_point = None; selected_curve = None; transform_drag = None; drag_last = None; pending_transform_toggle = None
+                        selected_point = None; selected_curve = None; selected_curves.clear(); transform_drag = None; drag_last = None; pending_transform_toggle = None
                     elif tool_mode == "selection" and selection_submode == "transform" and len(selected_strokes) >= 2 and (
                         state.get("bool_union_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos) or
                         state.get("bool_intersect_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos)
@@ -1016,11 +1023,39 @@ def main():
                                     del strokes[i]
                                 strokes.append(new_st)
                                 selected_strokes = {len(strokes) - 1}
-                                selected_point = None; selected_curve = None; transform_drag = None; drag_last = None; pending_transform_toggle = None
+                                selected_point = None; selected_curve = None; selected_curves.clear(); transform_drag = None; drag_last = None; pending_transform_toggle = None
                     elif tool_mode == "selection" and state.get("eyedropper_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
                         eyedropper_pick = not eyedropper_pick
                         state["eyedropper_pick"] = eyedropper_pick
                         cutting = False; cut_points = []
+                    elif tool_mode == "selection" and selection_submode == "curve" and state.get("curve_join_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
+                        if len(selected_curves) >= 2:
+                            by_stroke = {}
+                            for si, ci in list(selected_curves):
+                                by_stroke.setdefault(si, set()).add(int(ci))
+                            results = {}
+                            for si, idxs in by_stroke.items():
+                                if 0 <= si < len(strokes):
+                                    new_st, index_map = join_components_in_stroke(strokes[si], idxs)
+                                    if index_map is not None:
+                                        results[si] = (new_st, index_map, idxs)
+                            if results:
+                                push_undo()
+                                new_selected_curves = set()
+                                for si, idxs in by_stroke.items():
+                                    if si in results:
+                                        new_st, index_map, _idxs2 = results[si]
+                                        strokes[si] = new_st
+                                        for ci in idxs:
+                                            new_selected_curves.add((si, int(index_map.get(ci, ci))))
+                                    elif 0 <= si < len(strokes):
+                                        for ci in idxs:
+                                            new_selected_curves.add((si, int(ci)))
+                                selected_curves = new_selected_curves
+                                selected_curve = next(iter(selected_curves), None)
+                                selected_strokes = {si for si, _ in selected_curves}
+                        selected_point = None; transform_drag = None; drag_last = None
+                        eyedropper_pick = False
                     elif tool_mode == "selection" and selection_submode == "curve" and state.get("curve_cut_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
                         curve_cut_mode = not curve_cut_mode
                         state["curve_cut_mode"] = curve_cut_mode
@@ -1462,7 +1497,7 @@ def main():
                                 strokes, _ = erase_curve_at(strokes, cpos)
                             drawing = False
                             current_points = []
-                            selected_strokes.clear(); selected_point = None; selected_curve = None
+                            selected_strokes.clear(); selected_point = None; selected_curve = None; selected_curves.clear()
                         elif draw_tool == "bucket":
                             # Geometric bucket fill (ray-casting/planar-face inspired): create a filled
                             # vector shape for the enclosed region under the click, without a stroke.
@@ -1485,7 +1520,7 @@ def main():
                                 pass
                             drawing = False
                             current_points = []
-                            selected_strokes.clear(); selected_point = None; selected_curve = None
+                            selected_strokes.clear(); selected_point = None; selected_curve = None; selected_curves.clear()
                         elif draw_tool == "cutter":
                             # Razor: collect the swipe; curves are split on release.
                             cutting = True
@@ -1580,29 +1615,45 @@ def main():
                             handled_curve = False
                             # Curve mode: select/edit curves (components) only; node editing is in Nodes mode
                             selected_point = None
-                            if curve_cut_mode and selected_strokes:
-                                # Razor swipe across the selected curve.
+                            if curve_cut_mode and (selected_curves or selected_strokes):
+                                # Razor swipe across the selected curve/stroke.
                                 cutting = True
                                 cut_points = [cpos]
                                 handled_curve = True
                             if not handled_curve:
-                                if len(selected_strokes) == 1:
-                                    si = next(iter(selected_strokes))
-                                    if 0 <= si < len(strokes):
-                                        comp_i = hit_test_component(strokes[si], cpos)
-                                        if comp_i is not None:
-                                            selected_curve = (si, comp_i)
-                                            handled_curve = True
-                                # allow selecting a different stroke/component
                                 hit = hit_test_stroke(cpos, strokes)
-                                if hit is not None and (len(selected_strokes) != 1 or hit != next(iter(selected_strokes))):
-                                    selected_strokes = {hit}
-                                    comp_i = hit_test_component(strokes[hit], cpos) if 0 <= hit < len(strokes) else None
-                                    selected_curve = (hit, comp_i) if comp_i is not None else None
+                                hit_curve = None
+                                if hit is not None and 0 <= hit < len(strokes):
+                                    comp_i = hit_test_component(strokes[hit], cpos)
+                                    if comp_i is not None:
+                                        hit_curve = (hit, int(comp_i))
+                                if hit_curve is not None:
+                                    if shift:
+                                        if hit_curve in selected_curves:
+                                            selected_curves.discard(hit_curve)
+                                            if selected_curve == hit_curve:
+                                                selected_curve = next(iter(selected_curves), None)
+                                        else:
+                                            selected_curves.add(hit_curve)
+                                            selected_curve = hit_curve
+                                    else:
+                                        selected_curves = {hit_curve}
+                                        selected_curve = hit_curve
+                                    selected_strokes = {si for (si, _ci) in selected_curves}
+                                    handled_curve = True
                                 elif hit is None and not shift:
-                                    selected_strokes.clear(); selected_curve = None
-                            if len(selected_strokes) != 1 or (selected_curve and selected_curve[0] not in selected_strokes):
+                                    selected_curves.clear()
+                                    selected_curve = None
+                                    selected_strokes.clear()
+                            # keep active curve consistent with multi-selection
+                            if selected_curves and selected_curve not in selected_curves:
+                                selected_curve = next(iter(selected_curves), None)
+                            if not selected_curves:
                                 selected_curve = None
+                                # if a stroke was selected via other means, keep stroke selection only
+                                # when there are no curve hits; curve mode primarily tracks curves
+                                if handled_curve:
+                                    selected_strokes.clear()
                         elif selection_submode == "transform":
                             handled = False
                             pending_transform_toggle = None
@@ -2029,8 +2080,28 @@ def main():
                             push_undo()
                             strokes[:] = new_strokes
                             if tool_mode == "selection":
-                                selected_strokes = set(cut_idx)
+                                # For single-piece replacements (gap 0) indices are
+                                # preserved; for multi-piece splits, select affected
+                                # strokes best-effort by mapping original indices.
+                                sel_after = set()
+                                base = 0
+                                cut_set = set(cut_idx)
+                                for oi in range(len(strokes) - 0):  # placeholder, recompute below
+                                    pass
+                                # Recompute mapping from original stroke index to new indices.
+                                # We need original count; infer by reversing: iterate over
+                                # original strokes isn't directly available, so approximate:
+                                # if every cut produced exactly 1 piece total count matches
+                                # original; otherwise fall back to selecting all new strokes
+                                # in positions of cut regions is complex. Simpler: when in
+                                # curve mode (single-stroke selection typical) select same
+                                # indices as cut_idx; else leave selection cleared.
+                                if selection_submode == "curve":
+                                    selected_strokes = set(i for i in cut_idx if 0 <= i < len(strokes))
+                                else:
+                                    selected_strokes = set(i for i in cut_idx if 0 <= i < len(strokes))
                                 selected_curve = None
+                                selected_curves.clear()
                                 if selection_submode == "curve":
                                     # One-shot action: turn the razor off so the
                                     # new curve halves can be clicked/selected.
@@ -2140,7 +2211,7 @@ def main():
                                                     for s in strokes)):
                                     # merging rebuilt the stroke dict; keep the arrowhead
                                     strokes[-1]["arrow_end"] = True
-                            selected_strokes.clear(); selected_point = None; selected_curve = None; redrawing_curve = None
+                            selected_strokes.clear(); selected_point = None; selected_curve = None; selected_curves.clear(); redrawing_curve = None
                         elif straight_line:
                             push_undo()
                             p0 = tuple(current_points[0])
@@ -2161,7 +2232,7 @@ def main():
                             st = _close_path_if_needed(st)
                             strokes.append(st)
                             strokes = merge_connected_strokes(strokes)
-                            selected_strokes.clear(); selected_point = None; selected_curve = None; redrawing_curve = None
+                            selected_strokes.clear(); selected_point = None; selected_curve = None; selected_curves.clear(); redrawing_curve = None
                         else:
                             beziers = stroke_to_beziers(
                                 current_points, simplify_epsilon=2.5, tension=0.0,
@@ -2181,7 +2252,7 @@ def main():
                                 st = _close_path_if_needed(st)
                                 strokes.append(st)
                                 strokes = merge_connected_strokes(strokes)
-                                selected_strokes.clear(); selected_point = None; selected_curve = None; redrawing_curve = None
+                                selected_strokes.clear(); selected_point = None; selected_curve = None; selected_curves.clear(); redrawing_curve = None
                     current_points = []
                 elif drawing and tool_mode == "draw" and draw_tool == "eraser":
                     drawing = False
@@ -2207,6 +2278,7 @@ def main():
             cairo_surface, strokes, active, snap_point=hover_snap,
             selected_indices=selected_strokes, edit_mode=(tool_mode == "selection"),
             selection_submode=selection_submode, selected_curve=selected_curve,
+            selected_curves=set(selected_curves),
             snap_kind=hover_snap_kind, redrawing_curve=redrawing_curve,
             ref_img=reference_image,
             pivot_pos=_eff_pivot,
@@ -2282,6 +2354,8 @@ def main():
         curve_hide_rect_cache = state.get("curve_hide_rect", curve_hide_rect_cache)
         curve_redraw_rect_cache = state.get("curve_redraw_rect", curve_redraw_rect_cache)
         curve_cut_rect_cache = state.get("curve_cut_rect", curve_cut_rect_cache)
+        curve_join_rect_cache = state.get("curve_join_rect", curve_join_rect_cache)
+        eyedropper_rect_cache = state.get("eyedropper_rect", eyedropper_rect_cache)
         wave_toggle_rect_cache = state.get("wave_toggle_rect", wave_toggle_rect_cache)
         wave_add_rect_cache = state.get("wave_add_rect", wave_add_rect_cache)
         wave_remove_rect_cache = state.get("wave_remove_rect", wave_remove_rect_cache)

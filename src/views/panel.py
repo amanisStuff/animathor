@@ -488,11 +488,43 @@ def draw_panel(screen, fonts, mouse_pos, state):
             state["bool_union_rect"] = pygame.Rect(0,0,0,0)
             state["bool_intersect_rect"] = pygame.Rect(0,0,0,0)
 
-        # Curve/stroke-edit controls (single selection in curve mode)
+        # Curve/stroke-edit controls
         state.setdefault("curve_hide_rect", pygame.Rect(0,0,0,0))
         state.setdefault("curve_redraw_rect", pygame.Rect(0,0,0,0))
         state.setdefault("curve_cut_rect", pygame.Rect(0,0,0,0))
-        if submode == "curve" and sel_count == 1 and sel_stroke is not None:
+        state.setdefault("curve_join_rect", pygame.Rect(0,0,0,0))
+        _sel_curves_panel = set(state.get("selected_curves") or [])
+        if not _sel_curves_panel and state.get("selected_curve"):
+            _sel_curves_panel = {state.get("selected_curve")}
+        if submode == "curve" and len(_sel_curves_panel) > 1:
+            screen.blit(font_small.render(f"Selected curves: {len(_sel_curves_panel)}", True, MUTED_COLOR), (x, y)); y += 22
+            screen.blit(font_small.render("Shift+click to add or remove curves.", True, MUTED_COLOR), (x, y)); y += 20
+            join_rect = pygame.Rect(x, y, PANEL_W - 40, 30)
+            state["curve_join_rect"] = join_rect
+            state["curve_hide_rect"] = pygame.Rect(0,0,0,0)
+            state["curve_redraw_rect"] = pygame.Rect(0,0,0,0)
+            state["curve_cut_rect"] = pygame.Rect(0,0,0,0)
+            bg = BUTTON_HOVER if join_rect.collidepoint(mouse_pos) else BUTTON_BG
+            pygame.draw.rect(screen, bg, join_rect, border_radius=6)
+            pygame.draw.rect(screen, BUTTON_BORDER, join_rect, 1, border_radius=6)
+            jlabel = font_small.render("Join curves", True, TEXT_COLOR)
+            screen.blit(jlabel, jlabel.get_rect(center=join_rect.center))
+            _queue_tip(join_rect, None, "Join selected curves (adjacent components)")
+            y += 38
+            _gap_slider = state.get("cut_gap_slider")
+            if _gap_slider is not None:
+                _gap_slider.track.width = 0
+            state["wave_toggle_rect"] = pygame.Rect(0,0,0,0)
+            state["wave_add_rect"] = pygame.Rect(0,0,0,0)
+            state["wave_remove_rect"] = pygame.Rect(0,0,0,0)
+            state["wave_slider_rects"] = {}
+            state["wave_shape_rects"] = {}
+            state["wave_row_rects"] = []
+            state["wave_formula_rect"] = pygame.Rect(0,0,0,0)
+            state["wave_custom_box_rect"] = pygame.Rect(0,0,0,0)
+            state["wave_smooth_rect"] = pygame.Rect(0,0,0,0)
+            state["wave_reverse_rect"] = pygame.Rect(0,0,0,0)
+        elif submode == "curve" and sel_count == 1 and sel_stroke is not None:
             sc = state.get("selected_curve")
             if sc and sc[0] in sel_strokes:
                 comp_i = sc[1]
@@ -874,6 +906,7 @@ def draw_panel(screen, fonts, mouse_pos, state):
                 state["curve_hide_rect"] = pygame.Rect(0,0,0,0)
                 state["curve_redraw_rect"] = pygame.Rect(0,0,0,0)
                 state["curve_cut_rect"] = pygame.Rect(0,0,0,0)
+                state["curve_join_rect"] = pygame.Rect(0,0,0,0)
                 _gap_slider = state.get("cut_gap_slider")
                 if _gap_slider is not None:
                     _gap_slider.track.width = 0
@@ -883,10 +916,26 @@ def draw_panel(screen, fonts, mouse_pos, state):
                 state["wave_slider_rects"] = {}
                 state["wave_shape_rects"] = {}
                 state["wave_row_rects"] = []
+        elif submode == "curve":
+            screen.blit(font_small.render("Click a stroke to edit separately", True, MUTED_COLOR), (x, y)); y += 24
+            state["curve_hide_rect"] = pygame.Rect(0,0,0,0)
+            state["curve_redraw_rect"] = pygame.Rect(0,0,0,0)
+            state["curve_cut_rect"] = pygame.Rect(0,0,0,0)
+            state["curve_join_rect"] = pygame.Rect(0,0,0,0)
+            _gap_slider = state.get("cut_gap_slider")
+            if _gap_slider is not None:
+                _gap_slider.track.width = 0
+            state["wave_toggle_rect"] = pygame.Rect(0,0,0,0)
+            state["wave_add_rect"] = pygame.Rect(0,0,0,0)
+            state["wave_remove_rect"] = pygame.Rect(0,0,0,0)
+            state["wave_slider_rects"] = {}
+            state["wave_shape_rects"] = {}
+            state["wave_row_rects"] = []
         else:
             state["curve_hide_rect"] = pygame.Rect(0,0,0,0)
             state["curve_redraw_rect"] = pygame.Rect(0,0,0,0)
             state["curve_cut_rect"] = pygame.Rect(0,0,0,0)
+            state["curve_join_rect"] = pygame.Rect(0,0,0,0)
             _gap_slider = state.get("cut_gap_slider")
             if _gap_slider is not None:
                 _gap_slider.track.width = 0
@@ -1168,9 +1217,10 @@ def draw_panel(screen, fonts, mouse_pos, state):
             ]
         else:
             help_lines = [
-                "Click a stroke/component to select.",
-                "Drag its points/handles to edit separately.",
-                "Redraw replaces selected stroke/component.",
+                "Click a curve/component to select.",
+                "Shift+click to select multiple curves.",
+                "Select multiple curves and use Join to merge.",
+                "Redraw/Split edit the active curve.",
                 "N: cycle Transform/Nodes/Curve.",
             ]
 
