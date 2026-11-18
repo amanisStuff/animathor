@@ -294,7 +294,7 @@ def _stroke_needs_variable_width(stroke, seg_indices=None):
     return False
 
 def redraw_stroke_component(stroke, comp_index, drawn_points):
-    """Redraw an original stroke component with its saved settings and same segment count."""
+    """Redraw an original stroke component with its saved settings."""
     if not isinstance(stroke, dict):
         return stroke
     comps = _stroke_components(stroke)
@@ -312,16 +312,54 @@ def redraw_stroke_component(stroke, comp_index, drawn_points):
     )
     if not new_segs:
         return stroke
-    # Rebuild full stroke segs by replacing this component's range
     ranges = _component_ranges(stroke)
     if comp_index >= len(ranges):
         return stroke
     s0, s1 = ranges[comp_index]
     all_segs = list(segs_of(stroke))
-    # if lengths differ, adjust (keep as close as possible)
+    n_old = len(all_segs)
+    new_segs = [tuple(s) for s in new_segs]
+
+    # Preserve connectivity and corner status at component boundaries.
+    start_corner = is_corner_anchor(stroke, s0, "p0") if s0 < n_old else False
+    end_corner = is_corner_anchor(stroke, s1 - 1, "p3") if s1 - 1 < n_old else False
+    if s0 > 0:
+        prev_end = all_segs[s0 - 1][3]
+        ns = list(new_segs[0])
+        ns[0] = tuple(prev_end)
+        new_segs[0] = tuple(ns)
+    if s1 < n_old:
+        next_start = all_segs[s1][0]
+        ns = list(new_segs[-1])
+        ns[3] = tuple(next_start)
+        new_segs[-1] = tuple(ns)
+    # Closed-stroke seam: if this component spans the whole stroke, keep loop closed.
+    if s0 == 0 and s1 == n_old and n_old >= 1 and len(new_segs) >= 1:
+        first_p = new_segs[0][0]
+        ns = list(new_segs[-1])
+        ns[3] = tuple(first_p)
+        new_segs[-1] = tuple(ns)
+
+    delta = len(new_segs) - (s1 - s0)
+    old_corners = set(_corners(stroke))
+    new_corners = set()
+    for (si, name) in old_corners:
+        if si < s0:
+            new_corners.add((si, name))
+        elif si >= s1:
+            new_corners.add((si + delta, name))
+        else:
+            # Anchors inside the replaced range: keep only boundary corners.
+            if si == s0 and name == "p0" and start_corner:
+                new_corners.add((s0, "p0"))
+            elif si == s1 - 1 and name == "p3" and end_corner:
+                new_corners.add((s0 + len(new_segs) - 1, "p3"))
+
     all_segs[s0:s1] = list(new_segs)
     out = _copy_stroke(stroke)
     out["segs"] = all_segs
+    out["corner_anchors"] = new_corners
+
     comps2 = _stroke_components(out)
     if 0 <= comp_index < len(comps2):
         comps2[comp_index] = dict(comps2[comp_index])
