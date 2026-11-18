@@ -308,6 +308,32 @@ def _point_in_poly_ray(pt, poly):
     return inside
 
 
+def _poly_winding_number(pt, poly):
+    """Winding number of a point with respect to a polygon."""
+    x, y = pt
+    winding = 0
+    n = len(poly)
+    if n < 3:
+        return 0
+    for i in range(n):
+        x1, y1 = poly[i]
+        x2, y2 = poly[(i + 1) % n]
+        if y1 <= y:
+            if y2 > y:  # upward crossing
+                if (x2 - x1) * (y - y1) - (x - x1) * (y2 - y1) > 0:
+                    winding += 1
+        else:
+            if y2 <= y:  # downward crossing
+                if (x2 - x1) * (y - y1) - (x - x1) * (y2 - y1) < 0:
+                    winding -= 1
+    return winding
+
+
+def _point_in_poly_nonzero(pt, poly):
+    """Non-zero winding rule point-in-polygon test."""
+    return _poly_winding_number(pt, poly) != 0
+
+
 def _face_containing_point(nodes, edges, point):
     """Find the smallest bounded face that contains `point`.
 

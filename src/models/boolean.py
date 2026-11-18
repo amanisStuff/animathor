@@ -78,41 +78,52 @@ def _faces_with_ids(nodes, edges):
 
 
 def _face_probe_point(face_pts):
-    """Return a point just to the left of a directed face cycle.
+    """Return a point inside the region bordered by a directed face cycle.
 
-    A face with a hole is split by half-edge traversal into an outer cycle and
-    a reversed inner cycle; the vertex centroid of either can land in a
-    different region. A probe slightly left of the cycle's longest edge is
-    always inside the region that actually borders that cycle, for both CCW
-    (solid) and CW (hole) cycles.
+    Tries points slightly to the left of long edges (inside the face by
+    half-edge convention) and verifies containment to stay robust for thin
+    faces. For the unbounded face the bordered region lies outside the vertex
+    polygon, so verification accounts for face orientation.
     """
     n = len(face_pts)
     if n < 2:
         return face_pts[0] if face_pts else (0.0, 0.0)
-    best_i, best_len = 0, -1.0
+    face_area = _fill._signed_area(face_pts)
+    edges = []
     for i in range(n):
         a, b = face_pts[i], face_pts[(i + 1) % n]
         length = math.hypot(b[0] - a[0], b[1] - a[1])
-        if length > best_len:
-            best_len, best_i = length, i
-    a, b = face_pts[best_i], face_pts[(best_i + 1) % n]
-    dx, dy = b[0] - a[0], b[1] - a[1]
-    length = math.hypot(dx, dy)
-    if length < 1e-9:
-        return a
-    mx, my = (a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5
-    nx, ny = -dy / length, dx / length  # left normal of the directed edge
-    offset = min(1.0, length * 0.25)
-    return (mx + nx * offset, my + ny * offset)
+        if length > 1e-9:
+            edges.append((length, i, a, b))
+    edges.sort(reverse=True)
+    for length, _i, a, b in edges[:8]:
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        mx, my = (a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5
+        nx, ny = -dy / length, dx / length  # left normal of the directed edge
+        for frac in (0.2, 0.1, 0.05, 0.02, 0.01):
+            offset = max(0.05, min(0.75, length * frac))
+            probe = (mx + nx * offset, my + ny * offset)
+            in_poly = _fill._point_in_poly_ray(probe, face_pts)
+            if (face_area >= 0 and in_poly) or (face_area < 0 and not in_poly):
+                return probe
+    # Fallback: centroid for bounded faces; for unbounded face, step outside.
+    cx = sum(p[0] for p in face_pts) / n
+    cy = sum(p[1] for p in face_pts) / n
+    if face_area < 0:
+        # push well outside the vertex polygon's bbox
+        minx = min(p[0] for p in face_pts)
+        miny = min(p[1] for p in face_pts)
+        return (minx - 10.0, miny - 10.0)
+    return (cx, cy)
 
 
 def _point_in_shape(pt, shape_polylines):
-    """Even-odd inside test across all boundary polylines of one shape."""
-    inside = False
+    """Non-zero winding inside test across all boundary polylines of one shape."""
+    winding = 0
     for pl in shape_polylines:
-        if len(pl) >= 3 and _fill._point_in_poly_ray(pt, pl):
-            inside = not inside
-    return inside
+        if len(pl) >= 3:
+            winding += _fill._poly_winding_number(pt, pl)
+    return winding != 0
 
 
 def boolean_loops(shapes, op=UNION, samples=18):
