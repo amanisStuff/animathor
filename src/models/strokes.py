@@ -14,7 +14,7 @@ for _n in dir(_dep):
 
 
 def new_stroke(segs, stroke_color=(0.1, 0.1, 0.15), stroke_width=3.0, fill_color=None, corner_anchors=None, algorithm="fit"):
-    return {
+    out = {
         "segs": segs,
         "stroke_color": stroke_color,
         "stroke_width": float(stroke_width),
@@ -25,6 +25,11 @@ def new_stroke(segs, stroke_color=(0.1, 0.1, 0.15), stroke_width=3.0, fill_color
         "algorithm": algorithm or "fit",
         "hidden_segs": set(),
     }
+    try:
+        out["obb"] = compute_stroke_obb(out)
+    except Exception:
+        pass
+    return out
 
 def segs_of(stroke):
     return stroke["segs"] if isinstance(stroke, dict) else stroke
@@ -135,6 +140,10 @@ def redraw_curve_segment(stroke, seg_index, drawn_points):
     out = _copy_stroke(stroke) if isinstance(stroke, dict) else new_stroke(segs)
     if isinstance(out, dict):
         out["segs"] = segs
+        try:
+            out["obb"] = compute_stroke_obb(out)
+        except Exception:
+            pass
     return out
 
 def _component_ranges(stroke):
@@ -321,6 +330,10 @@ def redraw_stroke_component(stroke, comp_index, drawn_points):
     out["components"] = comps2
     # clear hidden segs for simplicity after structural change
     out["hidden_segs"] = set()
+    try:
+        out["obb"] = compute_stroke_obb(out)
+    except Exception:
+        pass
     return out
 
 def _is_closed_segs(segs, eps=6.0):
@@ -359,6 +372,9 @@ def translate_stroke(stroke, dx, dy):
     if isinstance(stroke, dict):
         out = dict(stroke)
         out["segs"] = moved
+        obb = get_stroke_obb(out)
+        if obb is not None:
+            out["obb"] = translate_obb(obb, dx, dy)
         return out
     return moved
 
@@ -379,6 +395,11 @@ def transform_stroke(stroke, cx, cy, angle_rad, scale_x, scale_y=None):
     if isinstance(stroke, dict):
         out = dict(stroke)
         out["segs"] = moved
+        obb = get_stroke_obb(out)
+        if obb is not None:
+            out["obb"] = transform_obb_corners(
+                obb, lambda pt: apply_affine(pt, cx, cy, ca, sa, scale_x, scale_y)
+            )
         return out
     return moved
 
@@ -395,7 +416,11 @@ def scale_stroke_local(stroke, fixed_pt, ang, su, sv):
     segs = segs_of(stroke)
     moved = [(_xf(p0), _xf(c1), _xf(c2), _xf(p3)) for (p0, c1, c2, p3) in segs]
     if isinstance(stroke, dict):
-        out = dict(stroke); out["segs"] = moved; return out
+        out = dict(stroke); out["segs"] = moved
+        obb = get_stroke_obb(out)
+        if obb is not None:
+            out["obb"] = scale_obb_local(obb, fixed_pt, ang, su, sv)
+        return out
     return moved
 
 def rotate_stroke_around(stroke, cx, cy, angle_rad):
@@ -407,7 +432,11 @@ def rotate_stroke_around(stroke, cx, cy, angle_rad):
     segs = segs_of(stroke)
     moved = [(_xf(p0), _xf(c1), _xf(c2), _xf(p3)) for (p0, c1, c2, p3) in segs]
     if isinstance(stroke, dict):
-        out = dict(stroke); out["segs"] = moved; return out
+        out = dict(stroke); out["segs"] = moved
+        obb = get_stroke_obb(out)
+        if obb is not None:
+            out["obb"] = rotate_obb(obb, cx, cy, angle_rad)
+        return out
     return moved
 
 def skew_stroke_local(stroke, center_pt, ang, skew_x, skew_y):
@@ -426,7 +455,11 @@ def skew_stroke_local(stroke, center_pt, ang, skew_x, skew_y):
     segs = segs_of(stroke)
     moved = [(_xf(p0), _xf(c1), _xf(c2), _xf(p3)) for (p0, c1, c2, p3) in segs]
     if isinstance(stroke, dict):
-        out = dict(stroke); out["segs"] = moved; return out
+        out = dict(stroke); out["segs"] = moved
+        obb = get_stroke_obb(out)
+        if obb is not None:
+            out["obb"] = skew_obb_local(obb, center_pt, ang, skew_x, skew_y)
+        return out
     return moved
 
 def mirror_stroke(stroke, cx, cy, axis="h"):
@@ -442,6 +475,9 @@ def mirror_stroke(stroke, cx, cy, axis="h"):
     if isinstance(stroke, dict):
         out = _copy_stroke(stroke)
         out["segs"] = moved
+        obb = get_stroke_obb(out)
+        if obb is not None:
+            out["obb"] = mirror_obb(obb, cx, cy, axis)
         # segment geometry is mirrored but topology/indices are unchanged
         return out
     return moved
@@ -524,6 +560,10 @@ def set_stroke_point(stroke, seg_index, point_name, new_pos):
     if isinstance(stroke, dict):
         out = dict(stroke)
         out["segs"] = new_segs
+        try:
+            out["obb"] = compute_stroke_obb(out)
+        except Exception:
+            pass
         return out
     return new_segs
 
@@ -575,6 +615,10 @@ def _with_segs(stroke, segs):
     if isinstance(stroke, dict):
         out = dict(stroke)
         out["segs"] = segs
+        try:
+            out["obb"] = compute_stroke_obb(out)
+        except Exception:
+            pass
         return out
     return segs
 
@@ -591,6 +635,11 @@ def _copy_stroke(stroke):
         out["cut_ends"] = dict(out.get("cut_ends") or {})
     if "components" in out:
         out["components"] = [dict(c) for c in (out.get("components") or [])]
+    if "obb" in out and isinstance(out["obb"], dict):
+        obb = dict(out["obb"])
+        if "corners" in obb and obb["corners"] is not None:
+            obb["corners"] = [tuple(p) for p in obb["corners"]]
+        out["obb"] = obb
     return out
 
 def _cut_ends(stroke):

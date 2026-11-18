@@ -524,9 +524,143 @@ def _obb_to_aabb(obb):
     xs = [p[0] for p in corners]; ys = [p[1] for p in corners]
     return (min(xs), min(ys), max(xs), max(ys))
 
+def _obb_from_corners(corners):
+    """Build OBB dict (cx,cy,hw,hh,angle,corners) from 4 corner points in order."""
+    if not corners or len(corners) != 4:
+        return None
+    (x0, y0), (x1, y1), (x2, y2), (x3, y3) = corners
+    cx = (x0 + x1 + x2 + x3) / 4.0
+    cy = (y0 + y1 + y2 + y3) / 4.0
+    ex, ey = x1 - x0, y1 - y0
+    fx, fy = x3 - x0, y3 - y0
+    hw = math.hypot(ex, ey) / 2.0
+    hh = math.hypot(fx, fy) / 2.0
+    angle = math.atan2(ey, ex) if (abs(ex) > 1e-12 or abs(ey) > 1e-12) else 0.0
+    return {"cx": cx, "cy": cy, "hw": hw, "hh": hh, "angle": angle, "corners": list(corners)}
+
+
+def _obb_from_aabb(aabb):
+    """Axis-aligned (straight) OBB from (x1,y1,x2,y2)."""
+    if aabb is None:
+        return None
+    x1, y1, x2, y2 = aabb
+    cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+    hw, hh = (x2 - x1) / 2.0, (y2 - y1) / 2.0
+    corners = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
+    return {"cx": cx, "cy": cy, "hw": hw, "hh": hh, "angle": 0.0, "corners": corners}
+
+
+def compute_stroke_obb(stroke):
+    """Straight (axis-aligned) bounding box of stroke geometry at creation time."""
+    bb = stroke_bbox(stroke)
+    if bb is None:
+        return None
+    return _obb_from_aabb(bb)
+
+
+def _transform_point_affine_local(pt, origin, ang, sx, sy, tx=0.0, ty=0.0):
+    """Scale in local axes (ang) around origin, then translate (tx,ty)."""
+    ox, oy = origin
+    dx, dy = pt[0] - ox, pt[1] - oy
+    ca, sa = math.cos(ang), math.sin(ang)
+    lx = dx * ca + dy * sa
+    ly = -dx * sa + dy * ca
+    lx *= sx; ly *= sy
+    x = ox + lx * ca - ly * sa + tx
+    y = oy + lx * sa + ly * ca + ty
+    return (x, y)
+
+
+def transform_obb_corners(obb, xf):
+    """Transform OBB by applying point function xf to its corners; return new OBB."""
+    if obb is None:
+        return None
+    corners = obb.get("corners")
+    if not corners:
+        cx, cy, hw, hh = obb["cx"], obb["cy"], obb["hw"], obb["hh"]
+        ang = obb.get("angle", 0.0)
+        ca, sa = math.cos(ang), math.sin(ang)
+        corners = [(cx + dx*ca - dy*sa, cy + dx*sa + dy*ca)
+                   for dx, dy in [(-hw,-hh),(hw,-hh),(hw,hh),(-hw,hh)]]
+    new_corners = [tuple(xf(p)) for p in corners]
+    # For parallelogram (affine image of rect), derive params from edge vectors.
+    return _obb_from_corners(new_corners)
+
+
+def translate_obb(obb, dx, dy):
+    if obb is None:
+        return None
+    def xf(p): return (p[0] + dx, p[1] + dy)
+    return transform_obb_corners(obb, xf)
+
+
+def rotate_obb(obb, cx, cy, angle_rad):
+    if obb is None:
+        return None
+    ca, sa = math.cos(angle_rad), math.sin(angle_rad)
+    def xf(pt):
+        dx, dy = pt[0] - cx, pt[1] - cy
+        return (cx + dx * ca - dy * sa, cy + dx * sa + dy * ca)
+    return transform_obb_corners(obb, xf)
+
+
+def scale_obb_local(obb, fixed_pt, ang, su, sv):
+    """Scale OBB in local axes ang around fixed_pt (matches scale_stroke_local)."""
+    if obb is None:
+        return None
+    ca, sa = math.cos(ang), math.sin(ang)
+    fx, fy = fixed_pt
+    def xf(pt):
+        dx, dy = pt[0] - fx, pt[1] - fy
+        lx = dx * ca + dy * sa
+        ly = -dx * sa + dy * ca
+        lx *= su; ly *= sv
+        return (fx + lx * ca - ly * sa, fy + lx * sa + ly * ca)
+    return transform_obb_corners(obb, xf)
+
+
+def skew_obb_local(obb, center_pt, ang, skew_x, skew_y):
+    """Skew OBB in local axes (matches skew_stroke_local)."""
+    if obb is None:
+        return None
+    ca, sa = math.cos(ang), math.sin(ang)
+    cx, cy = center_pt
+    def xf(pt):
+        dx, dy = pt[0] - cx, pt[1] - cy
+        lx = dx * ca + dy * sa
+        ly = -dx * sa + dy * ca
+        lx2 = lx + skew_x * ly
+        ly2 = ly + skew_y * lx
+        return (cx + lx2 * ca - ly2 * sa, cy + lx2 * sa + ly2 * ca)
+    return transform_obb_corners(obb, xf)
+
+
+def mirror_obb(obb, cx, cy, axis="h"):
+    if obb is None:
+        return None
+    if axis == "v":
+        def xf(pt): return (pt[0], 2 * cy - pt[1])
+    else:
+        def xf(pt): return (2 * cx - pt[0], pt[1])
+    return transform_obb_corners(obb, xf)
+
+
+def get_stroke_obb(stroke):
+    """Stored/transformed shape bbox, or fallback to straight AABB for legacy strokes."""
+    if isinstance(stroke, dict):
+        obb = stroke.get("obb")
+        if obb is not None:
+            return obb
+        obb = compute_stroke_obb(stroke)
+        if obb is not None:
+            stroke["obb"] = obb
+        return obb
+    return compute_stroke_obb(stroke)
+
+
 def stroke_obb(stroke):
-    """Oriented bounding box of visible curve/lines (excludes control handles)."""
-    return _min_area_obb(_stroke_outline_points(stroke))
+    """Bounding box of stroke: stored frame (set on creation, transforms with shape)."""
+    return get_stroke_obb(stroke)
 
 def _obb_axes(obb):
     ang = obb.get("angle", 0.0)

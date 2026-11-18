@@ -429,6 +429,10 @@ def _insert_cut_nodes(stroke, cuts):
             comp["raw_points"] = []
             new_comps.append(comp)
     out["components"] = new_comps
+    try:
+        out["obb"] = compute_stroke_obb(out)
+    except Exception:
+        pass
     return out
 
 
@@ -750,9 +754,36 @@ def combined_bbox(strokes, indices):
     return (min(xs), min(ys), max(xs), max(ys))
 
 def combined_obb(strokes, indices):
-    """Oriented bbox of visible curve/lines (rotates with the shape)."""
-    pts = []
+    """Bounding box of selected strokes: union of their stored shape frames."""
+    obbs = []
     for i in indices:
         if 0 <= i < len(strokes):
-            pts.extend(_stroke_outline_points(strokes[i]))
+            obb = stroke_obb(strokes[i])
+            if obb is not None:
+                obbs.append(obb)
+    if not obbs:
+        return None
+    if len(obbs) == 1:
+        o = obbs[0]
+        # return a copy-like dict with corners ensured
+        corners = o.get("corners")
+        if not corners:
+            cx, cy, hw, hh = o["cx"], o["cy"], o["hw"], o["hh"]
+            ang = o.get("angle", 0.0)
+            ca, sa = math.cos(ang), math.sin(ang)
+            corners = [(cx + dx*ca - dy*sa, cy + dx*sa + dy*ca)
+                       for dx, dy in [(-hw,-hh),(hw,-hh),(hw,hh),(-hw,hh)]]
+        return {"cx": o["cx"], "cy": o["cy"], "hw": o["hw"], "hh": o["hh"],
+                "angle": o.get("angle", 0.0), "corners": list(corners)}
+    pts = []
+    for o in obbs:
+        corners = o.get("corners")
+        if not corners:
+            cx, cy, hw, hh = o["cx"], o["cy"], o["hw"], o["hh"]
+            ang = o.get("angle", 0.0)
+            ca, sa = math.cos(ang), math.sin(ang)
+            corners = [(cx + dx*ca - dy*sa, cy + dx*sa + dy*ca)
+                       for dx, dy in [(-hw,-hh),(hw,-hh),(hw,hh),(-hw,hh)]]
+        pts.extend(corners)
+    # Stable enclosing box of stored corners (no per-frame geometry resampling).
     return _min_area_obb(pts)
