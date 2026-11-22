@@ -357,7 +357,8 @@ class TestRenderingAndUI(unittest.TestCase):
         app.draw_panel(self.screen, self.fonts, (0, 0), state)
         self.assertGreater(state["sv_rect"].w, 0)
         self.assertGreater(state["hue_rect"].w, 0)
-        self.assertGreater(state["nodes_toggle_rect"].w, 0)
+        self.assertGreater(state["nodes_mode_prev_rect"].w, 0)
+        self.assertGreater(state["nodes_mode_next_rect"].w, 0)
         state["color_target"] = "fill"
         app.draw_panel(self.screen, self.fonts, (0, 0), state)
         # no fill case
@@ -366,6 +367,31 @@ class TestRenderingAndUI(unittest.TestCase):
         # nodes submode
         state = self._base_state("selection", 0, st, "stroke", selection_submode="nodes")
         app.draw_panel(self.screen, self.fonts, (0, 0), state)
+
+    def test_draw_panel_pattern_controls(self):
+        from models import new_pattern, set_pattern_fill
+        st = app.new_stroke([((10.0, 10.0), (30.0, 10.0), (50.0, 40.0), (70.0, 40.0))])
+        st = set_pattern_fill(st, new_pattern("dots", size=10))
+        state = self._base_state("selection", 0, st, "fill")
+        state["fill_type_rects"] = {}
+        app.draw_panel(self.screen, self.fonts, (0, 0), state)
+        self.assertGreater(state["fill_type_prev_rect"].w, 0)
+        self.assertGreater(state["fill_type_next_rect"].w, 0)
+        self.assertGreater(state["pattern_type_rect"].w, 0)
+        self.assertGreater(state["pattern_size_minus_rect"].w, 0)
+        self.assertGreater(state["pattern_size_plus_rect"].w, 0)
+
+    def test_draw_panel_transform_numeric_fields(self):
+        st = app.new_stroke([((10.0, 20.0), (30.0, 20.0), (50.0, 60.0), (70.0, 80.0))])
+        state = self._base_state("selection", 0, st, "stroke", selection_submode="transform")
+        state["selection_bbox"] = (10.0, 20.0, 70.0, 80.0)
+        app.draw_panel(self.screen, self.fonts, (0, 0), state)
+        for key in ("xform_x_rect", "xform_y_rect", "xform_w_rect", "xform_h_rect", "xform_r_rect",
+                    "xform_xm_rect", "xform_xp_rect", "xform_ym_rect", "xform_yp_rect",
+                    "xform_wm_rect", "xform_wp_rect", "xform_hm_rect", "xform_hp_rect",
+                    "xform_rm_rect", "xform_rp_rect"):
+            self.assertGreater(state[key].w, 0, key)
+            self.assertGreater(state[key].h, 0, key)
 
     def test_draw_panel_draw_mode(self):
         state = self._base_state("draw")
@@ -723,7 +749,8 @@ class TestMultiSelectUI(unittest.TestCase):
         state = self._base_state("selection", {0, 1}, st, "stroke", selection_submode="transform")
         app.draw_panel(self.screen, self.fonts, (0, 0), state)
         self.assertGreater(state["sv_rect"].w, 0)
-        self.assertGreater(state["nodes_toggle_rect"].w, 0)
+        self.assertGreater(state["nodes_mode_prev_rect"].w, 0)
+        self.assertGreater(state["nodes_mode_next_rect"].w, 0)
 
 
 class TestCustomWaveShape(unittest.TestCase):
@@ -1117,6 +1144,45 @@ class TestWaveStackUI(unittest.TestCase):
         base = app._stroke_polyline(st, samples=24)
         self.assertEqual(len(out), len(base))
 
+    def _thickened(self, length=200.0, amp=20.0):
+        st = self._straight(length)
+        comp = app._stroke_components(st)[0]
+        th = app._merge_thickness_style(dict(app.default_thickness_params()))
+        th["enabled"] = True
+        th["amplitude"] = amp
+        th["thickness_points"] = [[0.0, -1.0], [0.5, 1.0], [1.0, -1.0]]
+        app._set_distortion_style(comp, th, 0)
+        st["components"] = [comp]
+        return st
+
+    def test_thickness_open_curve_returns_ribbon_not_clobbered_points(self):
+        # Thickness must return a closed ribbon: bottom forward + top reversed.
+        # The open-curve endpoint pinning must NOT overwrite the ribbon's end
+        # points (it used to clobber the offset top edge with the raw bottom end,
+        # which made the renderer inject a straight start->end connector line).
+        st = self._thickened(200.0, 20.0)
+        out = app.sample_distorted_component(st, 0)
+        segs = app.segs_of(st)
+        self.assertGreaterEqual(len(out), 4)
+        self.assertEqual(len(out) % 2, 0)
+        # first point stays the bottom start edge, last is the offset top edge
+        self.assertEqual(tuple(out[0]), tuple(segs[0][0]))
+        self.assertNotEqual(tuple(out[-1]), tuple(segs[-1][3]))
+        half = len(out) // 2
+        # bottom half follows the base path, top half is offset outward
+        self.assertGreater(
+            max(math.hypot(out[i][0] - out[half + i][0], out[i][1] - out[half + i][1])
+                for i in range(half)),
+            1e-6,
+        )
+
+    def test_thickness_disabled_returns_base_points(self):
+        st = self._straight(200.0)
+        out = app.sample_distorted_component(st, 0)
+        segs = app.segs_of(st)
+        self.assertEqual(tuple(out[0]), tuple(segs[0][0]))
+        self.assertEqual(tuple(out[-1]), tuple(segs[-1][3]))
+
     # ---- contextual parameters ----
 
     def test_noise_sliders_hidden_on_plain_wave_shown_for_legacy(self):
@@ -1200,8 +1266,9 @@ class TestWaveStackUI(unittest.TestCase):
         # the noise row exists in the stack
         rows = state["wave_row_rects"]
         self.assertEqual(len(rows), 2)
-        # shape grid contains the Noise thumbnail button
-        self.assertIn("noise", state["wave_shape_rects"])
+        # shape stepper is available (noise is a selectable shape)
+        self.assertGreater(state["wave_shape_prev_rect"].w, 0)
+        self.assertGreater(state["wave_shape_next_rect"].w, 0)
         # preview renders the noise profile (adaptive point count for cells)
         prev = app._wave_preview_polyline(app._get_wave_style(app._stroke_components(st)[0], 1))
         self.assertGreater(len(prev), 200)
@@ -1270,8 +1337,8 @@ class TestWaveStackUI(unittest.TestCase):
         st["components"] = [comp]
         state = self._panel_state(st)
         app.draw_panel(self.screen, self.fonts, (0, 0), state)
-        self.assertEqual(set(state["wave_shape_rects"]), set(app.WAVE_SHAPES))
-        self.assertIn("noise", state["wave_shape_rects"])
+        self.assertGreater(state["wave_shape_prev_rect"].w, 0)
+        self.assertGreater(state["wave_shape_next_rect"].w, 0)
 
     def test_icon_polyline_is_one_normalized_cycle(self):
         for shape in app.WAVE_SHAPES:
@@ -1491,6 +1558,236 @@ class TestWaveStackUI(unittest.TestCase):
             clamped = max(0, min(requested, max_scroll))
             self.assertGreaterEqual(clamped, 0)
             self.assertLessEqual(clamped, max_scroll)
+
+
+
+class TestWidthProfiles(unittest.TestCase):
+    def _line_stroke(self):
+        return app.new_stroke(
+            [((0.0, 0.0), (10.0, 0.0), (20.0, 0.0), (30.0, 0.0)),
+             ((30.0, 0.0), (40.0, 0.0), (50.0, 0.0), (60.0, 0.0))],
+            stroke_width=10.0,
+        )
+
+    def test_apply_taper_profiles_set_point_widths(self):
+        from models.strokes import apply_width_profile, get_point_width, WIDTH_PROFILES
+        self.assertIn("taper_out", WIDTH_PROFILES)
+        s = self._line_stroke()
+        out = apply_width_profile(s, "taper_out")
+        self.assertEqual(out.get("width_profile"), "taper_out")
+        self.assertTrue(out.get("point_widths"))
+        self.assertAlmostEqual(get_point_width(out, 0, "p0"), 10.0, places=4)
+        self.assertAlmostEqual(get_point_width(out, 1, "p3"), 1.5, places=4)
+        self.assertTrue(app._stroke_needs_variable_width(out))
+
+    def test_uniform_clears_point_widths(self):
+        from models.strokes import apply_width_profile
+        s = apply_width_profile(self._line_stroke(), "pressure")
+        self.assertTrue(s.get("point_widths"))
+        u = apply_width_profile(s, "uniform")
+        self.assertEqual(u.get("width_profile"), "uniform")
+        self.assertFalse(u.get("point_widths"))
+
+    def test_manual_point_width_clears_profile(self):
+        from models.strokes import apply_width_profile, set_point_width
+        s = apply_width_profile(self._line_stroke(), "taper_in")
+        self.assertEqual(s.get("width_profile"), "taper_in")
+        set_point_width(s, 0, "p0", 7.0)
+        self.assertNotIn("width_profile", s)
+        self.assertAlmostEqual(float((s.get("point_widths") or {}).get("0:p0", 0.0)), 7.0, places=4)
+
+
+class TestMeshGradients(unittest.TestCase):
+    def test_default_and_normalize_mesh_gradient(self):
+        from models.geometry import default_mesh_gradient, normalize_gradient, GRADIENT_TYPES
+        self.assertIn("mesh", GRADIENT_TYPES)
+        g = default_mesh_gradient(rows=2, cols=2)
+        self.assertEqual(g.get("type"), "mesh")
+        self.assertEqual(int(g.get("rows", 0)), 2)
+        self.assertEqual(int(g.get("cols", 0)), 2)
+        self.assertTrue(isinstance(g.get("grid"), list))
+        n = normalize_gradient(g)
+        self.assertEqual(n.get("type"), "mesh")
+        # Mesh grid stores (rows+1) x (cols+1) color/control points.
+        self.assertEqual(len(n.get("grid") or []), 3)
+        self.assertEqual(len((n.get("grid") or [[]])[0] or []), 3)
+
+    def test_mesh_gradient_serializes_and_renders(self):
+        import os, tempfile
+        from models.geometry import default_mesh_gradient
+        from models.document import serialize_document, deserialize_document_with_meta
+        from views.canvas import export_scene_png
+        st = {
+            "segs": [((10.0, 10.0), (40.0, 10.0), (40.0, 40.0), (10.0, 40.0))],
+            "stroke_color": None,
+            "stroke_width": 0.0,
+            "fill_color": (1.0, 0.0, 0.0, 1.0),
+            "fill_gradient": default_mesh_gradient(rows=2, cols=2),
+            "hidden_segs": set(),
+            "corner_anchors": set(),
+        }
+        doc = serialize_document([st], meta={})
+        strokes, _meta = deserialize_document_with_meta(doc)
+        self.assertEqual(((strokes[0].get("fill_gradient") or {}).get("type")), "mesh")
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "mesh.png")
+            export_scene_png(out, strokes, size=(60, 60))
+            self.assertTrue(os.path.exists(out))
+            self.assertGreater(os.path.getsize(out), 0)
+
+
+class TestTextOnPath(unittest.TestCase):
+    def _path(self):
+        return [((0.0, 80.0), (40.0, 20.0), (80.0, 20.0), (120.0, 80.0))]
+
+    def test_new_text_stroke_on_path_has_metadata_and_segs(self):
+        from models.text import new_text_stroke
+        s = new_text_stroke("Hello", 0, 80, "Sans", 24, path_segs=self._path(), path_offset=2.0)
+        self.assertTrue(s.get("is_text"))
+        tp = s.get("text_path")
+        self.assertIsInstance(tp, dict)
+        self.assertTrue(tp.get("segs"))
+        self.assertAlmostEqual(float(tp.get("offset", 0.0)), 2.0, places=4)
+        self.assertTrue(s.get("segs"))
+
+    def test_set_and_clear_text_path(self):
+        from models.text import new_text_stroke, set_text_path, clear_text_path
+        s = new_text_stroke("Hi", 0, 80, "Sans", 24)
+        self.assertFalse(s.get("text_path"))
+        s2 = set_text_path(s, self._path(), offset=3.0)
+        self.assertIsInstance(s2.get("text_path"), dict)
+        self.assertFalse(s.get("text_path"))  # copy semantics
+        s3 = clear_text_path(s2)
+        self.assertFalse(s3.get("text_path"))
+        self.assertTrue(s3.get("is_text"))
+
+    def test_update_preserves_text_path(self):
+        from models.text import new_text_stroke, update_text_stroke
+        s = new_text_stroke("Hi", 0, 80, "Sans", 24, path_segs=self._path())
+        s2 = update_text_stroke(s, text_content="World", font_size=30)
+        self.assertEqual(s2.get("text_content"), "World")
+        self.assertIsInstance(s2.get("text_path"), dict)
+        self.assertTrue(s2.get("segs"))
+
+    def test_text_path_roundtrips_in_document_meta_context(self):
+        from models.text import new_text_stroke
+        from models.document import serialize_document, deserialize_document_with_meta
+        s = new_text_stroke("Path", 0, 80, "Sans", 20, path_segs=self._path(), path_offset=1.0)
+        doc = serialize_document([s], meta={"artboards": [{"name": "A", "x": 1, "y": 2, "w": 30, "h": 40}], "active_artboard": 0})
+        strokes, meta = deserialize_document_with_meta(doc)
+        self.assertTrue(strokes and isinstance(strokes[0].get("text_path"), dict))
+        self.assertEqual(meta.get("active_artboard"), 0)
+        self.assertEqual((meta.get("artboards") or [{}])[0].get("w"), 30)
+
+
+class TestArtboards(unittest.TestCase):
+    def _stroke(self):
+        return {
+            "segs": [((10.0, 10.0), (30.0, 10.0), (30.0, 30.0), (10.0, 30.0))],
+            "stroke_color": (0.0, 0.0, 0.0, 1.0),
+            "stroke_width": 2.0,
+            "fill_color": None,
+            "hidden_segs": set(),
+            "corner_anchors": set(),
+        }
+
+    def test_export_png_cropped_to_artboard(self):
+        import os, tempfile
+        from views.canvas import export_scene_png
+        from PIL import Image
+        artboard = {"name": "A", "x": 5.0, "y": 7.0, "w": 50.0, "h": 30.0}
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "ab.png")
+            export_scene_png(out, [self._stroke()], size=(200, 200), scale=1.0, artboard=artboard)
+            im = Image.open(out)
+            try:
+                self.assertEqual(im.size, (50, 30))
+            finally:
+                im.close()
+
+    def test_export_scene_image_cropped_to_artboard(self):
+        import os, tempfile
+        from views.canvas import export_scene_image
+        from PIL import Image
+        artboard = {"name": "A", "x": 0.0, "y": 0.0, "w": 64.0, "h": 32.0}
+        with tempfile.TemporaryDirectory() as d:
+            for ext in ("png", "jpg", "webp"):
+                out = os.path.join(d, f"ab.{ext}")
+                export_scene_image(out, [self._stroke()], size=(200, 200), scale=1.0, artboard=artboard)
+                im = Image.open(out)
+                try:
+                    self.assertEqual(im.size, (64, 32), ext)
+                finally:
+                    im.close()
+
+    def test_artboards_meta_roundtrip(self):
+        from models.document import serialize_document, deserialize_document_with_meta
+        meta = {
+            "view": {"zoom": 1.25, "pan": [10.0, -5.0]},
+            "artboards": [
+                {"name": "One", "x": 0, "y": 0, "w": 100, "h": 50},
+                {"name": "Two", "x": 120, "y": 0, "w": 80, "h": 60},
+            ],
+            "active_artboard": 1,
+        }
+        doc = serialize_document([self._stroke()], meta=meta)
+        strokes, out_meta = deserialize_document_with_meta(doc)
+        self.assertEqual(len(strokes), 1)
+        self.assertEqual(out_meta.get("active_artboard"), 1)
+        self.assertEqual(len(out_meta.get("artboards") or []), 2)
+        self.assertEqual(out_meta["artboards"][1]["name"], "Two")
+
+
+class TestShapeStateLibrary(unittest.TestCase):
+    """Shape States: create a shape -> save to library -> insert as asset."""
+
+    def _master(self):
+        return app.new_stroke([((10.0, 10.0), (30.0, 10.0), (30.0, 30.0), (10.0, 30.0))])
+
+    def test_capture_shape_state_normalizes_and_stores(self):
+        strokes = [self._master()]
+        shape_states = {}
+        sid, counter = app._capture_shape_state(strokes, [0], shape_states, 0)
+        self.assertEqual(sid, "shape1")
+        self.assertEqual(counter, 1)
+        self.assertIn(sid, shape_states)
+        self.assertEqual(shape_states[sid]["name"], "Shape State 1")
+        self.assertTrue(shape_states[sid]["strokes"])
+        self.assertEqual(strokes[0]["shape_state_id"], "shape1")
+        self.assertTrue(strokes[0]["shape_state_is_master"])
+        self.assertEqual(strokes[0]["shape_state_instance_id"], "shape1:master")
+
+    def test_capture_does_not_alias_definition_into_instances(self):
+        strokes = [self._master()]
+        shape_states = {}
+        sid, counter = app._capture_shape_state(strokes, [0], shape_states, 0)
+        idxs, counter2 = app._insert_shape_state(strokes, shape_states, counter, [0])
+        self.assertEqual(idxs, [1])
+        self.assertEqual(counter2, 2)
+        self.assertEqual(len(strokes), 2)
+        inst = strokes[1]
+        self.assertEqual(inst["shape_state_id"], "shape1")
+        self.assertFalse(inst["shape_state_is_master"])
+        self.assertEqual(inst["shape_state_instance_id"], "shape1:i2")
+        bb = app.combined_bbox(strokes, [0])
+        offx = (bb[2] - bb[0]) * 0.2 + 24.0
+        offy = (bb[3] - bb[1]) * 0.2 + 24.0
+        self.assertEqual(inst["segs"][0][0], (10.0 + offx, 10.0 + offy))
+        self.assertEqual(inst["segs"][0][3], (10.0 + offx, 30.0 + offy))
+
+    def test_insert_without_saved_state_returns_no_indices(self):
+        strokes = [self._master()]
+        idxs, counter = app._insert_shape_state(strokes, {}, 0, [0])
+        self.assertEqual(idxs, [])
+        self.assertEqual(counter, 0)
+
+    def test_delete_removes_state_and_detaches_strokes(self):
+        strokes = [self._master()]
+        shape_states = {}
+        sid, counter = app._capture_shape_state(strokes, [0], shape_states, 0)
+        self.assertTrue(app._delete_shape_state(shape_states, sid, strokes))
+        self.assertNotIn(sid, shape_states)
+        self.assertIsNone(strokes[0].get("shape_state_id"))
 
 
 if __name__ == "__main__":

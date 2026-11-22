@@ -1,4 +1,4 @@
-"""Model: boolean set operations (union / intersection / difference) on filled
+"""Model: boolean set operations (union / intersection / difference / exclude) on filled
 vector shapes.
 
 The implementation builds a planar arrangement of the input boundaries and is
@@ -14,6 +14,7 @@ independent of pixels:
        union        = in A or in B
        intersection = in A and in B
        difference   = in A and not in B (first shape minus the others)
+       exclude      = inside an odd number of shapes (XOR)
 6. Trace the directed edges separating selected from unselected faces into
    closed loops with the selected region on the left. Outer contours come out
    counter-clockwise and holes clockwise, which is correct for Cairo's default
@@ -30,6 +31,9 @@ import models.fill as _fill
 UNION = "union"
 INTERSECTION = "intersection"
 DIFFERENCE = "difference"
+SUBTRACT = DIFFERENCE          # Illustrator-style name for "minus front"
+EXCLUDE = "exclude"            # symmetric difference (XOR)
+OPERATIONS = (UNION, INTERSECTION, DIFFERENCE, EXCLUDE)
 
 
 def _faces_with_ids(nodes, edges):
@@ -184,6 +188,9 @@ def boolean_loops(shapes, op=UNION, samples=18):
             keep = all(inside)
         elif op == DIFFERENCE:
             keep = inside[0] and not any(inside[1:])
+        elif op == EXCLUDE:
+            # XOR generalised to N shapes: keep odd-overlap regions.
+            keep = (sum(1 for v in inside if v) % 2) == 1
         else:
             keep = any(inside)
         selected.append(keep)

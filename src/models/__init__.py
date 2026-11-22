@@ -1,9 +1,9 @@
 """MVC Model package: data, geometry, wave math, hit tests."""
 
-from models import geometry, strokes, waves, interaction, document  # noqa: F401
+from models import geometry, strokes, waves, interaction, document, svg, appearance, organization, text, guides, pattern, markers  # noqa: F401
 
-_PLUMBING = {'_m', '_n', '_mod', '_name', 'cfg', 'math', 'copy', 'pygame', 'cairo', '_models', '_views', '_m_geometry', '_m_strokes', '_m_waves', '_v_canvas', 'geometry', 'strokes', 'waves', 'interaction', 'document', 'canvas', 'panel', 'toolbar', 'widgets', 'dialogs', 'app_controller', 'coordinates'}
-_SUBS = (geometry, strokes, waves, interaction, document)
+_PLUMBING = {'_m', '_n', '_mod', '_name', 'cfg', 'math', 'copy', 'pygame', 'cairo', '_models', '_views', '_m_geometry', '_m_strokes', '_m_waves', '_v_canvas', '_m_svg', '_m_appearance', '_m_organization', '_m_text', '_m_guides', '_m_pattern', '_m_markers', 'geometry', 'strokes', 'waves', 'interaction', 'document', 'svg', 'appearance', 'organization', 'text', 'guides', 'pattern', 'markers', 'canvas', 'panel', 'toolbar', 'widgets', 'dialogs', 'app_controller', 'coordinates'}
+_SUBS = (geometry, strokes, waves, interaction, document, svg, appearance, organization, text, guides, pattern, markers)
 # export from submodules into package
 for _m in _SUBS:
     for _n in dir(_m):

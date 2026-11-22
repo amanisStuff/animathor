@@ -24,11 +24,20 @@ def new_stroke(segs, stroke_color=(0.1, 0.1, 0.15), stroke_width=3.0, fill_color
         "corner_anchors": set(corner_anchors or ()),
         "algorithm": algorithm or "fit",
         "hidden_segs": set(),
+        # Stroke styling defaults preserve the original round/solid appearance.
+        "line_cap": "round",
+        "line_join": "round",
+        "miter_limit": 10.0,
+        "dash": None,
+        # Appearance: defaults keep existing artwork pixel-identical.
+        "opacity": 1.0,
+        "blend_mode": "normal",
+        "shadow": None,
+        # Organization: defaults keep existing artwork visible and editable.
+        "hidden": False,
+        "locked": False,
     }
-    try:
-        out["obb"] = compute_stroke_obb(out)
-    except Exception:
-        pass
+    # OBB is set on selection, not creation.
     return out
 
 def segs_of(stroke):
@@ -140,6 +149,7 @@ def redraw_curve_segment(stroke, seg_index, drawn_points):
     out = _copy_stroke(stroke) if isinstance(stroke, dict) else new_stroke(segs)
     if isinstance(out, dict):
         out["segs"] = segs
+        _sync_component_segs(out)
         try:
             out["obb"] = compute_stroke_obb(out)
         except Exception:
@@ -156,6 +166,31 @@ def _component_ranges(stroke):
         ranges.append((start, start + count))
         start += count
     return ranges
+
+def _sync_component_segs(stroke):
+    """Keep each component's seg list in sync with the stroke's top-level segs.
+
+    Node edits and transforms mutate only top-level `stroke["segs"]`; without this,
+    materialized components (e.g. after adding a distortion style) keep stale seg
+    copies that can desync range-based sampling/operations. Safe no-op when the
+    component structure does not match the top-level seg layout."""
+    if not isinstance(stroke, dict):
+        return stroke
+    comps = stroke.get("components")
+    if not comps:
+        return stroke
+    segs = stroke.get("segs") or []
+    ranges = []
+    start = 0
+    for c in comps:
+        count = len((c.get("segs") or []))
+        ranges.append((start, start + count))
+        start += count
+    if start != len(segs):
+        return stroke
+    for c, (s0, s1) in zip(comps, ranges):
+        c["segs"] = list(segs[s0:s1])
+    return stroke
 
 def _effective_component_style(stroke, comp_i):
     comps = _stroke_components(stroke)
@@ -244,6 +279,86 @@ def get_point_width(stroke, seg_i, anchor_name):
                     return None
     return None
 
+
+WIDTH_PROFILES = ("uniform", "taper_in", "taper_out", "taper_both", "pressure")
+
+
+def _width_profile_factor(profile, t):
+    """Return width multiplier 0..1 at normalized position t in [0,1]."""
+    t = max(0.0, min(1.0, float(t)))
+    if profile == "uniform":
+        return 1.0
+    if profile == "taper_in":
+        return 0.15 + 0.85 * t
+    if profile == "taper_out":
+        return 1.0 - 0.85 * t
+    if profile == "taper_both":
+        return 0.15 + 0.85 * (1.0 - abs(2.0 * t - 1.0))
+    if profile == "pressure":
+        # Pressure-like: thin ends, thick middle (smooth bell-like triangle).
+        return 0.12 + 0.88 * (1.0 - abs(2.0 * t - 1.0))
+    return 1.0
+
+
+def apply_width_profile(stroke, profile, base_width=None):
+    """Apply a variable-width profile to ``stroke`` using per-anchor point widths.
+
+    Returns a shallow-copied stroke for dict strokes. ``uniform`` clears
+    ``point_widths``. Other profiles set widths along the path from start to end.
+    """
+    if profile not in WIDTH_PROFILES:
+        return stroke
+    if not isinstance(stroke, dict):
+        return stroke
+    segs = segs_of(stroke)
+    if not segs:
+        return stroke
+    out = _copy_stroke(stroke)
+    if base_width is None:
+        try:
+            base_width = float(out.get("stroke_width", 3.0) or 3.0)
+        except Exception:
+            base_width = 3.0
+    base_width = max(0.5, float(base_width))
+    if profile == "uniform":
+        out.pop("point_widths", None)
+        out["width_profile"] = "uniform"
+        return out
+
+    n = len(segs)
+    # Anchor positions along path in drawing order: p0 of each seg, then p3 of last.
+    anchors = [(i, "p0") for i in range(n)] + [(n - 1, "p3")]
+    m = len(anchors)
+    if m <= 1:
+        out.pop("point_widths", None)
+        out["width_profile"] = profile
+        return out
+    pw = {}
+    for idx, (seg_i, an) in enumerate(anchors):
+        t = idx / (m - 1)
+        w = max(0.5, base_width * _width_profile_factor(profile, t))
+        for k in _point_width_keys_for(seg_i, an, segs):
+            pw[k] = w
+    out["point_widths"] = pw
+    out["width_profile"] = profile
+    return out
+
+
+def _point_width_keys_for(seg_i, anchor_name, segs):
+    """Key strings that represent the same physical anchor as (seg_i, anchor_name)."""
+    keys = {_point_width_key(seg_i, anchor_name)}
+    n = len(segs) if segs else 0
+    if anchor_name == "p0" and seg_i > 0:
+        keys.add(_point_width_key(seg_i - 1, "p3"))
+    elif anchor_name == "p3" and seg_i + 1 < n:
+        keys.add(_point_width_key(seg_i + 1, "p0"))
+    if segs and _is_closed_segs(segs, 6.0):
+        if anchor_name == "p0" and seg_i == 0:
+            keys.add(_point_width_key(n - 1, "p3"))
+        elif anchor_name == "p3" and seg_i == n - 1:
+            keys.add(_point_width_key(0, "p0"))
+    return keys
+
 def set_point_width(stroke, seg_i, anchor_name, width):
     """Set width at an anchor point and sync shared/closed anchors."""
     if not isinstance(stroke, dict):
@@ -252,22 +367,13 @@ def set_point_width(stroke, seg_i, anchor_name, width):
     if not (0 <= seg_i < len(segs)) or anchor_name not in ("p0", "p3"):
         return
     pw = dict(stroke.get("point_widths") or {})
-    keys = {_point_width_key(seg_i, anchor_name)}
-    # shared neighbors
-    if anchor_name == "p0" and seg_i > 0:
-        keys.add(_point_width_key(seg_i - 1, "p3"))
-    elif anchor_name == "p3" and seg_i + 1 < len(segs):
-        keys.add(_point_width_key(seg_i + 1, "p0"))
-    # closed wrap
-    if segs and _is_closed_segs(segs, 6.0):
-        if anchor_name == "p0" and seg_i == 0:
-            keys.add(_point_width_key(len(segs) - 1, "p3"))
-        elif anchor_name == "p3" and seg_i == len(segs) - 1:
-            keys.add(_point_width_key(0, "p0"))
+    keys = _point_width_keys_for(seg_i, anchor_name, segs)
     w = max(0.5, float(width))
     for k in keys:
         pw[k] = w
     stroke["point_widths"] = pw
+    # Manual edits break any named profile; clear marker so UI reflects custom state.
+    stroke.pop("width_profile", None)
 
 def _segment_endpoint_widths(stroke, seg_i):
     """(w_start, w_end) for segment, considering point widths and component fallback."""
@@ -410,6 +516,7 @@ def translate_stroke(stroke, dx, dy):
     if isinstance(stroke, dict):
         out = dict(stroke)
         out["segs"] = moved
+        _sync_component_segs(out)
         obb = get_stroke_obb(out)
         if obb is not None:
             out["obb"] = translate_obb(obb, dx, dy)
@@ -433,6 +540,7 @@ def transform_stroke(stroke, cx, cy, angle_rad, scale_x, scale_y=None):
     if isinstance(stroke, dict):
         out = dict(stroke)
         out["segs"] = moved
+        _sync_component_segs(out)
         obb = get_stroke_obb(out)
         if obb is not None:
             out["obb"] = transform_obb_corners(
@@ -455,6 +563,7 @@ def scale_stroke_local(stroke, fixed_pt, ang, su, sv):
     moved = [(_xf(p0), _xf(c1), _xf(c2), _xf(p3)) for (p0, c1, c2, p3) in segs]
     if isinstance(stroke, dict):
         out = dict(stroke); out["segs"] = moved
+        _sync_component_segs(out)
         obb = get_stroke_obb(out)
         if obb is not None:
             out["obb"] = scale_obb_local(obb, fixed_pt, ang, su, sv)
@@ -471,6 +580,7 @@ def rotate_stroke_around(stroke, cx, cy, angle_rad):
     moved = [(_xf(p0), _xf(c1), _xf(c2), _xf(p3)) for (p0, c1, c2, p3) in segs]
     if isinstance(stroke, dict):
         out = dict(stroke); out["segs"] = moved
+        _sync_component_segs(out)
         obb = get_stroke_obb(out)
         if obb is not None:
             out["obb"] = rotate_obb(obb, cx, cy, angle_rad)
@@ -494,6 +604,7 @@ def skew_stroke_local(stroke, center_pt, ang, skew_x, skew_y):
     moved = [(_xf(p0), _xf(c1), _xf(c2), _xf(p3)) for (p0, c1, c2, p3) in segs]
     if isinstance(stroke, dict):
         out = dict(stroke); out["segs"] = moved
+        _sync_component_segs(out)
         obb = get_stroke_obb(out)
         if obb is not None:
             out["obb"] = skew_obb_local(obb, center_pt, ang, skew_x, skew_y)
@@ -513,6 +624,7 @@ def mirror_stroke(stroke, cx, cy, axis="h"):
     if isinstance(stroke, dict):
         out = _copy_stroke(stroke)
         out["segs"] = moved
+        _sync_component_segs(out)
         obb = get_stroke_obb(out)
         if obb is not None:
             out["obb"] = mirror_obb(obb, cx, cy, axis)
@@ -598,6 +710,7 @@ def set_stroke_point(stroke, seg_index, point_name, new_pos):
     if isinstance(stroke, dict):
         out = dict(stroke)
         out["segs"] = new_segs
+        _sync_component_segs(out)
         try:
             out["obb"] = compute_stroke_obb(out)
         except Exception:
@@ -653,6 +766,7 @@ def _with_segs(stroke, segs):
     if isinstance(stroke, dict):
         out = dict(stroke)
         out["segs"] = segs
+        _sync_component_segs(out)
         try:
             out["obb"] = compute_stroke_obb(out)
         except Exception:
@@ -817,6 +931,9 @@ def _stroke_has_wave(stroke):
             return True
     return False
 
+def _stroke_has_distortion(stroke):
+    return _stroke_has_wave(stroke)
+
 
 def join_components_in_stroke(stroke, comp_indices):
     """Merge consecutive selected components of *stroke* into single components.
@@ -939,4 +1056,186 @@ def join_components_in_stroke(stroke, comp_indices):
     # Point widths are keyed by segment indices; after a structural merge of
     # components the global seg layout is unchanged, so keep them as-is.
     return out, index_map
+
+
+# ---------------------------------------------------------------------------
+# Path editing commands (close/open, anchor conversion, add/delete anchor)
+# ---------------------------------------------------------------------------
+
+def _mirror_anchor(anchor, handle):
+    return (2.0 * anchor[0] - handle[0], 2.0 * anchor[1] - handle[1])
+
+
+def set_path_closed(stroke, closed=True):
+    """Explicitly close or open a path.
+
+    Closing appends a straight segment back to the start (or marks the exact
+    closure corners when the endpoints already coincide). Opening removes the
+    closing segment so the two endpoints are distinct again. All operations
+    return a new stroke; the input is never mutated.
+    """
+    segs = segs_of(stroke)
+    if not segs:
+        return stroke
+    already_closed = _is_closed_segs(segs)
+    if bool(closed) == already_closed:
+        return stroke
+
+    corners = set(_corners(stroke))
+    hidden = set(stroke.get("hidden_segs", ())) if isinstance(stroke, dict) else set()
+    if closed:
+        start = tuple(float(v) for v in segs[0][0])
+        end = tuple(float(v) for v in segs[-1][3])
+        new_segs = list(segs)
+        if end != start:
+            new_segs.append((end, end, start, start))
+        n = len(new_segs)
+        corners |= {(0, "p0"), (n - 1, "p3")}
+    else:
+        if len(segs) <= 1:
+            # A single segment has no closing edge to remove; keep geometry,
+            # just mark the endpoints as deliberately open so auto-close
+            # helpers leave it be.
+            out = _with_segs(stroke, list(segs))
+            if isinstance(out, dict):
+                out["cut_ends"] = {"start": "open", "end": "open"}
+                out["corner_anchors"] = corners | {(0, "p0"), (len(segs) - 1, "p3")}
+            return out
+        new_segs = list(segs[:-1])
+        n = len(new_segs)
+        corners = {(i, name) for (i, name) in corners if i < n}
+        corners |= {(0, "p0"), (n - 1, "p3")}
+        hidden = {i for i in hidden if i < n}
+
+    out = _with_segs(stroke, new_segs)
+    if isinstance(out, dict):
+        out["corner_anchors"] = corners
+        out["hidden_segs"] = hidden
+        if closed:
+            out.pop("cut_ends", None)
+        else:
+            out["cut_ends"] = {"start": "open", "end": "open"}
+    return out
+
+
+def set_anchor_smooth(stroke, seg_index, anchor_name, smooth=True):
+    """Convert an anchor between smooth (mirrored handles) and corner.
+
+    ``anchor_name`` is ``"p0"`` or ``"p3"``. Smooth anchors have symmetric
+    handles; corner anchors keep independent handles and are recorded in
+    ``corner_anchors`` so dragging one handle never moves the other.
+    """
+    segs = segs_of(stroke)
+    if anchor_name not in ("p0", "p3") or not (0 <= seg_index < len(segs)):
+        return stroke
+    seg_list = [list(s) for s in segs]
+    closed = _is_closed_segs(segs)
+    corners = set(_corners(stroke))
+    key = (seg_index, anchor_name)
+
+    if smooth:
+        corners.discard(key)
+        slots = _anchor_handle_slots(seg_list, seg_index, anchor_name, closed)
+        if len(slots) >= 2:
+            anchor = tuple(float(v) for v in seg_list[seg_index][0 if anchor_name == "p0" else 3])
+            (s1, h1), (s2, h2) = slots[0], slots[1]
+            j1 = 1 if h1 == "c1" else 2
+            j2 = 1 if h2 == "c1" else 2
+            seg_list[s2][j2] = _mirror_anchor(anchor, seg_list[s1][j1])
+    else:
+        corners.add(key)
+
+    out = _with_segs(stroke, [tuple(s) for s in seg_list])
+    if isinstance(out, dict):
+        out["corner_anchors"] = corners
+    return out
+
+
+def add_anchor_at(stroke, seg_index, t=0.5):
+    """Insert a new anchor at parameter ``t`` along a segment (De Casteljau)."""
+    segs = segs_of(stroke)
+    if not (0 <= seg_index < len(segs)):
+        return stroke
+    t = max(0.0, min(1.0, float(t)))
+    if t <= 1e-6 or t >= 1.0 - 1e-6:
+        return stroke
+    seg = segs[seg_index]
+
+    def lerp(a, b):
+        return (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
+
+    p0, c1, c2, p3 = seg
+    a, b, c = lerp(p0, c1), lerp(c1, c2), lerp(c2, p3)
+    d, e = lerp(a, b), lerp(b, c)
+    f = lerp(d, e)
+    left = (tuple(p0), a, d, f)
+    right = (f, e, c, tuple(p3))
+    new_segs = list(segs)
+    new_segs[seg_index:seg_index + 1] = [left, right]
+
+    def remap(values):
+        out = set()
+        for v in values:
+            if isinstance(v, tuple) and len(v) == 2:
+                i, name = v
+                if i > seg_index or (i == seg_index and name == "p3"):
+                    i += 1
+                out.add((i, name))
+            elif isinstance(v, int):
+                out.add(v + 1 if v > seg_index else v)
+            else:
+                out.add(v)
+        return out
+
+    out = _with_segs(stroke, new_segs)
+    if isinstance(out, dict):
+        out["corner_anchors"] = remap(_corners(stroke))
+        out["hidden_segs"] = remap(set(stroke.get("hidden_segs", ())))
+    return out
+
+
+def delete_anchor(stroke, seg_index, anchor_name="p0"):
+    """Delete an anchor, merging the two adjacent curves into one."""
+    segs = segs_of(stroke)
+    n = len(segs)
+    if n < 2 or not (0 <= seg_index < n) or anchor_name not in ("p0", "p3"):
+        return stroke
+
+    # Which segment is removed, and is it an interior join?
+    if anchor_name == "p3":
+        if seg_index == n - 1:
+            remove = n - 1
+        else:
+            remove = seg_index + 1
+    else:
+        remove = seg_index
+    interior = 0 < remove < n - 1
+
+    new_segs = []
+    for j, seg in enumerate(segs):
+        if j == remove:
+            if interior:
+                prev = segs[remove - 1]
+                new_segs.append((prev[0], prev[1], seg[2], seg[3]))
+            continue
+        new_segs.append(seg)
+
+    corners = set()
+    for (i, name) in _corners(stroke):
+        if i == remove:
+            if name == "p3" and remove > 0:
+                corners.add((remove - 1, "p3"))
+            continue
+        if i == remove - 1 and name == "p3" and interior:
+            continue  # same physical anchor as (remove, "p0")
+        corners.add((i - 1, name) if i > remove else (i, name))
+    hidden = {i - 1 if i > remove else i
+              for i in (stroke.get("hidden_segs", ()) if isinstance(stroke, dict) else ())
+              if i != remove}
+
+    out = _with_segs(stroke, new_segs)
+    if isinstance(out, dict):
+        out["corner_anchors"] = corners
+        out["hidden_segs"] = hidden
+    return out
 

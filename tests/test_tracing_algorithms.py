@@ -98,11 +98,8 @@ class TestTracingUIIntegration(unittest.TestCase):
         for algo in ("fit", "catmull-rom", "single"):
             state = self._draw_state(algo)
             app.draw_panel(self.screen, self.fonts, (0, 0), state)
-            rects = state.get("trace_algo_rects", {})
-            self.assertEqual(set(rects.keys()), {"fit", "catmull-rom", "single"})
-            for r in rects.values():
-                self.assertGreater(r.w, 0)
-                self.assertGreater(r.h, 0)
+            self.assertGreater(state.get("trace_algo_prev_rect", pygame.Rect(0, 0, 0, 0)).w, 0)
+            self.assertGreater(state.get("trace_algo_next_rect", pygame.Rect(0, 0, 0, 0)).w, 0)
 
     def test_selection_panel_shows_tracing_label(self):
         st = app.new_stroke(stroke_to_beziers(make_polyline(), max_points=4, algorithm="catmull-rom"), algorithm="catmull-rom")

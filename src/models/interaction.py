@@ -207,6 +207,9 @@ def hit_test_stroke(pos, strokes, threshold=10.0):
     """Hit test strokes by curve proximity and filled interior (topmost first)."""
     for i in range(len(strokes) - 1, -1, -1):
         stroke = strokes[i]
+        # Hidden/locked objects (organization/layers) are not canvas-selectable.
+        if isinstance(stroke, dict) and (stroke.get("hidden", False) or stroke.get("locked", False)):
+            continue
         segs = segs_of(stroke)
         if not segs:
             continue
@@ -716,8 +719,8 @@ def hit_test_component(stroke, pos, threshold=10.0):
             return 0
     return best
 
-def hit_test_point(stroke, pos, radius=8.0, seg_indices=None):
-    segs = segs_of(stroke)
+def hit_test_point(stroke, pos, radius=8.0, seg_indices=None, segs_override=None):
+    segs = segs_override if segs_override is not None else segs_of(stroke)
     best = None
     best_d = radius
     names = ("p0", "c1", "c2", "p3")

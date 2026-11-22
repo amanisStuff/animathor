@@ -35,12 +35,16 @@ BUTTON_TIPS = {
     "shape_ellipse": "Ellipse",
     "shape_circle": "Circle",
     "shape_triangle": "Triangle",
+    "shape_polygon": "Polygon",
+    "shape_star": "Star",
     "elev_front": "Bring to Front",
     "elev_forward": "Bring Forward",
     "elev_backward": "Send Backward",
     "elev_back": "Send to Back",
     "union": "Union",
     "intersect": "Intersection",
+    "subtract": "Subtract (minus front)",
+    "exclude": "Exclude (XOR)",
     "ref_load": "Load Reference Image",
     "ref_visible": "Toggle Reference Visibility",
     "ref_clear": "Clear Reference Image",
@@ -48,6 +52,7 @@ BUTTON_TIPS = {
     "curve_redraw": "Redraw Curve",
     "curve_cut": "Split Curve - drag across it",
     "curve_hide": "Hide Curve",
+    "text": "Text - click canvas, type, Enter to place",
     "wave_add": "Add Wave",
     "wave_remove": "Remove Wave",
     "wave_toggle": "Enable / Disable Wave",
@@ -155,13 +160,48 @@ def _draw_fallback_icon(screen, name, center, color, size=20):
             pygame.draw.rect(screen, c, (cx - 7, y - 12, 4, 9), 1)
             pygame.draw.rect(screen, c, (cx + 2, y - 9, 4, 6), 1)
         return True
+
+    # Polygon / star shape icons.
+    if name in ("shape_polygon", "shape_star"):
+        import math as _math
+        n = 6 if name == "shape_polygon" else 5
+        rad = max(6, s // 2 - 2)
+        pts = []
+        for i in range(n * (2 if name == "shape_star" else 1)):
+            a = -_math.pi / 2 + _math.pi * i / n
+            r = rad if (name == "shape_polygon" or i % 2 == 0) else rad * 0.45
+            pts.append((cx + r * _math.cos(a), cy + r * _math.sin(a)))
+        pygame.draw.polygon(screen, c, pts, 1)
+        return True
+
+    # Boolean icons: two overlapping shapes with an operation marker.
+    if name in ("subtract", "exclude", "union", "intersect"):
+        r1 = (cx - s // 2 + 2, cy - s // 4, s // 2 + 4, s // 2 - 1)
+        r2 = (cx - 3, cy - s // 4, s // 2 + 4, s // 2 - 1)
+        if name == "union":
+            pygame.draw.rect(screen, c, r1, 1)
+            pygame.draw.rect(screen, c, r2, 1)
+        elif name == "intersect":
+            ix = max(r1[0], r2[0])
+            iy = max(r1[1], r2[1])
+            rx = min(r1[0] + r1[2], r2[0] + r2[2])
+            by = min(r1[1] + r1[3], r2[1] + r2[3])
+            if rx > ix and by > iy:
+                pygame.draw.rect(screen, c, (ix, iy, rx - ix, by - iy))
+        else:
+            pygame.draw.rect(screen, c, r1, 1)
+            pygame.draw.rect(screen, c, r2, 1)
+            pygame.draw.line(screen, c, (cx - 3, cy), (cx + 3, cy), w)
+            if name == "exclude":
+                pygame.draw.line(screen, c, (cx, cy - 3), (cx, cy + 3), w)
+        return True
     return False
 
 
 def draw_icon(screen, name, rect, color=None, size=20, enabled=True):
     """Draw a bundled icon centred in ``rect`` (or at a position tuple)."""
     img = load_icon(name, size)
-    c = (170, 176, 184) if not enabled else (color if color is not None else (255, 255, 255))
+    c = TEXT_DISABLED if not enabled else (color if color is not None else SURFACE)
     if img is None:
         if isinstance(rect, pygame.Rect):
             center = rect.center
@@ -170,7 +210,7 @@ def draw_icon(screen, name, rect, color=None, size=20, enabled=True):
         _draw_fallback_icon(screen, name, center, c, size=size)
         return
     if not enabled:
-        img = _tinted(img, (170, 176, 184))
+        img = _tinted(img, TEXT_DISABLED)
     elif color is not None:
         img = _tinted(img, color)
     if isinstance(rect, pygame.Rect):
@@ -185,8 +225,8 @@ def draw_tooltip(screen, mouse_pos, text, font=None):
     if not text:
         return
     if font is None:
-        font = pygame.font.SysFont(None, 19)
-    label = font.render(text, True, (240, 244, 250))
+        font = pygame.font.SysFont(None, FONT_SIZE_TOOLTIP)
+    label = font.render(text, True, TOOLTIP_TEXT)
     pad_x, pad_y = 9, 6
     r = label.get_rect()
     r.width += pad_x * 2
@@ -195,6 +235,6 @@ def draw_tooltip(screen, mouse_pos, text, font=None):
     sw, sh = screen.get_size()
     r.right = min(r.right, sw - 4)
     r.bottom = min(r.bottom, sh - 4)
-    pygame.draw.rect(screen, (28, 32, 40), r, border_radius=5)
-    pygame.draw.rect(screen, (96, 104, 120), r, 1, border_radius=5)
+    pygame.draw.rect(screen, TOOLTIP_BG, r, border_radius=RADIUS_SM)
+    pygame.draw.rect(screen, TOOLTIP_BORDER, r, BORDER_WIDTH, border_radius=RADIUS_SM)
     screen.blit(label, (r.x + pad_x, r.y + pad_y))

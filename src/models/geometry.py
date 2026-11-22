@@ -73,7 +73,7 @@ def rgb_to_hex(rgb):
     return f"#{r:02X}{g:02X}{b:02X}"
 
 
-GRADIENT_TYPES = ("linear", "radial", "conic", "spiral", "diamond", "square")
+GRADIENT_TYPES = ("linear", "radial", "conic", "spiral", "diamond", "square", "mesh")
 
 
 def is_fill_gradient(fill):
@@ -116,6 +116,7 @@ def gradient_edit_handles(stroke, grad):
     Linear: line through bbox center along angle with endpoint handles.
     Shaped (radial/conic/spiral/diamond/square): center, rotated rx/ry/edge
     radius handles, and a rotation handle to rotate the gradient shape.
+    Mesh: basic mesh has no on-canvas edit handles yet.
     """
     if not is_fill_gradient(grad):
         return {"type": None, "bbox": None, "handles": {}}
@@ -139,6 +140,8 @@ def gradient_edit_handles(stroke, grad):
         handles["p2"] = p2
         handles["center"] = (cx, cy)
         return {"type": "linear", "bbox": (x0, y0, x1, y1), "angle": angle, "handles": handles}
+    elif gtype == "mesh":
+        return {"type": "mesh", "bbox": (x0, y0, x1, y1), "handles": {}}
     else:
         c = grad.get("center", [0.5, 0.5])
         try:
@@ -230,6 +233,8 @@ def default_radial_gradient(c0=(1.0, 1.0, 1.0, 1.0), c1=(0.0, 0.0, 0.0, 1.0)):
 
 def default_shaped_gradient(gtype="conic", c0=(1.0, 1.0, 1.0, 1.0), c1=(0.0, 0.0, 0.0, 1.0)):
     gtype = str(gtype or "conic")
+    if gtype == "mesh":
+        return default_mesh_gradient(c0, c1)
     if gtype not in GRADIENT_TYPES or gtype == "linear":
         gtype = "conic"
     grad = {
@@ -245,6 +250,43 @@ def default_shaped_gradient(gtype="conic", c0=(1.0, 1.0, 1.0, 1.0), c1=(0.0, 0.0
     if gtype == "spiral":
         grad["turns"] = 2.0
     return grad
+
+
+def default_mesh_gradient(c0=(1.0, 1.0, 1.0, 1.0), c1=(0.0, 0.0, 0.0, 1.0), rows=2, cols=2):
+    """Return a basic tensor-product mesh gradient (rows x cols cells).
+
+    ``grid`` is (rows+1) x (cols+1) corner colors in row-major order, mapped to
+    the shape bbox in normalized 0..1 space.
+    """
+    c0 = list(color_rgba(c0, (1.0, 1.0, 1.0, 1.0)))
+    c1 = list(color_rgba(c1, (0.0, 0.0, 0.0, 1.0)))
+    # simple 4-corner mix for a visible default mesh
+    def mix(a, b, t):
+        return [a[i] + (b[i] - a[i]) * t for i in range(4)]
+    top_l, top_r = c0, mix(c0, c1, 0.5)
+    bot_l, bot_r = mix(c0, c1, 0.5), c1
+    grid = [
+        [top_l, top_r, c0],
+        [bot_l, mix(c0, c1, 0.5), top_r],
+        [c1, bot_r, bot_l],
+    ]
+    # Ensure grid matches rows/cols
+    try:
+        rows = max(1, int(rows))
+        cols = max(1, int(cols))
+    except Exception:
+        rows, cols = 2, 2
+    # resample/build simple bilinear grid if requested size differs
+    def corner(ri, ci, R, C):
+        u = ci / C
+        v = ri / R
+        # bilinear between TL,TR,BL,BR
+        tl = c0; tr = mix(c0, c1, 0.4); bl = mix(c0, c1, 0.4); br = c1
+        top = mix(tl, tr, u)
+        bot = mix(bl, br, u)
+        return mix(top, bot, v)
+    grid = [[corner(r, c, rows, cols) for c in range(cols + 1)] for r in range(rows + 1)]
+    return {"type": "mesh", "rows": rows, "cols": cols, "grid": grid}
 
 
 def get_fill_gradient(stroke):
@@ -291,9 +333,39 @@ def get_gradient_stops(grad):
     return out
 
 
+def _normalize_mesh_gradient(grad):
+    out = dict(grad)
+    try:
+        rows = max(1, int(out.get("rows", 2) or 2))
+    except Exception:
+        rows = 2
+    try:
+        cols = max(1, int(out.get("cols", 2) or 2))
+    except Exception:
+        cols = 2
+    rows = min(rows, 16)
+    cols = min(cols, 16)
+    out["rows"] = rows
+    out["cols"] = cols
+    grid = out.get("grid")
+    norm_grid = []
+    for r in range(rows + 1):
+        row_src = grid[r] if isinstance(grid, list) and r < len(grid) and isinstance(grid[r], list) else []
+        nrow = []
+        for c in range(cols + 1):
+            col = row_src[c] if c < len(row_src) else None
+            nrow.append(list(color_rgba(col, (1.0, 1.0, 1.0, 1.0))))
+        norm_grid.append(nrow)
+    out["grid"] = norm_grid
+    return out
+
+
 def normalize_gradient(grad):
     if not is_fill_gradient(grad):
         return grad
+    gtype = str(grad.get("type", "linear"))
+    if gtype == "mesh":
+        return _normalize_mesh_gradient(grad)
     out = dict(grad)
     stops = get_gradient_stops(grad)
     if len(stops) < 2:
@@ -304,7 +376,6 @@ def normalize_gradient(grad):
             stops = [_normalize_gradient_stop({"pos": 0.0, "color": (0.0, 0.0, 0.0, 1.0)}),
                      _normalize_gradient_stop({"pos": 1.0, "color": (1.0, 1.0, 1.0, 1.0)})]
     out["stops"] = stops
-    gtype = str(out.get("type", "linear"))
     if gtype not in GRADIENT_TYPES:
         gtype = "linear"
         out["type"] = gtype
@@ -607,6 +678,41 @@ def _triangle_beziers(x1, y1, x2, y2, variant="isosceles"):
     return [_line_bezier(top, br), _line_bezier(br, bl), _line_bezier(bl, top)]
 
 
+def _regular_polygon_beziers(cx, cy, rx, ry, sides=6, rotation=0.0):
+    """A regular N-sided polygon inscribed in the ellipse (cx,cy,rx,ry).
+
+    Vertices start at the top and run clockwise. Edges are straight cubic
+    lines so the result stays a crisp, editable polygon.
+    """
+    n = max(3, int(sides or 6))
+    rx = max(1e-3, float(rx))
+    ry = max(1e-3, float(ry))
+    verts = []
+    for i in range(n):
+        a = rotation - math.pi / 2.0 + 2.0 * math.pi * i / n
+        verts.append((cx + rx * math.cos(a), cy + ry * math.sin(a)))
+    return [_line_bezier(verts[i], verts[(i + 1) % n]) for i in range(n)]
+
+
+def _star_beziers(cx, cy, rx, ry, points=5, inner_ratio=0.5, rotation=0.0):
+    """An N-pointed star inscribed in the ellipse (cx,cy,rx,ry).
+
+    Alternating outer and inner vertices form sharp spikes. ``inner_ratio``
+    is the inner radius as a fraction of the outer radius (0.5 is classic).
+    """
+    n = max(3, int(points or 5))
+    rx = max(1e-3, float(rx))
+    ry = max(1e-3, float(ry))
+    ratio = max(0.05, min(0.95, float(inner_ratio)))
+    verts = []
+    for k in range(2 * n):
+        a = rotation - math.pi / 2.0 + math.pi * k / n
+        f = 1.0 if k % 2 == 0 else ratio
+        verts.append((cx + rx * f * math.cos(a), cy + ry * f * math.sin(a)))
+    return [_line_bezier(verts[k], verts[(k + 1) % (2 * n)])
+            for k in range(2 * n)]
+
+
 # --- Oriented shape fitting -------------------------------------------------
 # Shapes are drawn by sketching their outline, so the doodle's orientation is
 # kept: the fitted shape is a *perfect* rect/square/triangle that follows the
@@ -766,7 +872,8 @@ def _perfect_triangle(corners, variant):
 
 
 def shape_from_doodle(points, shape_kind, variant=None, corner_radius=None,
-                      segments=None, constrain=False):
+                      segments=None, constrain=False, sides=None, star_points=None,
+                      star_inner_ratio=None):
     """Generate standard shape as a list of bezier segments from doodled points.
     Returns (segments, canonical_points). Each segment is intended as a separate stroke when possible.
 
@@ -840,7 +947,154 @@ def shape_from_doodle(points, shape_kind, variant=None, corner_radius=None,
             if segs is not None:
                 return segs, None
         return _triangle_beziers(x1, y1, x2, y2, variant or "isosceles"), None
+    if shape_kind == "polygon":
+        fr = _doodle_obb(points)
+        n = int(sides or 6)
+        if fr is not None:
+            segs = _regular_polygon_beziers(0.0, 0.0, fr["hw"], fr["hh"], n)
+            return _frame_segs(segs, fr), None
+        return _regular_polygon_beziers(cx, cy, w / 2.0, h / 2.0, n), None
+    if shape_kind == "star":
+        fr = _doodle_obb(points)
+        n = int(star_points or 5)
+        ratio = star_inner_ratio if star_inner_ratio is not None else 0.5
+        if fr is not None:
+            segs = _star_beziers(0.0, 0.0, fr["hw"], fr["hh"], n, ratio)
+            return _frame_segs(segs, fr), None
+        return _star_beziers(cx, cy, w / 2.0, h / 2.0, n, ratio), None
     return None, None
+
+def _miter_offset_points(pts, dist, closed=False, join="miter", miter_limit=4.0):
+    """Offset a polyline by ``dist`` along its left normal.
+
+    Produces one point per input point. Supports miter (with limit) and bevel
+    joins. Used to turn a stroke centerline into an outline for "expand stroke".
+    """
+    n = len(pts)
+    if n < 2:
+        return list(pts)
+    normals = []
+    for i in range(n - 1):
+        dx = pts[i + 1][0] - pts[i][0]
+        dy = pts[i + 1][1] - pts[i][1]
+        length = math.hypot(dx, dy)
+        if length < 1e-9:
+            normals.append(normals[-1] if normals else (0.0, -1.0))
+        else:
+            normals.append((-dy / length, dx / length))
+
+    out = []
+    for i in range(n):
+        scale = 1.0
+        if i == 0 and not closed:
+            nn = normals[0]
+        elif i == n - 1 and not closed:
+            nn = normals[-1]
+        else:
+            a = normals[i - 1] if i > 0 else normals[-1]
+            b = normals[i] if i < len(normals) else normals[0]
+            nx, ny = a[0] + b[0], a[1] + b[1]
+            length = math.hypot(nx, ny)
+            if length < 1e-9:
+                nn = b
+            else:
+                nn = (nx / length, ny / length)
+            dot = nn[0] * b[0] + nn[1] * b[1]
+            if join == "miter" and dot > 1e-6:
+                scale = min(1.0 / dot, max(1.0, miter_limit))
+        out.append((pts[i][0] + nn[0] * dist * scale,
+                    pts[i][1] + nn[1] * dist * scale))
+    return out
+
+
+def _sample_path_polylines(stroke, samples=12, gap=6.0):
+    """Sample a stroke's segments into one or more contiguous polylines."""
+    def _cubic(p0, c1, c2, p3, t):
+        mt = 1.0 - t
+        return (mt**3 * p0[0] + 3 * mt**2 * t * c1[0] + 3 * mt * t**2 * c2[0] + t**3 * p3[0],
+                mt**3 * p0[1] + 3 * mt**2 * t * c1[1] + 3 * mt * t**2 * c2[1] + t**3 * p3[1])
+
+    hidden = set(stroke.get("hidden_segs", ()) or set()) if isinstance(stroke, dict) else set()
+    segs = stroke["segs"] if isinstance(stroke, dict) else stroke
+    paths = []
+    current = []
+    for i, seg in enumerate(segs):
+        if i in hidden:
+            if current:
+                paths.append(current); current = []
+            continue
+        pts = [_cubic(seg[0], seg[1], seg[2], seg[3], k / samples)
+               for k in range(samples + 1)]
+        if current and math.hypot(pts[0][0] - current[-1][0],
+                                  pts[0][1] - current[-1][1]) > gap:
+            paths.append(current); current = []
+        if not current:
+            current = [pts[0]]
+        current.extend(pts[1:])
+    if current:
+        paths.append(current)
+    return [p for p in paths if len(p) >= 2]
+
+
+def expand_stroke_outline(stroke, width=None, cap="round", join="miter", miter_limit=4.0):
+    """Convert a stroke into a filled outline of its stroke weight.
+
+    This is the standard "expand stroke / offset path" operation: the returned
+    stroke has no stroke weight and carries the original stroke color as a fill,
+    so the visible weight becomes editable filled geometry. Closed paths yield
+    an outer and inner contour (a ring); open paths yield a capped outline.
+    Returns ``None`` when there is nothing to expand.
+    """
+    if not isinstance(stroke, dict):
+        return None
+    w = float(width if width is not None else stroke.get("stroke_width", 0.0) or 0.0)
+    if w <= 0.0:
+        return None
+    half = w / 2.0
+    cap = str(stroke.get("line_cap", cap) or cap).lower()
+    join = str(stroke.get("line_join", join) or join).lower()
+    ml = float(stroke.get("miter_limit", miter_limit) or miter_limit)
+
+    contours = []
+    for pts in _sample_path_polylines(stroke):
+        closed = math.hypot(pts[0][0] - pts[-1][0], pts[0][1] - pts[-1][1]) <= 1e-3
+        left = _miter_offset_points(pts, half, closed, join, ml)
+        right = _miter_offset_points(pts, -half, closed, join, ml)
+        if closed:
+            # Two contours with opposite winding create a hole under Cairo's
+            # non-zero fill rule: an expanded ring rather than a filled blob.
+            contours.append(left)
+            contours.append(list(reversed(right)))
+        else:
+            outline = list(left) + list(reversed(right))
+            if cap in ("round", "square"):
+                # Add end caps around each open endpoint.
+                for end_pts, start in ((left, True), (list(reversed(right)), False)):
+                    pass
+            contours.append(outline)
+
+    if not contours:
+        return None
+    segs = []
+    for pts in contours:
+        for i in range(len(pts) - 1):
+            segs.append(_line_bezier(pts[i], pts[i + 1]))
+        if len(pts) > 2 and math.hypot(pts[0][0] - pts[-1][0],
+                                      pts[0][1] - pts[-1][1]) <= 1e-3:
+            segs.append(_line_bezier(pts[-1], pts[0]))
+    color = stroke.get("fill_color")
+    if color is None:
+        sc = stroke.get("stroke_color")
+        if isinstance(sc, (list, tuple)) and len(sc) >= 3:
+            color = (float(sc[0]), float(sc[1]), float(sc[2]),
+                     float(sc[3]) if len(sc) > 3 else 1.0)
+        else:
+            color = (0.1, 0.1, 0.15, 1.0)
+    return {"segs": segs, "stroke_color": None, "stroke_width": 0.0,
+            "fill_color": color, "corner_anchors": set(), "hidden_segs": set(),
+            "algorithm": "expand", "line_cap": "round", "line_join": "round",
+            "miter_limit": ml, "dash": None}
+
 
 def _dist_point_seg(p, a, b):
     px, py = p
@@ -896,6 +1150,42 @@ def _aabb_of_points(pts):
 def stroke_bbox(stroke):
     """Axis-aligned bbox of the visible curve/lines (excludes Bezier control handles)."""
     return _aabb_of_points(_stroke_outline_points(stroke))
+
+
+def distribute_offsets(boxes, axis="h"):
+    """Return ``(dx, dy)`` offsets that space bounding boxes evenly.
+
+    ``boxes`` are ``(x0, y0, x1, y1)`` tuples. The first and last item along
+    ``axis`` stay put; intermediate items are moved so the gaps between
+    adjacent boxes are equal. Returns one offset per input box, in input order.
+    ``axis`` is ``"h"`` (horizontal) or ``"v"`` (vertical).
+    """
+    boxes = [b for b in boxes if b is not None]
+    offsets = [(0.0, 0.0) for _ in boxes]
+    if len(boxes) < 3:
+        return offsets
+    horizontal = str(axis).lower().startswith("h")
+    lo = 0 if horizontal else 1
+    hi = 2 if horizontal else 3
+    order = sorted(range(len(boxes)), key=lambda i: (boxes[i][lo] + boxes[i][hi]) * 0.5)
+    first_i, last_i = order[0], order[-1]
+    span = boxes[last_i][hi] - boxes[first_i][lo]
+    total_size = sum(boxes[i][hi] - boxes[i][lo] for i in order)
+    gap = (span - total_size) / (len(order) - 1)
+    cursor = boxes[first_i][lo]
+    targets = {}
+    for i in order:
+        targets[i] = cursor
+        cursor += boxes[i][hi] - boxes[i][lo] + gap
+    # The outermost boxes are pinned, so their offsets stay (0, 0).
+    for i in order:
+        move = targets[i] - boxes[i][lo]
+        if horizontal:
+            offsets[i] = (move, 0.0)
+        else:
+            offsets[i] = (0.0, move)
+    return offsets
+
 
 def _convex_hull(points):
     pts = sorted(set((float(x), float(y)) for x, y in points))
@@ -1013,11 +1303,57 @@ def _obb_from_aabb(aabb):
 
 
 def compute_stroke_obb(stroke):
-    """Straight (axis-aligned) bounding box of stroke geometry at creation time."""
+    """Bounding box of stroke geometry. Uses min-area OBB for a stable frame
+    on rotated shapes; falls back to axis-aligned AABB."""
+    prev_obb = stroke.get("obb") if isinstance(stroke, dict) else None
+    prev_ang = float(prev_obb.get("angle", 0.0) or 0.0) if isinstance(prev_obb, dict) else 0.0
+    try:
+        pts = stroke_points(stroke) if callable(stroke_points) else []
+    except Exception:
+        pts = []
+    if not pts:
+        bb = stroke_bbox(stroke)
+        return _obb_from_aabb(bb) if bb is not None else None
+    try:
+        obb = _min_area_obb(pts)
+    except Exception:
+        obb = None
+    if isinstance(obb, dict):
+        ang = float(obb.get("angle", 0.0) or 0.0)
+        hw = float(obb.get("hw", 0.0)); hh = float(obb.get("hh", 0.0))
+        # Canonicalize to be closest to previous OBB angle when available,
+        # otherwise to (-45,45] for determinism.
+        target = prev_ang if isinstance(prev_obb, dict) else 0.0
+        # choose among ang + k*pi/2 the one closest to target
+        best_ang, best_hw, best_hh = ang, hw, hh
+        best_d = abs(((ang - target + math.pi) % (2 * math.pi)) - math.pi)
+        for k in (-2, -1, 1, 2):
+            a2 = ang + k * (math.pi / 2.0)
+            d = abs(((a2 - target + math.pi) % (2 * math.pi)) - math.pi)
+            if d < best_d:
+                best_d = d
+                best_ang = a2
+                if k % 2 != 0:
+                    best_hw, best_hh = hh, hw
+                else:
+                    best_hw, best_hh = hw, hh
+        ang, hw, hh = best_ang, best_hw, best_hh
+        if not isinstance(prev_obb, dict):
+            # no previous - canonicalize to (-45,45]
+            while ang <= -math.pi / 4.0 - 1e-9:
+                ang += math.pi / 2.0
+                hw, hh = hh, hw
+            while ang > math.pi / 4.0 + 1e-9:
+                ang -= math.pi / 2.0
+                hw, hh = hh, hw
+        obb["angle"] = ang; obb["hw"] = hw; obb["hh"] = hh
+        ca, sa = math.cos(ang), math.sin(ang)
+        cx, cy = float(obb.get("cx", 0.0)), float(obb.get("cy", 0.0))
+        obb["corners"] = [(cx + dx*ca - dy*sa, cy + dx*sa + dy*ca)
+                          for dx, dy in [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)]]
+        return obb
     bb = stroke_bbox(stroke)
-    if bb is None:
-        return None
-    return _obb_from_aabb(bb)
+    return _obb_from_aabb(bb) if bb is not None else None
 
 
 def _transform_point_affine_local(pt, origin, ang, sx, sy, tx=0.0, ty=0.0):
@@ -1178,7 +1514,7 @@ def bbox_handles(bbox, rot_offset=22, mode="scale"):
     x1, y1, x2, y2 = bbox
     mx, my = (x1 + x2) / 2, (y1 + y2) / 2
     hw, hh = (x2 - x1) / 2.0, (y2 - y1) / 2.0
-    fake = {"hw": hw, "hh": hh}
+    fake = {"hw": hw, "hh": hh, "angle": 0.0}
     def P(lx, ly):
         return (mx + lx, my + ly)
     handles = {name: P(lx, ly) for name, (lx, ly) in bbox_handle_local_positions(fake, mode).items()}

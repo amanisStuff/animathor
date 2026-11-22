@@ -1,4 +1,9 @@
-"""View: left tool toolbar (uses bundled Lucide icons)."""
+"""View: left tool toolbar and bottom shape toolbar.
+
+All chrome is drawn with the shared primitives from :mod:`views.widgets`,
+so the toolbars use the same radii, colours and interaction states as the
+properties panel and popovers.
+"""
 
 import pygame
 
@@ -6,6 +11,7 @@ import config as cfg
 from config import *
 
 from views.icons import BUTTON_TIPS, draw_icon, draw_tooltip
+from views.widgets import draw_button, draw_card, draw_color_swatch
 
 # Toolbar button -> bundled icon name and tip key.
 _ICON_FOR = {
@@ -27,7 +33,8 @@ def draw_left_toolbar(screen, mouse_pos, tool_mode, btn_draw, btn_select, btn_un
     top = getattr(cfg, "TOP_BAR_H", 0)
     bar = pygame.Rect(0, top, LEFT_BAR_W, cfg.HEIGHT - top)
     pygame.draw.rect(screen, TOOLBAR_BG, bar)
-    pygame.draw.line(screen, PANEL_BORDER, (LEFT_BAR_W - 1, top), (LEFT_BAR_W - 1, cfg.HEIGHT), 2)
+    pygame.draw.line(screen, PANEL_BORDER, (LEFT_BAR_W - 1, top), (LEFT_BAR_W - 1, cfg.HEIGHT), BORDER_WIDTH)
+
     items = []
     if btn_undo is not None:
         items.append(("undo", btn_undo, False, can_undo))
@@ -37,21 +44,15 @@ def draw_left_toolbar(screen, mouse_pos, tool_mode, btn_draw, btn_select, btn_un
         ("draw", btn_draw, tool_mode == "draw", True),
         ("selection", btn_select, tool_mode == "selection", True),
     ))
+
     tip = None
     for kind, btn, active, enabled in items:
-        hover = btn.rect.collidepoint(mouse_pos) and enabled
-        bg = TOOL_ACTIVE if active else (BUTTON_HOVER if hover else (248, 250, 252))
-        border = ACCENT if active else BUTTON_BORDER
-        if not enabled and kind in ("undo", "redo"):
-            bg = (245, 246, 248)
-            border = (210, 214, 220)
-        pygame.draw.rect(screen, bg, btn.rect, border_radius=8)
-        pygame.draw.rect(screen, border, btn.rect, width=2 if active else 1, border_radius=8)
-        color = ACCENT if active else (70, 80, 95)
-        draw_icon(screen, _ICON_FOR[kind], btn.rect, color=color, size=24, enabled=enabled)
-        if hover and kind in TOOL_TIPS:
+        hovered = draw_button(screen, btn.rect, "", None, mouse_pos=mouse_pos,
+                              active=active, enabled=enabled,
+                              icon_name=_ICON_FOR[kind], icon_size=24,
+                              radius=RADIUS_LG)
+        if hovered and kind in TOOL_TIPS:
             tip = TOOL_TIPS[kind]
-    # Draw tooltip on top so it is not covered by later buttons.
     if tip:
         draw_tooltip(screen, mouse_pos, tip)
 
@@ -59,15 +60,19 @@ def draw_left_toolbar(screen, mouse_pos, tool_mode, btn_draw, btn_select, btn_un
 # Shape key -> bundled icon name (mirrors the old sidebar Shape palette).
 _SHAPE_ICON = {
     "freehand": "shape_free",
+    "pen": "pen",
     "line": "shape_line",
     "rect": "shape_rect",
     "square": "shape_square",
     "ellipse": "shape_ellipse",
     "circle": "shape_circle",
     "triangle": "shape_triangle",
+    "polygon": "shape_polygon",
+    "star": "shape_star",
     "eraser": "eraser",
     "cutter": "cutter",
     "bucket": "bucket",
+    "text": "text",
 }
 
 
@@ -77,14 +82,14 @@ def draw_bottom_shape_toolbar(screen, fonts, mouse_pos, state):
     bar_h = getattr(cfg, "BOTTOM_BAR_H", 56)
     bar = pygame.Rect(cfg.CANVAS_X, cfg.HEIGHT - bar_h, cfg.CANVAS_W, bar_h)
     pygame.draw.rect(screen, TOOLBAR_BG, bar)
-    pygame.draw.line(screen, PANEL_BORDER, (bar.x, bar.y), (bar.right - 1, bar.y), 2)
+    pygame.draw.line(screen, PANEL_BORDER, (bar.x, bar.y), (bar.right - 1, bar.y), BORDER_WIDTH_ACTIVE)
 
     tool_mode = state.get("tool_mode", "draw")
     submode = state.get("selection_submode", "transform")
 
     rects = {}
     tip = None
-    pad, gap = 12, 6
+    pad, gap = SPACE_MD + SPACE_XS, SPACE_SM
 
     if tool_mode == "selection":
         if submode == "transform":
@@ -102,19 +107,12 @@ def draw_bottom_shape_toolbar(screen, fonts, mouse_pos, state):
             bw = (bar.w - pad * 2 - gap * (n - 1)) // n
             has_sel = bool(state.get("selected_strokes"))
             for i, (key, icon_name, label) in enumerate(entries):
-                r = pygame.Rect(bar.x + pad + i * (bw + gap), bar.y + 5, bw, bar.h - 10)
+                r = pygame.Rect(bar.x + pad + i * (bw + gap), bar.y + SPACE_SM, bw, bar.h - SPACE_SM * 2)
                 rects[key] = r
-                hover = r.collidepoint(mouse_pos)
-                enabled = has_sel
-                bg = BUTTON_HOVER if (hover and enabled) else BUTTON_BG
-                pygame.draw.rect(screen, bg, r, border_radius=7)
-                pygame.draw.rect(screen, BUTTON_BORDER, r, 1, border_radius=7)
-                color = TEXT_COLOR if enabled else (170, 176, 184)
-                draw_icon(screen, icon_name, pygame.Rect(r.x + 6, r.centery - 10, 20, 20),
-                          color=color, size=20, enabled=enabled)
-                t = font_small.render(label, True, color)
-                screen.blit(t, t.get_rect(midleft=(r.x + 30, r.centery)))
-                if hover:
+                hovered = draw_button(screen, r, label, font_small, mouse_pos=mouse_pos,
+                                      enabled=has_sel, icon_name=icon_name,
+                                      icon_size=ICON_SIZE, radius=RADIUS_LG)
+                if hovered:
                     tip = BUTTON_TIPS.get(icon_name, label)
         elif submode == "nodes":
             msg = font_small.render("Nodes view: drag nodes and handles on the canvas", True, MUTED_COLOR)
@@ -138,38 +136,39 @@ def draw_bottom_shape_toolbar(screen, fonts, mouse_pos, state):
     draw_tool = state.get("draw_tool", "pen")
     entries = list(DRAW_SHAPES) + list(BOTTOM_TOOLS)
     tool_keys = {k for k, _ in BOTTOM_TOOLS}
+    shape_families = {
+        "rect": ("rect", "square"),
+        "ellipse": ("ellipse", "circle"),
+    }
     n = max(1, len(entries))
     bw = (bar.w - pad * 2 - gap * (n - 1)) // n
     for i, (key, label) in enumerate(entries):
-        r = pygame.Rect(bar.x + pad + i * (bw + gap), bar.y + 5, bw, bar.h - 10)
+        r = pygame.Rect(bar.x + pad + i * (bw + gap), bar.y + SPACE_SM, bw, bar.h - SPACE_SM * 2)
         rects[key] = r
         if key in tool_keys:
             active = (draw_tool == key)
         else:
-            active = (shape == key and draw_tool == "pen")
+            family = shape_families.get(key, (key,))
+            active = (shape in family and draw_tool == "pen")
         open_menu = (state.get("shape_menu_key") == key)
-        hover = r.collidepoint(mouse_pos)
+        display_label = label
+        icon_key = key
+        if key == "rect" and shape == "square":
+            display_label = "Square"
+            icon_key = "square"
+        elif key == "ellipse" and shape == "circle":
+            display_label = "Circle"
+            icon_key = "circle"
         if key == "eraser":
             # Separate the drawing tools from the shape tools.
-            pygame.draw.line(screen, BUTTON_BORDER, (r.x - gap // 2 - 1, bar.y + 12),
-                             (r.x - gap // 2 - 1, bar.bottom - 12), 1)
-        bg = TOOL_ACTIVE if active else (BUTTON_HOVER if hover else BUTTON_BG)
-        pygame.draw.rect(screen, bg, r, border_radius=7)
-        pygame.draw.rect(screen, ACCENT if (active or open_menu) else BUTTON_BORDER, r,
-                         2 if (active or open_menu) else 1, border_radius=7)
-        icon_name = _SHAPE_ICON.get(key)
-        draw_icon(screen, icon_name,
-                  pygame.Rect(r.x + 6, r.centery - 10, 20, 20),
-                  color=ACCENT if active else TEXT_COLOR, size=20)
-        t = font_small.render(label, True, ACCENT if active else TEXT_COLOR)
-        screen.blit(t, t.get_rect(midleft=(r.x + 32, r.centery)))
-        if key in _TOOL_META:
-            # Small caret: right-click this button for its options.
-            _cx, _cy = r.right - 9, r.y + 7
-            pygame.draw.lines(screen, MUTED_COLOR, False,
-                              [(_cx - 4, _cy - 1), (_cx, _cy + 2), (_cx + 4, _cy - 1)], 2)
-        if hover:
-            tip = f"{BUTTON_TIPS.get(icon_name, label)} - right-click for options"
+            pygame.draw.line(screen, BUTTON_BORDER, (r.x - gap // 2 - 1, bar.y + SPACE_MD),
+                             (r.x - gap // 2 - 1, bar.bottom - SPACE_MD), BORDER_WIDTH)
+        hovered = draw_button(screen, r, display_label, font_small, mouse_pos=mouse_pos,
+                              active=active or open_menu,
+                              icon_name=_SHAPE_ICON.get(icon_key), icon_size=ICON_SIZE,
+                              radius=RADIUS_LG, show_caret=key in _TOOL_META)
+        if hovered:
+            tip = f"{BUTTON_TIPS.get(_SHAPE_ICON.get(icon_key), display_label)} - right-click for options"
     state["draw_shape_rects"] = rects
     if tip:
         draw_tooltip(screen, mouse_pos, tip)
@@ -191,8 +190,8 @@ def draw_shape_context_menu(screen, fonts, mouse_pos, state):
     tool_name, tool_icon = _TOOL_META.get(key, ("Options", "options"))
     rows = _tool_option_rows(state, key)
 
-    pad, w, row_h, gap = 10, 240, 28, 4
-    sw, sgap = 26, 6
+    pad, w, row_h, gap = SPACE_MD, 240, CONTROL_H, SPACE_XS
+    sw, sgap = 26, SPACE_SM
     sw_per_row = max(1, (w - pad * 2 + sgap) // (sw + sgap))
     body = 0
     for row in rows:
@@ -216,14 +215,12 @@ def draw_shape_context_menu(screen, fonts, mouse_pos, state):
     panel = pygame.Rect(x, y, w, h)
     state["shape_menu_rect"] = panel
 
-    pygame.draw.rect(screen, (222, 226, 234), panel.move(2, 3), border_radius=9)
-    pygame.draw.rect(screen, (255, 255, 255), panel, border_radius=8)
-    pygame.draw.rect(screen, PANEL_BORDER, panel, 1, border_radius=8)
+    draw_card(screen, panel, radius=RADIUS_XL)
 
     draw_icon(screen, tool_icon, pygame.Rect(x + pad, y + 7, 18, 18),
-              color=TEXT_COLOR, size=20)
-    screen.blit(font_small.render(tool_name, True, TEXT_COLOR), (x + pad + 24, y + 9))
-    pygame.draw.line(screen, PANEL_BORDER, (x + pad, y + 30), (x + w - pad, y + 30), 1)
+              color=TEXT_PRIMARY, size=ICON_SIZE)
+    screen.blit(font_small.render(tool_name, True, TEXT_PRIMARY), (x + pad + 24, y + 9))
+    pygame.draw.line(screen, PANEL_BORDER, (x + pad, y + 30), (x + w - pad, y + 30), BORDER_WIDTH)
 
     rects = {}
     cy = y + 36
@@ -232,18 +229,22 @@ def draw_shape_context_menu(screen, fonts, mouse_pos, state):
         if kind == "choice":
             screen.blit(font_small.render(row["label"], True, MUTED_COLOR), (x + pad, cy))
             cy += 20
-            n = max(1, len(row["items"]))
-            bw = (w - pad * 2 - gap * (n - 1)) // n
-            for i, (item_key, label) in enumerate(row["items"]):
-                rr = pygame.Rect(x + pad + i * (bw + gap), cy, bw, 26)
-                rects[item_key] = rr
-                active = (row["value"] == item_key)
-                bg = TOOL_ACTIVE if active else (BUTTON_HOVER if rr.collidepoint(mouse_pos) else BUTTON_BG)
-                pygame.draw.rect(screen, bg, rr, border_radius=5)
-                pygame.draw.rect(screen, ACCENT if active else BUTTON_BORDER, rr,
-                                 2 if active else 1, border_radius=5)
-                t = font_small.render(label, True, ACCENT if active else TEXT_COLOR)
-                screen.blit(t, t.get_rect(center=rr.center))
+            items = list(row.get("items", []))
+            val = row.get("value")
+            labels = {k: lbl for k, lbl in items}
+            cur_label = labels.get(val, str(val))
+            ck = str(row.get("key", row.get("label", "choice")))
+            prev_k = f"choice_prev:{ck}"
+            next_k = f"choice_next:{ck}"
+            btn_w = 28
+            prev_r = pygame.Rect(x + pad, cy, btn_w, 26)
+            next_r = pygame.Rect(x + w - pad - btn_w, cy, btn_w, 26)
+            mid_r = pygame.Rect(prev_r.right + gap, cy, next_r.left - prev_r.right - gap * 2, 26)
+            rects[prev_k] = prev_r
+            rects[next_k] = next_r
+            draw_button(screen, prev_r, "<", font_small, mouse_pos=mouse_pos, radius=RADIUS_SM)
+            draw_button(screen, mid_r, cur_label, font_small, mouse_pos=mouse_pos, radius=RADIUS_SM)
+            draw_button(screen, next_r, ">", font_small, mouse_pos=mouse_pos, radius=RADIUS_SM)
             cy += 26 + gap
         elif kind == "swatches":
             screen.blit(font_small.render(row["label"], True, MUTED_COLOR), (x + pad, cy))
@@ -256,12 +257,7 @@ def draw_shape_context_menu(screen, fonts, mouse_pos, state):
                                  cy + (i // sw_per_row) * (sw + sgap), sw, sw)
                 rects[f"{row['key']}_{i}"] = rr
                 selected = (current == tuple(round(c, 3) for c in col))
-                bg = BUTTON_HOVER if rr.collidepoint(mouse_pos) else (255, 255, 255)
-                pygame.draw.rect(screen, bg, rr, border_radius=5)
-                pygame.draw.rect(screen, tuple(int(c * 255) for c in col),
-                                 rr.inflate(-6, -6), border_radius=3)
-                pygame.draw.rect(screen, ACCENT if selected else BUTTON_BORDER, rr,
-                                 2 if selected else 1, border_radius=5)
+                draw_color_swatch(screen, rr, col, selected=selected, mouse_pos=mouse_pos)
             nrows = (max(1, len(items)) + sw_per_row - 1) // sw_per_row
             cy += nrows * sw + (nrows - 1) * sgap + gap
         elif kind == "stepper":
@@ -270,14 +266,10 @@ def draw_shape_context_menu(screen, fonts, mouse_pos, state):
             plus = pygame.Rect(rr.right - 30, rr.y + 2, 28, 24)
             rects[row["minus"]] = minus
             rects[row["plus"]] = plus
-            t = font_small.render(f"{row['label']}: {row['value']}", True, TEXT_COLOR)
+            t = font_small.render(f"{row['label']}: {row['value']}", True, TEXT_PRIMARY)
             screen.blit(t, t.get_rect(midleft=(rr.x, rr.centery)))
             for br, sym in ((minus, "-"), (plus, "+")):
-                bg = BUTTON_HOVER if br.collidepoint(mouse_pos) else BUTTON_BG
-                pygame.draw.rect(screen, bg, br, border_radius=5)
-                pygame.draw.rect(screen, BUTTON_BORDER, br, 1, border_radius=5)
-                s = font.render(sym, True, TEXT_COLOR)
-                screen.blit(s, s.get_rect(center=br.center))
+                draw_button(screen, br, sym, font, mouse_pos=mouse_pos, radius=RADIUS_SM)
             cy += row_h + gap
         else:  # toggle
             rr = pygame.Rect(x + pad, cy, w - pad * 2, row_h - 2)
@@ -293,7 +285,7 @@ def draw_shape_context_menu(screen, fonts, mouse_pos, state):
         cy += 24 + gap
 
     # Shared snapping toggle, available for every drawing tool.
-    pygame.draw.line(screen, PANEL_BORDER, (x + pad, cy + 2), (x + w - pad, cy + 2), 1)
+    pygame.draw.line(screen, PANEL_BORDER, (x + pad, cy + 2), (x + w - pad, cy + 2), BORDER_WIDTH)
     cy += 8
     snap_on = bool(state.get("snap_enabled", True))
     rr = pygame.Rect(x + pad, cy, w - pad * 2, row_h - 2)
@@ -313,25 +305,23 @@ def draw_shape_context_menu(screen, fonts, mouse_pos, state):
 
 
 def _toggle_row(screen, font_small, r, mouse_pos, active, icon_name, label, value):
-    bg = TOOL_ACTIVE if active else (BUTTON_HOVER if r.collidepoint(mouse_pos) else BUTTON_BG)
-    pygame.draw.rect(screen, bg, r, border_radius=6)
-    pygame.draw.rect(screen, ACCENT if active else BUTTON_BORDER, r,
-                     2 if active else 1, border_radius=6)
-    draw_icon(screen, icon_name, pygame.Rect(r.x + 6, r.centery - 10, 20, 20),
-              color=ACCENT if active else TEXT_COLOR, size=20)
-    t = font_small.render(f"{label}: {value}", True, ACCENT if active else TEXT_COLOR)
-    screen.blit(t, t.get_rect(midleft=(r.x + 32, r.centery)))
+    draw_button(screen, r, f"{label}: {value}", font_small, mouse_pos=mouse_pos,
+                active=active, icon_name=icon_name, icon_size=ICON_SIZE,
+                radius=RADIUS_MD)
 
 
 # Per-tool options metadata: tool key -> (display name, bundled icon).
 _TOOL_META = {
     "freehand": ("Freehand", "shape_free"),
+    "pen": ("Bezier Pen", "pen"),
     "line": ("Line", "shape_line"),
     "rect": ("Rectangle", "shape_rect"),
     "square": ("Square", "shape_square"),
     "ellipse": ("Ellipse", "shape_ellipse"),
     "circle": ("Circle", "shape_circle"),
     "triangle": ("Triangle", "shape_triangle"),
+    "polygon": ("Polygon", "shape_polygon"),
+    "star": ("Star", "shape_star"),
     "eraser": ("Eraser", "eraser"),
     "cutter": ("Split curve", "cutter"),
     "bucket": ("Bucket fill", "bucket"),
@@ -343,7 +333,8 @@ def _tool_option_rows(state, key):
     """Rows describing a tool's options; rendered by draw_shape_context_menu."""
     if key == "freehand":
         return [
-            {"kind": "choice", "label": "Fitting", "items": list(TRACE_ALGORITHMS),
+            {"kind": "choice", "label": "Fitting", "key": "trace_algorithm",
+             "items": list(TRACE_ALGORITHMS),
              "value": state.get("trace_algorithm", "fit")},
             {"kind": "stepper", "label": "Points / curve",
              "value": state.get("max_points", 4),
@@ -358,17 +349,43 @@ def _tool_option_rows(state, key):
             {"kind": "toggle", "label": "Arrowhead", "key": "line_arrow",
              "icon": "shape_line", "value": bool(state.get("line_arrow"))},
         ]
-    if key in ("rect", "square"):
-        return [{"kind": "stepper", "label": "Corner radius",
-                 "value": f"{state.get('corner_radius', 0)}%",
-                 "minus": "corner_minus", "plus": "corner_plus"}]
-    if key in ("ellipse", "circle"):
-        return [{"kind": "stepper", "label": "Segments",
-                 "value": state.get("ellipse_segments", 4),
-                 "minus": "segments_minus", "plus": "segments_plus"}]
+    if key == "rect":
+        shape = state.get("draw_shape", "rect")
+        return [
+            {"kind": "choice", "label": "Shape", "key": "rect_variant",
+             "items": [("rect", "Rectangle"), ("square", "Square")],
+             "value": shape if shape in ("rect", "square") else "rect"},
+            {"kind": "stepper", "label": "Corner radius",
+             "value": f"{state.get('corner_radius', 0)}%",
+             "minus": "corner_minus", "plus": "corner_plus"},
+        ]
+    if key == "ellipse":
+        shape = state.get("draw_shape", "ellipse")
+        return [
+            {"kind": "choice", "label": "Shape", "key": "ellipse_variant",
+             "items": [("ellipse", "Ellipse"), ("circle", "Circle")],
+             "value": shape if shape in ("ellipse", "circle") else "ellipse"},
+            {"kind": "stepper", "label": "Segments",
+             "value": state.get("ellipse_segments", 4),
+             "minus": "segments_minus", "plus": "segments_plus"},
+        ]
     if key == "triangle":
-        return [{"kind": "choice", "label": "Type", "items": list(TRIANGLE_VARIANTS),
+        return [{"kind": "choice", "label": "Type", "key": "triangle_variant",
+                 "items": list(TRIANGLE_VARIANTS),
                  "value": state.get("draw_shape_variant", "isosceles")}]
+    if key == "polygon":
+        return [{"kind": "stepper", "label": "Sides",
+                 "value": state.get("polygon_sides", 6),
+                 "minus": "sides_minus", "plus": "sides_plus"}]
+    if key == "star":
+        return [
+            {"kind": "stepper", "label": "Points",
+             "value": state.get("star_points", 5),
+             "minus": "spokes_minus", "plus": "spokes_plus"},
+            {"kind": "stepper", "label": "Inner",
+             "value": f"{int(round(float(state.get('star_inner_ratio', 0.5)) * 100))}%",
+             "minus": "inner_minus", "plus": "inner_plus"},
+        ]
     if key == "bucket":
         return [{"kind": "swatches", "label": "Fill color", "key": "bucket_color",
                  "items": list(BUCKET_SWATCHES)}]
