@@ -1502,6 +1502,246 @@ def _disp_frame_and_size(stroke, base_segs):
     return frame, size_ref
 
 
+def _distortion_sample_steps(segs, lengths, total, seg_samples, wave_evaluators):
+    SAMPLES_PER_CYCLE = 32
+    SAMPLES_PER_NOISE_CELL = 8
+    needed = 8
+    for ev in wave_evaluators.values():
+        needed = max(needed, int(math.ceil(abs(ev.get("cycles", 0.0)) * SAMPLES_PER_CYCLE)) + 8)
+        if ev.get("shape") == "noise" or ev.get("noise", 0.0) != 0.0:
+            noise_cells = max(1.0, abs(ev.get("cycles", 0.0))) * 4.0 * max(0.1, ev.get("noise_scale", 2.0))
+            needed = max(needed, int(math.ceil(noise_cells * SAMPLES_PER_NOISE_CELL)) + 8)
+        if ev.get("shape") == "repeat":
+            rpts = ev.get("repeat_points") or []
+            needed = max(needed, int(math.ceil(abs(ev.get("cycles", 0.0)) * max(16, len(rpts) * 2))) + 8)
+    fixed_total = seg_samples * max(1, len(segs))
+    needed_total = min(max(fixed_total, needed), 8192)
+    steps_list = []
+    for _l in lengths:
+        frac = (_l / total) if total > 0 else (1.0 / max(1, len(lengths)))
+        steps_list.append(max(4, int(round(needed_total * frac))))
+    return steps_list
+
+
+def _sample_base_component(segs, lengths, total, steps_list, seg_samples, disp_frame):
+    base_pts, base_s, base_local = [], [], []
+    cum = 0.0
+    for si, (p0, c1, c2, p3) in enumerate(segs):
+        seg_len = lengths[si] if si < len(lengths) else 0.0
+        start_s = cum / total
+        end_s = (cum + seg_len) / total if total > 0 else start_s
+        steps = steps_list[si] if si < len(steps_list) else seg_samples
+        for i in range(0 if si == 0 else 1, steps + 1):
+            t = i / steps
+            x, y = cubic_bezier_point(p0, c1, c2, p3, t)
+            s = start_s + (end_s - start_s) * t
+            base_pts.append((x, y))
+            base_s.append(s)
+            base_local.append(_local_point_for_disp((x, y), disp_frame))
+        cum += seg_len
+    return base_pts, base_s, base_local
+
+
+def _distortion_normals(out):
+    normals = []
+    n = len(out)
+    for i in range(n):
+        if i == 0:
+            dx = out[1][0] - out[0][0]; dy = out[1][1] - out[0][1]
+        elif i == n - 1:
+            dx = out[-1][0] - out[-2][0]; dy = out[-1][1] - out[-2][1]
+        else:
+            dx = out[i + 1][0] - out[i - 1][0]; dy = out[i + 1][1] - out[i - 1][1]
+        ll = math.hypot(dx, dy)
+        if ll < 1e-6:
+            normals.append(normals[-1] if normals else (0.0, -1.0))
+        else:
+            normals.append((-dy / ll, dx / ll))
+    for i in range(1, len(normals)):
+        pxn, pyn = normals[i - 1]; nxn, nyn = normals[i]
+        if pxn * nxn + pyn * nyn < 0:
+            normals[i] = (-nxn, -nyn)
+    return normals
+
+
+def _rebuild_distortion_param(out, disp_frame):
+    new_s = [0.0] * len(out)
+    cuml = 0.0
+    prev_pt = out[0]
+    for k in range(1, len(out)):
+        pt = out[k]
+        cuml += math.hypot(pt[0] - prev_pt[0], pt[1] - prev_pt[1])
+        new_s[k] = cuml
+        prev_pt = pt
+    if cuml > 1e-9:
+        inv = 1.0 / cuml
+        base_s = [v * inv for v in new_s]
+    else:
+        base_s = [i / max(1, len(out) - 1) for i in range(len(out))]
+    base_local = [_local_point_for_disp(pt, disp_frame) for pt in out]
+    return base_s, base_local, list(out)
+
+
+def _apply_displacement_style(out, base_s, base_local, disp_frame, disp_size_ref, sv, pin_start_edge, pin_end_edge):
+    new_out = []
+    m = len(out)
+    for i, (pt, loc, sparam) in enumerate(zip(out, base_local, base_s)):
+        dx, dy, _drot, _dlen = _spatial_displacement_field(sv, sparam, disp_size_ref)
+        if isinstance(disp_frame, dict):
+            ux, uy = disp_frame.get("u", (1.0, 0.0))
+            vx, vy = disp_frame.get("v", (0.0, 1.0))
+            dx, dy = dx * float(ux) + dy * float(vx), dx * float(uy) + dy * float(vy)
+        edge_w = 1.0
+        if m > 1 and (pin_start_edge or pin_end_edge):
+            if pin_start_edge and pin_end_edge:
+                edge_t = min(i, m - 1 - i) / max(1, (m - 1) / 2.0)
+            elif pin_start_edge:
+                edge_t = i / (m - 1)
+            else:
+                edge_t = (m - 1 - i) / (m - 1)
+            edge_w = edge_t * edge_t * (3.0 - 2.0 * edge_t)
+        new_out.append((pt[0] + dx * edge_w, pt[1] + dy * edge_w))
+    return new_out, True
+
+
+def _downsample_repeat_points(rpts, cycles, phase):
+    MAX_CYCLES, MAX_OUT, MAX_RPTS = 200, 4000, 256
+    cycle_start = int(math.floor(-phase))
+    cycle_end = int(math.ceil(cycles - phase))
+    ncy = max(1, cycle_end - cycle_start)
+    step_c = max(1, int(math.ceil(ncy / MAX_CYCLES)))
+    rpts_use = rpts
+    if len(rpts_use) > MAX_RPTS:
+        step_p = max(1, int(math.ceil(len(rpts_use) / MAX_RPTS)))
+        rpts_use = rpts_use[::step_p]
+        if rpts_use[-1] != rpts[-1]:
+            rpts_use.append(rpts[-1])
+    est = ((ncy + step_c - 1) // step_c) * len(rpts_use)
+    if est > MAX_OUT and len(rpts_use) > 2:
+        step_p2 = max(1, int(math.ceil(est / MAX_OUT)))
+        rpts_use = rpts_use[::step_p2]
+        if len(rpts_use) < 2:
+            rpts_use = rpts[:2]
+    return rpts_use, cycle_start, cycle_end, step_c
+
+
+def _apply_repeat_style(out, base_s, base_local, base_pts, disp_frame, ev):
+    rpts = ev.get("repeat_points") or []
+    cycles = float(ev.get("cycles", 0.0) or 0.0)
+    if len(rpts) < 2 or cycles <= 1e-6 or len(out) < 2:
+        return out, base_s, base_local, base_pts, False
+    phase = float(ev.get("phase", 0.0) or 0.0) / 360.0
+    rpts_use, cycle_start, cycle_end, step_c = _downsample_repeat_points(rpts, cycles, phase)
+    path_pts, path_s = out, base_s
+    normals = _distortion_normals(path_pts)
+    path_nx = [n[0] for n in normals]
+    path_ny = [n[1] for n in normals]
+    amp_px = float(ev.get("amp_px", 0.0) or 0.0)
+    reverse = bool(ev.get("reverse"))
+    clamp_mode = ev.get("clamp", "none")
+    new_out, j = [], 0
+    npath = len(path_pts)
+    for c in range(cycle_start, cycle_end + 1, step_c):
+        base_c = c + phase
+        for rp in rpts_use:
+            try:
+                pxp = float(rp[0]); pyp = float(rp[1])
+            except Exception:
+                continue
+            if reverse:
+                pyp = -pyp
+            s_global = (base_c + pxp) / cycles
+            if s_global < 0.0 or s_global > 1.0:
+                continue
+            while j < npath - 2 and path_s[j + 1] < s_global:
+                j += 1
+            while j > 0 and path_s[j] > s_global:
+                j -= 1
+            s0, s1p = path_s[j], path_s[j + 1]
+            seg = s1p - s0
+            tt = 0.0 if seg <= 1e-9 else max(0.0, min(1.0, (s_global - s0) / seg))
+            p0, p1 = path_pts[j], path_pts[j + 1]
+            x = p0[0] + (p1[0] - p0[0]) * tt
+            y = p0[1] + (p1[1] - p0[1]) * tt
+            nx = path_nx[j] + (path_nx[j + 1] - path_nx[j]) * tt
+            ny = path_ny[j] + (path_ny[j + 1] - path_ny[j]) * tt
+            nl = math.hypot(nx, ny)
+            if nl > 1e-6:
+                nx /= nl; ny /= nl
+            off_n = amp_px * pyp
+            if clamp_mode == "positive":
+                off_n = max(0.0, off_n)
+            elif clamp_mode == "negative":
+                off_n = min(0.0, off_n)
+            new_out.append((x + nx * off_n, y + ny * off_n))
+    if len(new_out) < 2:
+        return out, base_s, base_local, base_pts, False
+    base_s, base_local, base_pts = _rebuild_distortion_param(new_out, disp_frame)
+    return new_out, base_s, base_local, base_pts, True
+
+
+def _apply_thickness_style(out, base_s, base_local, base_pts, disp_frame, ev):
+    tpts = ev.get("thickness_points") or []
+    if len(tpts) < 2 or len(out) < 2:
+        return out, base_s, base_local, base_pts, True, False
+    normals = _distortion_normals(out)
+    amp_px = float(ev.get("amp_px", 0.0) or 0.0)
+    reverse = bool(ev.get("reverse"))
+    clamp_mode = ev.get("clamp", "none")
+    top = []
+    for pt, s, nrmv in zip(out, base_s, normals):
+        prof = _thickness_profile_at(s, ev)
+        if reverse:
+            prof = -prof
+        off_n = amp_px * prof
+        if clamp_mode == "positive":
+            off_n = max(0.0, off_n)
+        elif clamp_mode == "negative":
+            off_n = min(0.0, off_n)
+        nx, ny = nrmv
+        top.append((pt[0] + nx * off_n, pt[1] + ny * off_n))
+    ribbon = list(out) + list(reversed(top))
+    if len(ribbon) < 3:
+        return out, base_s, base_local, base_pts, True, False
+    base_s, base_local, base_pts = _rebuild_distortion_param(ribbon, disp_frame)
+    return ribbon, base_s, base_local, base_pts, False, True
+
+
+def _apply_wave_offset_style(out, base_s, ev):
+    normals = _distortion_normals(out)
+    new_out = []
+    for pt, s, nrmv in zip(out, base_s, normals):
+        x, y = pt
+        nx, ny = nrmv
+        contrib = ev.get("amp_px", 0.0) * _wave_value_for(ev, s)
+        if ev.get("noise", 0.0) != 0.0:
+            nz = _smooth_noise1d(s * ev.get("cycles", 0.0) * 4.0, seed=ev.get("seed", 0), scale=ev.get("noise_scale", 2.0))
+            contrib += ev.get("noise_px", 0.0) * nz
+        offset = _apply_wave_clamp(contrib, ev.get("clamp", "none"))
+        new_out.append((x + nx * offset, y + ny * offset))
+    return new_out
+
+
+def _eval_distortion_style(out, base_s, base_local, base_pts, disp_frame, disp_size_ref,
+                           ev, sv, pin_start_edge, pin_end_edge, pin_open_endpoints):
+    stype = sv.get("type", "wave")
+    if stype == "displacement":
+        out, pin_open_endpoints = _apply_displacement_style(
+            out, base_s, base_local, disp_frame, disp_size_ref, sv, pin_start_edge, pin_end_edge)
+        return out, base_s, base_local, base_pts, pin_open_endpoints
+    if ev is None:
+        return out, base_s, base_local, base_pts, pin_open_endpoints
+    shape = ev.get("shape")
+    if shape == "repeat":
+        out, base_s, base_local, base_pts, _ = _apply_repeat_style(out, base_s, base_local, base_pts, disp_frame, ev)
+        return out, base_s, base_local, base_pts, pin_open_endpoints
+    if shape == "thickness":
+        out, base_s, base_local, base_pts, pin_open_endpoints, _ = _apply_thickness_style(
+            out, base_s, base_local, base_pts, disp_frame, ev)
+        return out, base_s, base_local, base_pts, pin_open_endpoints
+    return _apply_wave_offset_style(out, base_s, ev), base_s, base_local, base_pts, pin_open_endpoints
+
+
 def sample_distorted_component(stroke, comp_index, samples_per_seg=24):
     """Return sampled polyline points for a component with distortion styles applied.
     Styles are evaluated in stack order on the unbaked (evaluated) curve:
@@ -1524,7 +1764,6 @@ def sample_distorted_component(stroke, comp_index, samples_per_seg=24):
         return []
     styles = [sv for sv in _get_distortion_styles(comp) if _distortion_style_active(sv)]
     if not styles:
-        # no visible distortion: return dense samples of base for consistency
         pts = []
         for si, (p0, c1, c2, p3) in enumerate(segs):
             if si == 0:
@@ -1536,11 +1775,9 @@ def sample_distorted_component(stroke, comp_index, samples_per_seg=24):
 
     # approximate arc-length parameter for stable waves across segments
     seg_samples = max(4, int(samples_per_seg))
-    lengths = []
-    total = 0.0
+    lengths, total = [], 0.0
     for (p0, c1, c2, p3) in segs:
-        prev = p0
-        l = 0.0
+        prev, l = p0, 0.0
         for i in range(1, seg_samples + 1):
             pt = cubic_bezier_point(p0, c1, c2, p3, i / seg_samples)
             l += math.hypot(pt[0] - prev[0], pt[1] - prev[1])
@@ -1550,7 +1787,6 @@ def sample_distorted_component(stroke, comp_index, samples_per_seg=24):
     if total <= 1e-6:
         total = 1.0
 
-    # bounding box diagonal: frequency/amplitude are relative to the shape size.
     pts_for_diag = []
     for (p0, c1, c2, p3) in segs:
         pts_for_diag.extend((p0, c1, c2, p3))
@@ -1566,327 +1802,37 @@ def sample_distorted_component(stroke, comp_index, samples_per_seg=24):
     geom = {"diag": diag, "length": total}
     disp_frame, disp_size_ref = _disp_frame_and_size(stroke, segs)
 
-    # prepare wave/repeat evaluators (sample-space offsets); displacement uses point-based field
     wave_evaluators = {}
     for idx_s, sv in enumerate(styles):
         st = sv.get("type")
         if st == "wave":
-            ev = _prepare_wave_evaluator(sv, geom)
-            ev["kind"] = "wave"
-            wave_evaluators[idx_s] = ev
+            ev = _prepare_wave_evaluator(sv, geom); ev["kind"] = "wave"; wave_evaluators[idx_s] = ev
         elif st == "repeat":
-            ev = _prepare_repeat_evaluator(sv, geom)
-            ev["kind"] = "repeat"
-            wave_evaluators[idx_s] = ev
+            ev = _prepare_repeat_evaluator(sv, geom); ev["kind"] = "repeat"; wave_evaluators[idx_s] = ev
         elif st == "thickness":
-            ev = _prepare_thickness_evaluator(sv, geom)
-            ev["kind"] = "thickness"
-            wave_evaluators[idx_s] = ev
+            ev = _prepare_thickness_evaluator(sv, geom); ev["kind"] = "thickness"; wave_evaluators[idx_s] = ev
 
-    SAMPLES_PER_CYCLE = 32
-    SAMPLES_PER_NOISE_CELL = 8
-    needed = 8
-    for ev in wave_evaluators.values():
-        needed = max(needed, int(math.ceil(abs(ev.get("cycles", 0.0)) * SAMPLES_PER_CYCLE)) + 8)
-        if ev.get("shape") == "noise" or ev.get("noise", 0.0) != 0.0:
-            noise_cells = max(1.0, abs(ev.get("cycles", 0.0))) * 4.0 * max(0.1, ev.get("noise_scale", 2.0))
-            needed = max(needed, int(math.ceil(noise_cells * SAMPLES_PER_NOISE_CELL)) + 8)
-        if ev.get("shape") == "repeat":
-            rpts = ev.get("repeat_points") or []
-            needed = max(needed, int(math.ceil(abs(ev.get("cycles", 0.0)) * max(16, len(rpts) * 2))) + 8)
-
-    fixed_total = seg_samples * max(1, len(segs))
-    needed_total = min(max(fixed_total, needed), 8192)
-    steps_list = []
-    for _l in lengths:
-        frac = (_l / total) if total > 0 else (1.0 / max(1, len(lengths)))
-        steps_list.append(max(4, int(round(needed_total * frac))))
-
-    # sample base points and stable object-space/local coords along base component
-    base_pts = []
-    base_s = []
-    base_local = []
-    cum = 0.0
-    for si, (p0, c1, c2, p3) in enumerate(segs):
-        seg_len = lengths[si] if si < len(lengths) else 0.0
-        start_s = cum / total
-        end_s = (cum + seg_len) / total if total > 0 else start_s
-        steps = steps_list[si] if si < len(steps_list) else seg_samples
-        for i in range(0 if si == 0 else 1, steps + 1):
-            t = i / steps
-            x, y = cubic_bezier_point(p0, c1, c2, p3, t)
-            s = start_s + (end_s - start_s) * t
-            base_pts.append((x, y))
-            base_s.append(s)
-            base_local.append(_local_point_for_disp((x, y), disp_frame))
-        cum += seg_len
+    steps_list = _distortion_sample_steps(segs, lengths, total, seg_samples, wave_evaluators)
+    base_pts, base_s, base_local = _sample_base_component(segs, lengths, total, steps_list, seg_samples, disp_frame)
     if len(base_pts) < 2:
         return base_pts
 
-    # Evaluate styles in stack order on the unbaked/evaluated curve.
-    # Point-based displacement is sampled by curve parameter along the path
-    # and applied as point offsets so it can affect the evaluated result.
     closed_comp = _is_closed_segs(segs)
     stroke_closed = _is_closed_segs(segs_of(stroke))
-    # True when the latest style produced a thickness ribbon (bottom + top);
-    # the ribbon's end points are shape edges, not free curve endpoints, so the
-    # open-curve endpoint pinning below must not clobber them.
     pin_open_endpoints = True
-    ncomps = len(ranges) if 'ranges' in locals() and ranges else len(_stroke_components(stroke))
+    ncomps = len(ranges) if ranges else len(_stroke_components(stroke))
     pin_start_edge = (comp_index == 0 and not stroke_closed)
     pin_end_edge = (comp_index == max(0, ncomps - 1) and not stroke_closed)
     out = list(base_pts)
     for idx_s, sv in enumerate(styles):
-        stype = sv.get("type", "wave")
-        if stype == "displacement":
-            # fade to zero at true open-curve edges so endpoint positions remain fixed
-            new_out = []
-            m = len(out)
-            for i, (pt, loc, sparam) in enumerate(zip(out, base_local, base_s)):
-                lx, ly = loc
-                dx, dy, drot, dlen = _spatial_displacement_field(sv, sparam, disp_size_ref)
-                if isinstance(disp_frame, dict):
-                    ux, uy = disp_frame.get("u", (1.0, 0.0))
-                    vx, vy = disp_frame.get("v", (0.0, 1.0))
-                    dx, dy = dx * float(ux) + dy * float(vx), dx * float(uy) + dy * float(vy)
-                if m > 1 and (pin_start_edge or pin_end_edge):
-                    if pin_start_edge and pin_end_edge:
-                        edge_t = min(i, m - 1 - i) / max(1, (m - 1) / 2.0)
-                    elif pin_start_edge:
-                        edge_t = i / (m - 1)
-                    else:
-                        edge_t = (m - 1 - i) / (m - 1)
-                    edge_w = edge_t * edge_t * (3.0 - 2.0 * edge_t)  # smoothstep
-                else:
-                    edge_w = 1.0
-                new_out.append((pt[0] + dx * edge_w, pt[1] + dy * edge_w))
-            out = new_out
-            pin_open_endpoints = True
-        else:
-            ev = wave_evaluators.get(idx_s)
-            if ev is None:
-                continue
-            if ev.get("shape") == "repeat":
-                # Repeat pattern: place the drawn curve repeatedly along the path.
-                rpts = ev.get("repeat_points") or []
-                cycles = float(ev.get("cycles", 0.0) or 0.0)
-                if len(rpts) < 2 or cycles <= 1e-6 or len(out) < 2:
-                    continue
-                # Cap work to avoid lag.
-                MAX_CYCLES = 200
-                MAX_OUT = 4000
-                MAX_RPTS = 256
-                phase = float(ev.get("phase", 0.0) or 0.0) / 360.0
-                cycle_start = int(math.floor(-phase))
-                cycle_end = int(math.ceil(cycles - phase))
-                ncy = max(1, cycle_end - cycle_start)
-                step_c = max(1, int(math.ceil(ncy / MAX_CYCLES)))
+        ev = wave_evaluators.get(idx_s)
+        out, base_s, base_local, base_pts, pin_open_endpoints = _eval_distortion_style(
+            out, base_s, base_local, base_pts, disp_frame, disp_size_ref,
+            ev, sv, pin_start_edge, pin_end_edge, pin_open_endpoints)
 
-                # Downsample pattern points if needed (preserve order/shape).
-                rpts_use = rpts
-                if len(rpts_use) > MAX_RPTS:
-                    step_p = max(1, int(math.ceil(len(rpts_use) / MAX_RPTS)))
-                    rpts_use = rpts_use[::step_p]
-                    if rpts_use[-1] != rpts[-1]:
-                        rpts_use.append(rpts[-1])
-                est = ((ncy + step_c - 1) // step_c) * len(rpts_use)
-                if est > MAX_OUT and len(rpts_use) > 2:
-                    step_p2 = max(1, int(math.ceil(est / MAX_OUT)))
-                    rpts_use = rpts_use[::step_p2]
-                    if len(rpts_use) < 2:
-                        rpts_use = rpts[:2]
-
-                path_pts = out
-                path_s = base_s
-                npath = len(path_pts)
-                path_nx = [0.0] * npath
-                path_ny = [-1.0] * npath
-                for i in range(npath):
-                    if i == 0:
-                        dx = path_pts[1][0] - path_pts[0][0]; dy = path_pts[1][1] - path_pts[0][1]
-                    elif i == npath - 1:
-                        dx = path_pts[-1][0] - path_pts[-2][0]; dy = path_pts[-1][1] - path_pts[-2][1]
-                    else:
-                        dx = path_pts[i + 1][0] - path_pts[i - 1][0]; dy = path_pts[i + 1][1] - path_pts[i - 1][1]
-                    ll = math.hypot(dx, dy)
-                    if ll > 1e-6:
-                        path_nx[i] = -dy / ll; path_ny[i] = dx / ll
-                    elif i > 0:
-                        path_nx[i] = path_nx[i - 1]; path_ny[i] = path_ny[i - 1]
-                for i in range(1, npath):
-                    if path_nx[i - 1] * path_nx[i] + path_ny[i - 1] * path_ny[i] < 0:
-                        path_nx[i] = -path_nx[i]; path_ny[i] = -path_ny[i]
-
-                amp_px = float(ev.get("amp_px", 0.0) or 0.0)
-                reverse = bool(ev.get("reverse"))
-                clamp_mode = ev.get("clamp", "none")
-                new_out = []
-                new_out_append = new_out.append
-                j = 0
-                for c in range(cycle_start, cycle_end + 1, step_c):
-                    base_c = c + phase
-                    for rp in rpts_use:
-                        try:
-                            pxp = float(rp[0]); pyp = float(rp[1])
-                        except Exception:
-                            continue
-                        if reverse:
-                            pyp = -pyp
-                        s_global = (base_c + pxp) / cycles
-                        if s_global < 0.0 or s_global > 1.0:
-                            continue
-                        while j < npath - 2 and path_s[j + 1] < s_global:
-                            j += 1
-                        while j > 0 and path_s[j] > s_global:
-                            j -= 1
-                        s0 = path_s[j]; s1 = path_s[j + 1]
-                        seg = s1 - s0
-                        tt = 0.0 if seg <= 1e-9 else (s_global - s0) / seg
-                        if tt < 0.0: tt = 0.0
-                        elif tt > 1.0: tt = 1.0
-                        p0 = path_pts[j]; p1 = path_pts[j + 1]
-                        x = p0[0] + (p1[0] - p0[0]) * tt
-                        y = p0[1] + (p1[1] - p0[1]) * tt
-                        nx = path_nx[j] + (path_nx[j + 1] - path_nx[j]) * tt
-                        ny = path_ny[j] + (path_ny[j + 1] - path_ny[j]) * tt
-                        nl = math.hypot(nx, ny)
-                        if nl > 1e-6:
-                            nx /= nl; ny /= nl
-                        off_n = amp_px * pyp
-                        if clamp_mode == "positive":
-                            if off_n < 0.0: off_n = 0.0
-                        elif clamp_mode == "negative":
-                            if off_n > 0.0: off_n = 0.0
-                        new_out_append((x + nx * off_n, y + ny * off_n))
-                if len(new_out) >= 2:
-                    out = new_out
-                    new_s = [0.0] * len(out)
-                    cuml = 0.0
-                    prev_pt = out[0]
-                    for k in range(1, len(out)):
-                        pt = out[k]
-                        cuml += math.hypot(pt[0] - prev_pt[0], pt[1] - prev_pt[1])
-                        new_s[k] = cuml
-                        prev_pt = pt
-                    if cuml > 1e-9:
-                        inv = 1.0 / cuml
-                        base_s = [v * inv for v in new_s]
-                    else:
-                        base_s = [i / max(1, len(out) - 1) for i in range(len(out))]
-                    base_local = [_local_point_for_disp(pt, disp_frame) for pt in out]
-                    base_pts = out
-                continue
-
-            if ev.get("shape") == "thickness":
-                tpts = ev.get("thickness_points") or []
-                if len(tpts) < 2 or len(out) < 2:
-                    continue
-                # normals from current path
-                normals = []
-                n = len(out)
-                for i in range(n):
-                    if i == 0:
-                        dx = out[1][0] - out[0][0]; dy = out[1][1] - out[0][1]
-                    elif i == n - 1:
-                        dx = out[-1][0] - out[-2][0]; dy = out[-1][1] - out[-2][1]
-                    else:
-                        dx = out[i + 1][0] - out[i - 1][0]; dy = out[i + 1][1] - out[i - 1][1]
-                    ll = math.hypot(dx, dy)
-                    if ll < 1e-6:
-                        normals.append(normals[-1] if normals else (0.0, -1.0))
-                    else:
-                        normals.append((-dy / ll, dx / ll))
-                for i in range(1, len(normals)):
-                    pxn, pyn = normals[i - 1]; nxn, nyn = normals[i]
-                    if pxn * nxn + pyn * nyn < 0:
-                        normals[i] = (-nxn, -nyn)
-                amp_px = float(ev.get("amp_px", 0.0) or 0.0)
-                reverse = bool(ev.get("reverse"))
-                clamp_mode = ev.get("clamp", "none")
-                top = []
-                for i, (pt, s, nrmv) in enumerate(zip(out, base_s, normals)):
-                    # single profile across full path, no repetition
-                    prof = _thickness_profile_at(s, ev)
-                    if reverse:
-                        prof = -prof
-                    off_n = amp_px * prof
-                    if clamp_mode == "positive":
-                        if off_n < 0.0: off_n = 0.0
-                    elif clamp_mode == "negative":
-                        if off_n > 0.0: off_n = 0.0
-                    nx, ny = nrmv
-                    top.append((pt[0] + nx * off_n, pt[1] + ny * off_n))
-                # closed ribbon: bottom forward + top backward
-                ribbon = list(out) + list(reversed(top))
-                if len(ribbon) >= 3:
-                    out = ribbon
-                    pin_open_endpoints = False
-                    # rebuild parameterization
-                    new_s = [0.0] * len(out)
-                    cuml = 0.0
-                    prev_pt = out[0]
-                    for k in range(1, len(out)):
-                        pt = out[k]
-                        cuml += math.hypot(pt[0] - prev_pt[0], pt[1] - prev_pt[1])
-                        new_s[k] = cuml
-                        prev_pt = pt
-                    if cuml > 1e-9:
-                        inv = 1.0 / cuml
-                        base_s = [v * inv for v in new_s]
-                    else:
-                        base_s = [i / max(1, len(out) - 1) for i in range(len(out))]
-                    base_local = [_local_point_for_disp(pt, disp_frame) for pt in out]
-                    base_pts = out
-                continue
-
-            # normals from current (unbaked/evaluated) point sequence
-            normals = []
-            n = len(out)
-            for i in range(n):
-                if i == 0:
-                    dx = out[1][0] - out[0][0]
-                    dy = out[1][1] - out[0][1]
-                elif i == n - 1:
-                    dx = out[-1][0] - out[-2][0]
-                    dy = out[-1][1] - out[-2][1]
-                else:
-                    dx = out[i + 1][0] - out[i - 1][0]
-                    dy = out[i + 1][1] - out[i - 1][1]
-                l = math.hypot(dx, dy)
-                if l < 1e-6:
-                    if normals:
-                        normals.append(normals[-1])
-                    else:
-                        normals.append((0.0, -1.0))
-                    continue
-                normals.append((-dy / l, dx / l))
-            for i in range(1, len(normals)):
-                pxn, pyn = normals[i - 1]
-                nxn, nyn = normals[i]
-                if pxn * nxn + pyn * nyn < 0:
-                    normals[i] = (-nxn, -nyn)
-            new_out = []
-            for i, (pt, s, nrmv) in enumerate(zip(out, base_s, normals)):
-                x, y = pt
-                nx, ny = nrmv
-                contrib = ev.get("amp_px", 0.0) * _wave_value_for(ev, s)
-                if ev.get("noise", 0.0) != 0.0:
-                    nz = _smooth_noise1d(s * ev.get("cycles", 0.0) * 4.0, seed=ev.get("seed", 0), scale=ev.get("noise_scale", 2.0))
-                    contrib += ev.get("noise_px", 0.0) * nz
-                offset = _apply_wave_clamp(contrib, ev.get("clamp", "none"))
-                new_out.append((x + nx * offset, y + ny * offset))
-            out = new_out
-
-    # Keep endpoints fixed for open curves (edges unaffected).
-    # Skip pinning when the latest style produced a thickness ribbon (bottom +
-    # top): the ribbon's end points are shape edges, not free curve endpoints, so
-    # overwriting them would inject a straight start->end connector line.
     if out and segs and not closed_comp and pin_open_endpoints:
         out[0] = tuple(segs[0][0])
         out[-1] = tuple(segs[-1][3])
-    elif out and segs and closed_comp:
-        # keep closure consistent
-        pass
     return out
 
 

@@ -1515,10 +1515,25 @@ class TestWaveStackUI(unittest.TestCase):
         lit_start = next(i for i, l in enumerate(lines) if l == "        state = {")
         lit_end = next(i for i in range(lit_start + 1, len(lines)) if lines[i] == "        }")
         literal_keys = set(re.findall(r'"([a-z_0-9]+)":', "\n".join(lines[lit_start:lit_end + 1])))
-        ev_start = next(i for i, l in enumerate(lines) if "for event in pygame.event.get():" in l)
-        ev_end = next(i for i in range(ev_start + 1, len(lines))
-                      if "draw_panel(screen, fonts, mouse_pos, state)" in lines[i])
-        region = "\n".join(lines[ev_start:ev_end])
+        def _is_event_loop_line(l):
+            return "for event in pygame.event.get():" in l or "for ctx.event in pygame.event.get():" in l
+        try:
+            ev_start = next(i for i, l in enumerate(lines) if _is_event_loop_line(l))
+        except StopIteration:
+            ev_loop_path = os.path.join(os.path.dirname(path), "controllers", "event_loop.py")
+            ev_lines = io.open(ev_loop_path, encoding="utf-8").read().splitlines() if os.path.exists(ev_loop_path) else lines
+            ev_start = next(i for i, l in enumerate(ev_lines) if _is_event_loop_line(l))
+            lines = ev_lines
+        try:
+            ev_end = next(i for i in range(ev_start + 1, len(lines))
+                          if "draw_panel(screen, fonts, mouse_pos, state)" in lines[i])
+            region = "\n".join(lines[ev_start:ev_end])
+        except StopIteration:
+            # render/event handling may be split across modules after SRP refactor
+            region = "\n".join(lines[ev_start:])
+            ev_path = os.path.join(os.path.dirname(path), "controllers", "event_loop.py")
+            if os.path.exists(ev_path) and os.path.abspath(ev_path) != os.path.abspath(ctrl_path):
+                region += "\n" + io.open(ev_path, encoding="utf-8").read()
         reads = set(re.findall(r'state\.get\(\s*"([a-z_0-9]+)"', region))
         reads.update(re.findall(r'state\.setdefault\(\s*"([a-z_0-9]+)"', region))
         for m in re.finditer(r'state\[\s*"([a-z_0-9]+)"\s*\](?!\s*=)', region):

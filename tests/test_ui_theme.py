@@ -224,11 +224,14 @@ class TestDataDefaultsAndControls(unittest.TestCase):
 
     def test_control_tokens_used_by_shared_primitives_and_controller(self):
         widgets_path = os.path.join(_ROOT, "src", "views", "widgets.py")
-        controller_path = os.path.join(_ROOT, "src", "controllers", "app_controller.py")
         with open(widgets_path, encoding="utf-8") as handle:
             widgets = handle.read()
-        with open(controller_path, encoding="utf-8") as handle:
-            controller = handle.read()
+        ctrl_dir = os.path.join(_ROOT, "src", "controllers")
+        controller = ""
+        for fn in os.listdir(ctrl_dir):
+            if fn.endswith(".py"):
+                with open(os.path.join(ctrl_dir, fn), encoding="utf-8") as handle:
+                    controller += "\n" + handle.read()
         self.assertIn("PICKER_HANDLE_RADIUS", widgets)
         self.assertIn("SLIDER_KNOB_RADIUS", widgets)
         self.assertIn("CUT_HANDLE_RADIUS", controller)
@@ -260,8 +263,15 @@ class TestSharedControlPrimitives(unittest.TestCase):
 
     def test_both_pickers_use_shared_cursor_helpers(self):
         panel = self._read(self.PANEL)
-        self.assertEqual(panel.count("draw_picker_cursor("), 2)
-        self.assertEqual(panel.count("draw_hue_cursor("), 2)
+        views_dir = os.path.join(_ROOT, "src", "views")
+        extra = ""
+        for name in ("panel_modes.py", "panel_select.py", "panel_styles.py", "panel_effects.py"):
+            p = os.path.join(views_dir, name)
+            if os.path.exists(p):
+                extra += "\n" + self._read(p)
+        combined = panel + "\n" + extra
+        self.assertEqual(combined.count("draw_picker_cursor("), 2)
+        self.assertEqual(combined.count("draw_hue_cursor("), 2)
 
     def test_swatches_use_shared_primitive(self):
         panel = self._read(self.PANEL)
@@ -302,13 +312,21 @@ class TestMenuBar(unittest.TestCase):
         from views import menu as menu_view
         with open(self.CONTROLLER, encoding="utf-8") as handle:
             source = handle.read()
-        self.assertIn("def run_menu_action(key):", source)
+        menu_actions = os.path.join(_ROOT, "src", "controllers", "menu_actions.py")
+        if os.path.exists(menu_actions):
+            with open(menu_actions, encoding="utf-8") as handle:
+                source += "\n" + handle.read()
+        self.assertIn("def run_menu_action(", source)
         for key in (i[0] for m in menu_view.MENUS for i in m[2] if i):
             self.assertIn(f'"{key}"', source, f"no action for menu item {key}")
 
     def test_keyboard_and_menu_share_one_action_path(self):
-        with open(self.CONTROLLER, encoding="utf-8") as handle:
-            source = handle.read()
+        ctrl_dir = os.path.join(_ROOT, "src", "controllers")
+        source = ""
+        for fn in os.listdir(ctrl_dir):
+            if fn.endswith(".py"):
+                with open(os.path.join(ctrl_dir, fn), encoding="utf-8") as handle:
+                    source += "\n" + handle.read()
         self.assertGreaterEqual(source.count("run_menu_action("), 25)
         self.assertNotIn('menu_open == "file"', source)
         self.assertNotIn("menu_bar_rect =", source)

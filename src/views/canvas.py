@@ -719,7 +719,788 @@ def _apply_fill_source(ctx, stroke, fill):
         return False
 
 
-def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, selected_index=None, selected_indices=None, edit_mode=False, selection_submode="transform", selected_curve=None, selected_curves=None, snap_kind="connect", redrawing_curve=None, ref_img=None, view_zoom=None, view_pan=None, pivot_pos=None, for_export=False, transform_handle_mode="scale", gradient_edit_info=None, export_scale=1.0, guides=None, smart_guides=None, bezier_pen=None, artboards=None, active_artboard=-1):
+def _draw_hidden_segments(ctx, stroke, segs, hidden_set, stroke_width):
+
+    if not hidden_set:
+
+        return
+
+    ctx.save()
+
+    try:
+
+        ctx.set_dash([6, 4])
+
+    except Exception:
+
+        pass
+
+    # distinct style for hidden curves in edit modes
+
+    ctx.set_source_rgba(*EDITOR_ACCENT, 0.55)
+
+    ctx.set_line_width(max(1.5, float(stroke_width)))
+
+    ctx.new_path()
+
+    for i in sorted(hidden_set):
+
+        if 0 <= i < len(segs):
+
+            p0, c1, c2, p3 = segs[i]
+
+            ctx.move_to(p0[0], p0[1])
+
+            ctx.curve_to(c1[0], c1[1], c2[0], c2[1], p3[0], p3[1])
+
+    ctx.stroke()
+
+    try:
+
+        ctx.set_dash([])
+
+    except Exception:
+
+        pass
+
+    ctx.restore()
+
+
+
+def _draw_arrowhead(ctx, segs, color, width):
+
+    """Draw an arrowhead at the end of the last segment (line shapes)."""
+
+    if not segs:
+
+        return
+
+    try:
+
+        p2, p3 = segs[-1][2], segs[-1][3]
+
+    except Exception:
+
+        return
+
+    dx, dy = p3[0] - p2[0], p3[1] - p2[1]
+
+    length = math.hypot(dx, dy)
+
+    if length < 1e-6:
+
+        try:
+
+            p2, p3 = segs[-1][0], segs[-1][3]
+
+            dx, dy = p3[0] - p2[0], p3[1] - p2[1]
+
+            length = math.hypot(dx, dy)
+
+        except Exception:
+
+            return
+
+    if length < 1e-6:
+
+        return
+
+    ux, uy = dx / length, dy / length
+
+    size = max(9.0, float(width or 3.0) * 3.5)
+
+    ang = math.radians(26.0)
+
+    ca, sa = math.cos(ang), math.sin(ang)
+
+    ctx.new_path()
+
+    for sign in (-1.0, 1.0):
+
+        rx = -ux * ca + uy * sa * sign
+
+        ry = -ux * sa * sign - uy * ca
+
+        ctx.move_to(p3[0], p3[1])
+
+        ctx.line_to(p3[0] + rx * size, p3[1] + ry * size)
+
+    ctx.set_source_rgba(*color_rgba(color, DEFAULT_STROKE_RGBA))
+
+    ctx.set_line_width(max(1.0, float(width or 3.0)))
+
+    ctx.set_line_cap(cairo.LINE_CAP_ROUND)
+
+    ctx.stroke()
+
+
+
+
+
+def _draw_marker(ctx, mtype, point, ux, uy, color, width):
+
+    """Draw one end marker of type ``mtype`` at ``point`` pointing along u."""
+
+    if mtype == "none":
+
+        return
+
+    px, py = point
+
+    perp = (-uy, ux)
+
+    size = marker_size({"stroke_width": width}, width)
+
+    rgba = color_rgba(color, DEFAULT_STROKE_RGBA)
+
+    lw = max(1.0, float(width or 3.0))
+
+    ctx.new_path()
+
+    if mtype in ("arrow", "open_arrow"):
+
+        ang = math.radians(20.0 if mtype == "open_arrow" else 26.0)
+
+        ca, sa = math.cos(ang), math.sin(ang)
+
+        scale = 0.8 if mtype == "open_arrow" else 1.0
+
+        for sign in (-1.0, 1.0):
+
+            rx = -ux * ca + uy * sa * sign
+
+            ry = -ux * sa * sign - uy * ca
+
+            ctx.move_to(px, py)
+
+            ctx.line_to(px + rx * size * scale, py + ry * size * scale)
+
+        ctx.set_source_rgba(*rgba)
+
+        ctx.set_line_width(lw)
+
+        ctx.set_line_cap(cairo.LINE_CAP_ROUND)
+
+        ctx.stroke()
+
+    elif mtype == "triangle":
+
+        hw = size * 0.45
+
+        bx, by = px - ux * size, py - uy * size
+
+        ctx.move_to(px, py)
+
+        ctx.line_to(bx + perp[0] * hw, by + perp[1] * hw)
+
+        ctx.line_to(bx - perp[0] * hw, by - perp[1] * hw)
+
+        ctx.close_path()
+
+        ctx.set_source_rgba(*rgba)
+
+        ctx.fill()
+
+    elif mtype == "bar":
+
+        hw = size * 0.5
+
+        ctx.move_to(px + perp[0] * hw, py + perp[1] * hw)
+
+        ctx.line_to(px - perp[0] * hw, py - perp[1] * hw)
+
+        ctx.set_source_rgba(*rgba)
+
+        ctx.set_line_width(lw)
+
+        ctx.stroke()
+
+    else:
+
+        # centred shapes sit just behind the endpoint so the tip stays crisp
+
+        cx, cy = px - ux * size * 0.3, py - uy * size * 0.3
+
+        r = size * 0.32
+
+        if mtype == "circle":
+
+            ctx.arc(cx, cy, r, 0.0, 2.0 * math.pi)
+
+        elif mtype == "square":
+
+            ctx.move_to(cx + ux * r + perp[0] * r, cy + uy * r + perp[1] * r)
+
+            ctx.line_to(cx - ux * r + perp[0] * r, cy - uy * r + perp[1] * r)
+
+            ctx.line_to(cx - ux * r - perp[0] * r, cy - uy * r - perp[1] * r)
+
+            ctx.line_to(cx + ux * r - perp[0] * r, cy + uy * r - perp[1] * r)
+
+            ctx.close_path()
+
+        else:  # diamond
+
+            ctx.move_to(cx + ux * r, cy + uy * r)
+
+            ctx.line_to(cx + perp[0] * r, cy + perp[1] * r)
+
+            ctx.line_to(cx - ux * r, cy - uy * r)
+
+            ctx.line_to(cx - perp[0] * r, cy - perp[1] * r)
+
+            ctx.close_path()
+
+        ctx.set_source_rgba(*rgba)
+
+        ctx.fill()
+
+
+
+def _draw_markers(ctx, stroke, color, width):
+
+    """Draw all configured start/end markers for ``stroke``."""
+
+    if not isinstance(stroke, dict):
+
+        return
+
+    markers = get_markers(stroke) if 'get_markers' in globals() else {"start": "none", "end": "none"}
+
+    if markers.get("start", "none") == "none" and markers.get("end", "none") == "none":
+
+        return
+
+    anchors = marker_anchors(stroke) if 'marker_anchors' in globals() else []
+
+    for which, point, ux, uy in anchors:
+
+        mtype = markers.get(which, "none")
+
+        _draw_marker(ctx, mtype, point, ux, uy, color, width)
+
+
+
+
+
+def _stroke_has_active_thickness(stroke):
+
+    try:
+
+        for comp in _stroke_components(stroke):
+
+            for sv in _get_distortion_styles(comp):
+
+                if isinstance(sv, dict) and sv.get("type") == "thickness" and _distortion_style_active(sv):
+
+                    return True
+
+    except Exception:
+
+        pass
+
+    return False
+
+
+
+def _draw_stroke_segments(ctx, stroke, seg_indices, stroke_color, stroke_width):
+
+    if not seg_indices:
+
+        return
+
+    seg_set = set(seg_indices)
+
+    if _stroke_needs_variable_width(stroke, seg_set):
+
+        _draw_variable_width_segments(ctx, stroke, seg_set, None)
+
+        return
+
+    segs_all = segs_of(stroke)
+
+    ranges = _component_ranges(stroke)
+
+    comps = _stroke_components(stroke)
+
+
+
+    def _draw_polyline(pts):
+
+        if not pts or len(pts) < 2:
+
+            return False
+
+        ctx.move_to(pts[0][0], pts[0][1])
+
+        for pt in pts[1:]:
+
+            ctx.line_to(pt[0], pt[1])
+
+        return True
+
+
+
+    # draw by components to support per-component styles and wave distortion
+
+    for ci, (s0, s1) in enumerate(ranges):
+
+        idxs = [i for i in range(s0, min(s1, len(segs_all))) if i in seg_set]
+
+        if not idxs:
+
+            continue
+
+        sc_i, sw_i = _effective_component_style(stroke, ci)
+
+        comp = comps[ci] if ci < len(comps) else {}
+
+        ctx.new_path()
+
+        drew_c = False
+
+        is_thickness = False
+
+        try:
+
+            _styles = _get_distortion_styles(comp) if '_get_distortion_styles' in dir() else (comp.get("styles") or [])
+
+            is_thickness = any(isinstance(sv, dict) and sv.get("type") == "thickness" and _distortion_style_active(sv) for sv in _styles)
+
+        except Exception:
+
+            is_thickness = False
+
+        if _component_wave_enabled(comp) and len(idxs) == (min(s1, len(segs_all)) - s0):
+
+            poly = sample_distorted_component(stroke, ci)
+
+            if poly and len(poly) >= 2:
+
+                if is_thickness:
+
+                    # Ribbon: [bottom_start..bottom_end, top_end..top_start]
+
+                    n = len(poly) // 2
+
+                    if n >= 2:
+
+                        # Fill closed ribbon
+
+                        ctx.new_path()
+
+                        ctx.move_to(poly[0][0], poly[0][1])
+
+                        for pt in poly[1:]:
+
+                            ctx.line_to(pt[0], pt[1])
+
+                        ctx.close_path()
+
+                        eff_sc = sc_i if _stroke_has_component_styles(stroke) or _component_wave_enabled(comp) else stroke_color
+
+                        eff_sw = sw_i if _stroke_has_component_styles(stroke) or _component_wave_enabled(comp) else stroke_width
+
+                        ctx.save()
+
+                        ctx.set_source_rgba(*color_rgba(eff_sc, DEFAULT_STROKE_RGBA))
+
+                        ctx.fill_preserve()
+
+                        # Stroke only top edge + caps, not the bottom baseline
+
+                        ctx.new_path()
+
+                        ctx.move_to(poly[n - 1][0], poly[n - 1][1])  # bottom_end -> end cap
+
+                        for pt in poly[n:]:
+
+                            ctx.line_to(pt[0], pt[1])  # top_end..top_start
+
+                        ctx.line_to(poly[0][0], poly[0][1])  # start cap
+
+                        if eff_sw is not None and float(eff_sw) > 0.0 and color_alpha(eff_sc, 1.0) > 0.0:
+
+                            ctx.set_line_width(float(eff_sw))
+
+                            apply_stroke_style(ctx, stroke, float(eff_sw))
+
+                            ctx.stroke()
+
+                        else:
+
+                            ctx.new_path()
+
+                        ctx.restore()
+
+                        drew_c = True
+
+                    else:
+
+                        drew_c = _draw_polyline(poly)
+
+                else:
+
+                    drew_c = _draw_polyline(poly)
+
+        if not drew_c:
+
+            for i in idxs:
+
+                p0, c1, c2, p3 = segs_all[i]
+
+                ctx.move_to(p0[0], p0[1]); ctx.curve_to(c1[0], c1[1], c2[0], c2[1], p3[0], p3[1])
+
+                drew_c = True
+
+        if drew_c and not is_thickness:
+
+            eff_sc = sc_i if _stroke_has_component_styles(stroke) or _component_wave_enabled(comp) else stroke_color
+
+            eff_sw = sw_i if _stroke_has_component_styles(stroke) or _component_wave_enabled(comp) else stroke_width
+
+            if eff_sw is not None and float(eff_sw) > 0.0 and color_alpha(eff_sc, 1.0) > 0.0:
+
+                ctx.save()
+
+                ctx.set_source_rgba(*color_rgba(eff_sc, DEFAULT_STROKE_RGBA))
+
+                ctx.set_line_width(float(eff_sw))
+
+                apply_stroke_style(ctx, stroke, float(eff_sw))
+
+                ctx.stroke()
+
+                ctx.restore()
+
+            else:
+
+                ctx.new_path()
+
+        elif drew_c and is_thickness:
+
+            pass
+
+
+
+
+def _draw_canvas_overlays(ctx, for_export, view_zoom, view_pan, guides, smart_guides, artboards, active_artboard):
+    if for_export or not (getattr(cfg, "SHOW_GRID", False) or guides or smart_guides or artboards):
+        return
+    try:
+        zoom = float(view_zoom) or 1.0
+        wx0 = (0.0 - float(view_pan[0])) / zoom
+        wy0 = (0.0 - float(view_pan[1])) / zoom
+        wx1 = (float(cfg.CANVAS_W) - float(view_pan[0])) / zoom
+        wy1 = (float(cfg.canvas_viewport_height()) - float(view_pan[1])) / zoom
+        thin = 1.0 / zoom
+        if getattr(cfg, "SHOW_GRID", False):
+            spacing = float(getattr(cfg, "GRID_SIZE", 20.0) or 20.0)
+            major_every = int(getattr(cfg, "GRID_MAJOR_EVERY", 5) or 5)
+            minor, major_c = cfg.GRID_MINOR_RGB, cfg.GRID_MAJOR_RGB
+            for x in grid_positions(wx0, wx1, spacing):
+                is_major = (round(x / spacing) % major_every == 0)
+                ctx.set_source_rgba(*(cairo_rgb(major_c if is_major else minor, 0.85)))
+                ctx.set_line_width(thin)
+                ctx.move_to(x, wy0); ctx.line_to(x, wy1); ctx.stroke()
+            for y in grid_positions(wy0, wy1, spacing):
+                is_major = (round(y / spacing) % major_every == 0)
+                ctx.set_source_rgba(*(cairo_rgb(major_c if is_major else minor, 0.85)))
+                ctx.set_line_width(thin)
+                ctx.move_to(wx0, y); ctx.line_to(wx1, y); ctx.stroke()
+        if artboards:
+            for _ai, _ab in enumerate(artboards or ()):
+                if not isinstance(_ab, dict):
+                    continue
+                try:
+                    ax = float(_ab.get("x", 0.0)); ay = float(_ab.get("y", 0.0))
+                    aw = float(_ab.get("w", 0.0)); ah = float(_ab.get("h", 0.0))
+                except Exception:
+                    continue
+                if aw <= 0 or ah <= 0:
+                    continue
+                is_active = (_ai == active_artboard)
+                ctx.save()
+                try:
+                    ctx.set_dash([])
+                except Exception:
+                    pass
+                if is_active:
+                    ctx.set_source_rgba(*(cairo_rgb(getattr(cfg, "ACCENT_RGB", (59, 130, 246)), 0.95)))
+                    ctx.set_line_width(max(thin * 1.5, 2.0 / zoom))
+                else:
+                    ctx.set_source_rgba(*(cairo_rgb(getattr(cfg, "BORDER_RGB", (203, 213, 225)), 0.9)))
+                    ctx.set_line_width(max(thin, 1.0 / zoom))
+                ctx.rectangle(ax, ay, aw, ah)
+                ctx.stroke()
+                try:
+                    name = str(_ab.get("name") or f"Artboard {_ai + 1}")
+                    ctx.set_source_rgba(*(cairo_rgb(getattr(cfg, "MUTED_RGB", (100, 116, 139)), 0.95 if is_active else 0.75)))
+                    ctx.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
+                    ctx.set_font_size(max(10.0 / zoom, 8.0 / zoom))
+                    ctx.move_to(ax, ay - 4.0 / zoom)
+                    ctx.show_text(name)
+                except Exception:
+                    pass
+                ctx.restore()
+        for g in guides or ():
+            try:
+                pos = float(g.get("pos", 0.0))
+            except (TypeError, ValueError):
+                continue
+            ctx.set_source_rgba(*(cairo_rgb(cfg.GUIDE_RGB, 0.9)))
+            ctx.set_line_width(thin)
+            try:
+                ctx.set_dash([6.0 / zoom, 4.0 / zoom])
+            except Exception:
+                pass
+            if g.get("axis") == "x":
+                ctx.move_to(pos, wy0); ctx.line_to(pos, wy1)
+            else:
+                ctx.move_to(wx0, pos); ctx.line_to(wx1, pos)
+            ctx.stroke()
+            try:
+                ctx.set_dash([])
+            except Exception:
+                pass
+        if smart_guides:
+            ctx.set_source_rgba(*(cairo_rgb(getattr(cfg, "SMART_GUIDE_RGB", (236, 72, 153)), 0.95)))
+            ctx.set_line_width(max(thin, 1.0 / zoom))
+            try:
+                ctx.set_dash([])
+            except Exception:
+                pass
+            for sg in smart_guides:
+                try:
+                    if sg.get("axis") == "x":
+                        pos = float(sg["pos"])
+                        ctx.move_to(pos, float(sg.get("y0", wy0))); ctx.line_to(pos, float(sg.get("y1", wy1))); ctx.stroke()
+                    elif sg.get("axis") == "y":
+                        pos = float(sg["pos"])
+                        ctx.move_to(float(sg.get("x0", wx0)), pos); ctx.line_to(float(sg.get("x1", wx1)), pos); ctx.stroke()
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
+def _draw_bezier_pen_preview(ctx, for_export, bezier_pen):
+    if for_export or not (bezier_pen and isinstance(bezier_pen, dict)):
+        return
+    try:
+        anchors = list(bezier_pen.get("anchors") or [])
+        if not anchors:
+            return
+        preview_pt = bezier_pen.get("preview_pt")
+        if len(anchors) >= 2:
+            ctx.set_source_rgb(*EDITOR_SELECTION)
+            ctx.set_line_width(EDITOR_LINE_WIDTH_BOLD)
+            ctx.new_path()
+            ctx.move_to(anchors[0]["pt"][0], anchors[0]["pt"][1])
+            for i in range(len(anchors) - 1):
+                a, b = anchors[i], anchors[i + 1]
+                p0, p3 = a["pt"], b["pt"]
+                c1 = a.get("h_out") or p0
+                c2 = b.get("h_in") or p3
+                ctx.curve_to(c1[0], c1[1], c2[0], c2[1], p3[0], p3[1])
+            ctx.stroke()
+        if preview_pt is not None and not bezier_pen.get("mouse_down", False):
+            last = anchors[-1]
+            lp = last["pt"]
+            ctx.set_source_rgba(*EDITOR_SELECTION, 0.7)
+            ctx.set_line_width(EDITOR_LINE_WIDTH)
+            try:
+                ctx.set_dash([6, 4])
+            except Exception:
+                pass
+            ctx.new_path(); ctx.move_to(lp[0], lp[1]); ctx.line_to(preview_pt[0], preview_pt[1]); ctx.stroke()
+            try:
+                ctx.set_dash([])
+            except Exception:
+                pass
+        ctx.set_source_rgba(*EDITOR_ACCENT, 0.7)
+        ctx.set_line_width(EDITOR_LINE_WIDTH_SUBTLE)
+        for a in anchors:
+            pt = a["pt"]
+            for hk in ("h_in", "h_out"):
+                hp = a.get(hk) or pt
+                if abs(hp[0] - pt[0]) > 0.5 or abs(hp[1] - pt[1]) > 0.5:
+                    ctx.new_path(); ctx.move_to(pt[0], pt[1]); ctx.line_to(hp[0], hp[1]); ctx.stroke()
+        for a in anchors:
+            pt = a["pt"]
+            for hk in ("h_in", "h_out"):
+                hp = a.get(hk) or pt
+                if abs(hp[0] - pt[0]) > 0.5 or abs(hp[1] - pt[1]) > 0.5:
+                    ctx.set_source_rgb(*EDITOR_HANDLE_FILL); ctx.arc(hp[0], hp[1], EDITOR_HANDLE_HALF, 0, 2 * math.pi); ctx.fill()
+                    ctx.set_source_rgb(*EDITOR_ACCENT); ctx.set_line_width(EDITOR_LINE_WIDTH); ctx.arc(hp[0], hp[1], EDITOR_HANDLE_HALF, 0, 2 * math.pi); ctx.stroke()
+        for idx, a in enumerate(anchors):
+            pt = a["pt"]; s = EDITOR_HANDLE_HALF + 1
+            ctx.set_source_rgb(*EDITOR_HANDLE_FILL); ctx.rectangle(pt[0] - s, pt[1] - s, 2 * s, 2 * s); ctx.fill_preserve()
+            ctx.set_source_rgb(*(EDITOR_ACCENT if idx == len(anchors) - 1 else EDITOR_SELECTION))
+            ctx.set_line_width(EDITOR_LINE_WIDTH_BOLD if idx == len(anchors) - 1 else EDITOR_LINE_WIDTH)
+            ctx.stroke()
+        if preview_pt is not None and not bezier_pen.get("mouse_down", False):
+            px, py = preview_pt; s = EDITOR_HANDLE_HALF
+            ctx.set_source_rgba(*EDITOR_HANDLE_FILL, 0.8); ctx.rectangle(px - s, py - s, 2 * s, 2 * s); ctx.fill_preserve()
+            ctx.set_source_rgba(*EDITOR_SELECTION, 0.8); ctx.set_line_width(EDITOR_LINE_WIDTH); ctx.stroke()
+        if len(anchors) >= 3 and preview_pt is not None and not bezier_pen.get("mouse_down", False):
+            try:
+                fp = anchors[0]["pt"]
+                if math.hypot(preview_pt[0] - fp[0], preview_pt[1] - fp[1]) <= 10.0:
+                    ctx.set_source_rgba(*EDITOR_ACCENT, 0.25); ctx.arc(fp[0], fp[1], EDITOR_SNAP_RADIUS, 0, 2 * math.pi); ctx.fill()
+                    ctx.set_source_rgb(*EDITOR_ACCENT); ctx.set_line_width(EDITOR_LINE_WIDTH_BOLD); ctx.arc(fp[0], fp[1], EDITOR_SNAP_RADIUS, 0, 2 * math.pi); ctx.stroke()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+def _draw_gradient_edit_handles(ctx, edit_mode, gradient_edit_info):
+    if not (edit_mode and gradient_edit_info and isinstance(gradient_edit_info, dict)):
+        return
+    try:
+        gtype = gradient_edit_info.get("type")
+        hs = gradient_edit_info.get("handles") or {}
+        if gtype == "linear" and "p1" in hs and "p2" in hs:
+            p1, p2 = hs["p1"], hs["p2"]
+            ctx.set_source_rgba(*EDITOR_SELECTION, 0.95); ctx.set_line_width(EDITOR_LINE_WIDTH_BOLD)
+            ctx.move_to(p1[0], p1[1]); ctx.line_to(p2[0], p2[1]); ctx.stroke()
+            for name in ("p1", "p2"):
+                pt = hs.get(name)
+                if pt is None: continue
+                ctx.set_source_rgb(*EDITOR_HANDLE_FILL); ctx.arc(pt[0], pt[1], EDITOR_HANDLE_RADIUS, 0, 2*math.pi); ctx.fill()
+                ctx.set_source_rgb(*EDITOR_SELECTION); ctx.set_line_width(EDITOR_LINE_WIDTH); ctx.arc(pt[0], pt[1], EDITOR_HANDLE_RADIUS, 0, 2*math.pi); ctx.stroke()
+            cpt = hs.get("center")
+            if cpt is not None:
+                ctx.set_source_rgb(*EDITOR_HANDLE_FILL); ctx.arc(cpt[0], cpt[1], EDITOR_HANDLE_HALF, 0, 2*math.pi); ctx.fill()
+                ctx.set_source_rgb(*EDITOR_SELECTION); ctx.set_line_width(EDITOR_LINE_WIDTH); ctx.arc(cpt[0], cpt[1], EDITOR_HANDLE_HALF, 0, 2*math.pi); ctx.stroke()
+        elif gtype in ("radial", "conic", "spiral", "diamond", "square"):
+            cpt, rx_pt, ry_pt, rot_pt = hs.get("center"), hs.get("rx"), hs.get("ry"), hs.get("rot")
+            if cpt is not None:
+                gcx, gcy = cpt
+                rpx = float(gradient_edit_info.get("radii_px", (0.0, 0.0))[0] or 0.0)
+                rpy = float(gradient_edit_info.get("radii_px", (0.0, 0.0))[1] or 0.0)
+                ang = float(gradient_edit_info.get("angle", 0.0) or 0.0)
+                if rpx > 0.5 and rpy > 0.5:
+                    ctx.save(); ctx.translate(gcx, gcy); ctx.rotate(ang); ctx.scale(rpx, rpy); ctx.new_sub_path()
+                    if gtype == "square": ctx.rectangle(-1.0, -1.0, 2.0, 2.0)
+                    elif gtype == "diamond": ctx.move_to(0.0, -1.0); ctx.line_to(1.0, 0.0); ctx.line_to(0.0, 1.0); ctx.line_to(-1.0, 0.0); ctx.close_path()
+                    else: ctx.arc(0.0, 0.0, 1.0, 0, 2*math.pi)
+                    ctx.restore(); ctx.set_source_rgba(*EDITOR_SELECTION, 0.9); ctx.set_line_width(EDITOR_LINE_WIDTH); ctx.stroke()
+                    if rx_pt is not None: ctx.move_to(gcx, gcy); ctx.line_to(rx_pt[0], rx_pt[1])
+                    if ry_pt is not None: ctx.move_to(gcx, gcy); ctx.line_to(ry_pt[0], ry_pt[1])
+                    ctx.set_source_rgba(*EDITOR_SELECTION, 0.7); ctx.set_line_width(EDITOR_LINE_WIDTH_SUBTLE); ctx.stroke()
+                if rot_pt is not None and rx_pt is not None:
+                    ctx.set_source_rgba(*EDITOR_ROTATION, 0.8); ctx.set_line_width(EDITOR_LINE_WIDTH_SUBTLE)
+                    ctx.move_to(rx_pt[0], rx_pt[1]); ctx.line_to(rot_pt[0], rot_pt[1]); ctx.stroke()
+                    ctx.set_source_rgb(*EDITOR_HANDLE_FILL); ctx.arc(rot_pt[0], rot_pt[1], EDITOR_HANDLE_RADIUS, 0, 2*math.pi); ctx.fill()
+                    ctx.set_source_rgb(*EDITOR_ROTATION); ctx.set_line_width(EDITOR_LINE_WIDTH); ctx.arc(rot_pt[0], rot_pt[1], EDITOR_HANDLE_RADIUS, 0, 2*math.pi); ctx.stroke()
+                for name, pt in hs.items():
+                    if pt is None: continue
+                    if name == "center":
+                        ctx.set_source_rgb(*EDITOR_HANDLE_FILL); ctx.arc(pt[0], pt[1], EDITOR_HANDLE_RADIUS, 0, 2*math.pi); ctx.fill()
+                        ctx.set_source_rgb(*EDITOR_ACCENT); ctx.set_line_width(EDITOR_LINE_WIDTH); ctx.arc(pt[0], pt[1], EDITOR_HANDLE_RADIUS, 0, 2*math.pi); ctx.stroke()
+                    elif name in ("rx", "ry", "edge"):
+                        ctx.set_source_rgb(*EDITOR_HANDLE_FILL); ctx.rectangle(pt[0]-EDITOR_HANDLE_HALF, pt[1]-EDITOR_HANDLE_HALF, 2*EDITOR_HANDLE_HALF, 2*EDITOR_HANDLE_HALF); ctx.fill_preserve()
+                        ctx.set_source_rgb(*EDITOR_SELECTION); ctx.set_line_width(EDITOR_LINE_WIDTH); ctx.stroke()
+    except Exception:
+        pass
+
+def _draw_selection_overlays(ctx, strokes, sel_set, edit_mode, selection_submode, selected_curve, selected_curves, transform_handle_mode, pivot_pos):
+    if not (edit_mode and sel_set):
+        return
+    selected_in_range = [i for i in sel_set if 0 <= i < len(strokes)]
+    if selection_submode == "curve":
+        sel_curves = selected_curves if selected_curves else (([selected_curve] if selected_curve is not None else []))
+        for scv in sel_curves:
+            try:
+                si, comp_i = scv
+            except Exception:
+                continue
+            if si not in selected_in_range or not (0 <= si < len(strokes)):
+                continue
+            segs = segs_of(strokes[si])
+            ranges = _component_ranges(strokes[si])
+            if not (0 <= comp_i < len(ranges)):
+                continue
+            s0, s1 = ranges[comp_i]
+            dsegs = component_display_segs(strokes[si], comp_i) if 'component_display_segs' in globals() else None
+            draw_segs = list(dsegs) if dsegs is not None and len(dsegs) == (min(s1, len(segs)) - s0) else list(segs[s0:min(s1, len(segs))])
+            for p0, c1, c2, p3 in draw_segs:
+                ctx.new_path(); ctx.move_to(p0[0], p0[1]); ctx.curve_to(c1[0], c1[1], c2[0], c2[1], p3[0], p3[1])
+                ctx.set_source_rgba(*EDITOR_ACCENT, 0.9)
+                w = strokes[si].get("stroke_width", 3.0) if isinstance(strokes[si], dict) else 3.0
+                ctx.set_line_width(max(4.0, w + 2.0)); ctx.stroke()
+    if selection_submode == "nodes" and len(selected_in_range) == 1:
+        idx = selected_in_range[0]
+        segs = stroke_display_segs(strokes[idx]) if 'stroke_display_segs' in globals() else segs_of(strokes[idx])
+        ctx.set_source_rgba(*EDITOR_GUIDE, 0.8); ctx.set_line_width(EDITOR_LINE_WIDTH_SUBTLE)
+        for si, (p0, c1, c2, p3) in enumerate(segs):
+            ctx.move_to(p0[0], p0[1]); ctx.line_to(c1[0], c1[1]); ctx.move_to(p3[0], p3[1]); ctx.line_to(c2[0], c2[1])
+        ctx.stroke()
+        for si, (p0, c1, c2, p3) in enumerate(segs):
+            hr, hhalf = EDITOR_HANDLE_RADIUS, EDITOR_HANDLE_HALF
+            if si == 0:
+                for pt in (p0,):
+                    ctx.set_source_rgb(*EDITOR_HANDLE_FILL); ctx.arc(pt[0], pt[1], hr, 0, 2*math.pi); ctx.fill()
+                    ctx.set_source_rgb(*EDITOR_SELECTION); ctx.set_line_width(EDITOR_LINE_WIDTH_BOLD); ctx.arc(pt[0], pt[1], hr, 0, 2*math.pi); ctx.stroke()
+            for pt in (p3,):
+                ctx.set_source_rgb(*EDITOR_HANDLE_FILL); ctx.arc(pt[0], pt[1], hr, 0, 2*math.pi); ctx.fill()
+                ctx.set_source_rgb(*EDITOR_SELECTION); ctx.set_line_width(EDITOR_LINE_WIDTH_BOLD); ctx.arc(pt[0], pt[1], hr, 0, 2*math.pi); ctx.stroke()
+            for pt in (c1, c2):
+                ctx.set_source_rgb(*EDITOR_HANDLE_FILL); ctx.rectangle(pt[0]-hhalf, pt[1]-hhalf, 2*hhalf, 2*hhalf); ctx.fill_preserve()
+                ctx.set_source_rgb(*EDITOR_ACCENT); ctx.set_line_width(EDITOR_LINE_WIDTH); ctx.stroke()
+    elif selection_submode == "transform":
+        obb = combined_obb(strokes, selected_in_range)
+        if obb:
+            corners = obb.get("corners", [])
+            handles = bbox_handles(obb, mode=transform_handle_mode)
+            try: ctx.set_dash([6, 4])
+            except Exception: pass
+            ctx.set_source_rgb(*EDITOR_SELECTION); ctx.set_line_width(EDITOR_LINE_WIDTH)
+            if corners:
+                ctx.move_to(corners[0][0], corners[0][1])
+                for cpt in corners[1:]: ctx.line_to(cpt[0], cpt[1])
+                ctx.close_path(); ctx.stroke()
+            try: ctx.set_dash([])
+            except Exception: pass
+            if transform_handle_mode == "scale" and "n" in handles and "rot" in handles:
+                npt, rpt = handles["n"], handles["rot"]
+                ctx.set_source_rgb(*EDITOR_ROTATION); ctx.set_line_width(EDITOR_LINE_WIDTH_SUBTLE)
+                ctx.move_to(npt[0], npt[1]); ctx.line_to(rpt[0], rpt[1]); ctx.stroke()
+            for name, pt in handles.items():
+                if name == "rot" or name.startswith("rot_"):
+                    ctx.set_source_rgb(*EDITOR_HANDLE_FILL); ctx.arc(pt[0], pt[1], EDITOR_HANDLE_RADIUS, 0, 2*math.pi); ctx.fill()
+                    ctx.set_source_rgb(*EDITOR_ROTATION); ctx.set_line_width(EDITOR_LINE_WIDTH); ctx.arc(pt[0], pt[1], EDITOR_HANDLE_RADIUS, 0, 2*math.pi); ctx.stroke()
+                elif name.startswith("skew_"):
+                    d = EDITOR_SKEW_RADIUS
+                    ctx.move_to(pt[0], pt[1]-d); ctx.line_to(pt[0]+d, pt[1]); ctx.line_to(pt[0], pt[1]+d); ctx.line_to(pt[0]-d, pt[1]); ctx.close_path()
+                    ctx.set_source_rgb(*EDITOR_HANDLE_FILL); ctx.fill_preserve()
+                    ctx.set_source_rgb(*EDITOR_SELECTION); ctx.set_line_width(EDITOR_LINE_WIDTH); ctx.stroke()
+                else:
+                    ctx.set_source_rgb(*EDITOR_HANDLE_FILL); ctx.rectangle(pt[0]-EDITOR_HANDLE_HALF, pt[1]-EDITOR_HANDLE_HALF, 2*EDITOR_HANDLE_HALF, 2*EDITOR_HANDLE_HALF); ctx.fill_preserve()
+                    ctx.set_source_rgb(*EDITOR_SELECTION); ctx.set_line_width(EDITOR_LINE_WIDTH); ctx.stroke()
+            pv = pivot_pos if pivot_pos is not None else (obb["cx"], obb["cy"])
+            if pv is not None:
+                px, py = pv; r_out, r_in = EDITOR_PIVOT_RADIUS, EDITOR_PIVOT_INNER_RADIUS
+                ctx.set_source_rgb(*EDITOR_HANDLE_FILL); ctx.arc(px, py, r_out, 0, 2*math.pi); ctx.fill()
+                ctx.set_source_rgb(*EDITOR_ACCENT); ctx.set_line_width(EDITOR_LINE_WIDTH_BOLD); ctx.arc(px, py, r_out, 0, 2*math.pi); ctx.stroke()
+                ctx.move_to(px-r_out, py); ctx.line_to(px-r_in, py); ctx.move_to(px+r_in, py); ctx.line_to(px+r_out, py)
+                ctx.move_to(px, py-r_out); ctx.line_to(px, py-r_in); ctx.move_to(px, py+r_in); ctx.line_to(px, py+r_out); ctx.stroke()
+                ctx.arc(px, py, r_in, 0, 2*math.pi); ctx.fill()
+    elif selection_submode == "nodes" and len(selected_in_range) > 1:
+        obb = combined_obb(strokes, selected_in_range)
+        if obb:
+            corners = obb.get("corners", [])
+            try: ctx.set_dash([4, 4])
+            except Exception: pass
+            ctx.set_source_rgb(*EDITOR_SELECTION); ctx.set_line_width(EDITOR_LINE_WIDTH_SUBTLE)
+            if corners:
+                ctx.move_to(corners[0][0], corners[0][1])
+                for cpt in corners[1:]: ctx.line_to(cpt[0], cpt[1])
+                ctx.close_path(); ctx.stroke()
+            try: ctx.set_dash([])
+            except Exception: pass
+def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, selected_index=None, selected_indices=None, edit_mode=False, selection_submode="transform", selected_curve=None, selected_curves=None, snap_kind="connect", redrawing_curve=None, ref_img=None, view_zoom=None, view_pan=None, pivot_pos=None, for_export=False, transform_handle_mode="scale", gradient_edit_info=None, export_scale=1.0, guides=None, smart_guides=None, bezier_pen=None, artboards=None, active_artboard=-1):
+
     # Backward compat: selected_index (single) or selected_indices (collection)
     if selected_indices is None and selected_index is not None:
         selected_indices = selected_index
@@ -751,110 +1532,7 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
         ctx.scale(float(export_scale), float(export_scale))
 
     # Grid + ruler guides + artboards overlay (view-only; never part of an export).
-    if not for_export and (getattr(cfg, "SHOW_GRID", False) or guides or smart_guides or artboards):
-        try:
-            zoom = float(view_zoom) or 1.0
-            wx0 = (0.0 - float(view_pan[0])) / zoom
-            wy0 = (0.0 - float(view_pan[1])) / zoom
-            wx1 = (float(cfg.CANVAS_W) - float(view_pan[0])) / zoom
-            wy1 = (float(cfg.canvas_viewport_height()) - float(view_pan[1])) / zoom
-            thin = 1.0 / zoom
-            if getattr(cfg, "SHOW_GRID", False):
-                spacing = float(getattr(cfg, "GRID_SIZE", 20.0) or 20.0)
-                major_every = int(getattr(cfg, "GRID_MAJOR_EVERY", 5) or 5)
-                minor = cfg.GRID_MINOR_RGB
-                major_c = cfg.GRID_MAJOR_RGB
-                xs = grid_positions(wx0, wx1, spacing)
-                ys = grid_positions(wy0, wy1, spacing)
-                ctx.set_line_width(thin)
-                for i, x in enumerate(xs):
-                    is_major = (round(x / spacing) % major_every == 0)
-                    ctx.set_source_rgba(*(cairo_rgb(major_c if is_major else minor, 0.85)))
-                    ctx.move_to(x, wy0); ctx.line_to(x, wy1); ctx.stroke()
-                for i, y in enumerate(ys):
-                    is_major = (round(y / spacing) % major_every == 0)
-                    ctx.set_source_rgba(*(cairo_rgb(major_c if is_major else minor, 0.85)))
-                    ctx.move_to(wx0, y); ctx.line_to(wx1, y); ctx.stroke()
-            # Artboard bounds (drawn in world space).
-            if artboards:
-                for _ai, _ab in enumerate(artboards or ()):
-                    if not isinstance(_ab, dict):
-                        continue
-                    try:
-                        ax = float(_ab.get("x", 0.0)); ay = float(_ab.get("y", 0.0))
-                        aw = float(_ab.get("w", 0.0)); ah = float(_ab.get("h", 0.0))
-                    except Exception:
-                        continue
-                    if aw <= 0 or ah <= 0:
-                        continue
-                    is_active = (_ai == active_artboard)
-                    ctx.save()
-                    try:
-                        ctx.set_dash([])
-                    except Exception:
-                        pass
-                    if is_active:
-                        ctx.set_source_rgba(*(cairo_rgb(getattr(cfg, "ACCENT_RGB", (59, 130, 246)), 0.95)))
-                        ctx.set_line_width(max(thin * 1.5, 2.0 / zoom))
-                    else:
-                        ctx.set_source_rgba(*(cairo_rgb(getattr(cfg, "BORDER_RGB", (203, 213, 225)), 0.9)))
-                        ctx.set_line_width(max(thin, 1.0 / zoom))
-                    ctx.rectangle(ax, ay, aw, ah)
-                    ctx.stroke()
-                    try:
-                        name = str(_ab.get("name") or f"Artboard {_ai + 1}")
-                        ctx.set_source_rgba(*(cairo_rgb(getattr(cfg, "MUTED_RGB", (100, 116, 139)), 0.95 if is_active else 0.75)))
-                        ctx.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
-                        ctx.set_font_size(max(10.0 / zoom, 8.0 / zoom))
-                        ctx.move_to(ax, ay - 4.0 / zoom)
-                        ctx.show_text(name)
-                    except Exception:
-                        pass
-                    ctx.restore()
-            for g in guides or ():
-                try:
-                    pos = float(g.get("pos", 0.0))
-                except (TypeError, ValueError):
-                    continue
-                ctx.set_source_rgba(*(cairo_rgb(cfg.GUIDE_RGB, 0.9)))
-                ctx.set_line_width(thin)
-                try:
-                    ctx.set_dash([6.0 / zoom, 4.0 / zoom])
-                except Exception:
-                    pass
-                if g.get("axis") == "x":
-                    ctx.move_to(pos, wy0); ctx.line_to(pos, wy1)
-                else:
-                    ctx.move_to(wx0, pos); ctx.line_to(wx1, pos)
-                ctx.stroke()
-                try:
-                    ctx.set_dash([])
-                except Exception:
-                    pass
-            # Smart alignment guides (transient, shown while snapping objects).
-            if smart_guides:
-                ctx.set_source_rgba(*(cairo_rgb(getattr(cfg, "SMART_GUIDE_RGB", (236, 72, 153)), 0.95)))
-                ctx.set_line_width(max(thin, 1.0 / zoom))
-                try:
-                    ctx.set_dash([])
-                except Exception:
-                    pass
-                for sg in smart_guides:
-                    try:
-                        if sg.get("axis") == "x":
-                            pos = float(sg["pos"])
-                            y0 = float(sg.get("y0", wy0))
-                            y1 = float(sg.get("y1", wy1))
-                            ctx.move_to(pos, y0); ctx.line_to(pos, y1); ctx.stroke()
-                        elif sg.get("axis") == "y":
-                            pos = float(sg["pos"])
-                            x0 = float(sg.get("x0", wx0))
-                            x1 = float(sg.get("x1", wx1))
-                            ctx.move_to(x0, pos); ctx.line_to(x1, pos); ctx.stroke()
-                    except Exception:
-                        continue
-        except Exception:
-            pass
+    _draw_canvas_overlays(ctx, for_export, view_zoom, view_pan, guides, smart_guides, artboards, active_artboard)
 
     # Reference image, behind strokes
     if ref_img and ref_img.get("visible", True) and ref_img.get("surface") is not None:
@@ -877,238 +1555,6 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
     if redrawing_curve is not None:
         redraw_target = (redrawing_curve.get("stroke_idx"), redrawing_curve.get("comp_idx", redrawing_curve.get("seg_idx")))
 
-    def _draw_hidden_segments(ctx, stroke, segs, hidden_set, stroke_width):
-        if not hidden_set:
-            return
-        ctx.save()
-        try:
-            ctx.set_dash([6, 4])
-        except Exception:
-            pass
-        # distinct style for hidden curves in edit modes
-        ctx.set_source_rgba(*EDITOR_ACCENT, 0.55)
-        ctx.set_line_width(max(1.5, float(stroke_width)))
-        ctx.new_path()
-        for i in sorted(hidden_set):
-            if 0 <= i < len(segs):
-                p0, c1, c2, p3 = segs[i]
-                ctx.move_to(p0[0], p0[1])
-                ctx.curve_to(c1[0], c1[1], c2[0], c2[1], p3[0], p3[1])
-        ctx.stroke()
-        try:
-            ctx.set_dash([])
-        except Exception:
-            pass
-        ctx.restore()
-
-    def _draw_arrowhead(ctx, segs, color, width):
-        """Draw an arrowhead at the end of the last segment (line shapes)."""
-        if not segs:
-            return
-        try:
-            p2, p3 = segs[-1][2], segs[-1][3]
-        except Exception:
-            return
-        dx, dy = p3[0] - p2[0], p3[1] - p2[1]
-        length = math.hypot(dx, dy)
-        if length < 1e-6:
-            try:
-                p2, p3 = segs[-1][0], segs[-1][3]
-                dx, dy = p3[0] - p2[0], p3[1] - p2[1]
-                length = math.hypot(dx, dy)
-            except Exception:
-                return
-        if length < 1e-6:
-            return
-        ux, uy = dx / length, dy / length
-        size = max(9.0, float(width or 3.0) * 3.5)
-        ang = math.radians(26.0)
-        ca, sa = math.cos(ang), math.sin(ang)
-        ctx.new_path()
-        for sign in (-1.0, 1.0):
-            rx = -ux * ca + uy * sa * sign
-            ry = -ux * sa * sign - uy * ca
-            ctx.move_to(p3[0], p3[1])
-            ctx.line_to(p3[0] + rx * size, p3[1] + ry * size)
-        ctx.set_source_rgba(*color_rgba(color, DEFAULT_STROKE_RGBA))
-        ctx.set_line_width(max(1.0, float(width or 3.0)))
-        ctx.set_line_cap(cairo.LINE_CAP_ROUND)
-        ctx.stroke()
-
-
-    def _draw_marker(ctx, mtype, point, ux, uy, color, width):
-        """Draw one end marker of type ``mtype`` at ``point`` pointing along u."""
-        if mtype == "none":
-            return
-        px, py = point
-        perp = (-uy, ux)
-        size = marker_size({"stroke_width": width}, width)
-        rgba = color_rgba(color, DEFAULT_STROKE_RGBA)
-        lw = max(1.0, float(width or 3.0))
-        ctx.new_path()
-        if mtype in ("arrow", "open_arrow"):
-            ang = math.radians(20.0 if mtype == "open_arrow" else 26.0)
-            ca, sa = math.cos(ang), math.sin(ang)
-            scale = 0.8 if mtype == "open_arrow" else 1.0
-            for sign in (-1.0, 1.0):
-                rx = -ux * ca + uy * sa * sign
-                ry = -ux * sa * sign - uy * ca
-                ctx.move_to(px, py)
-                ctx.line_to(px + rx * size * scale, py + ry * size * scale)
-            ctx.set_source_rgba(*rgba)
-            ctx.set_line_width(lw)
-            ctx.set_line_cap(cairo.LINE_CAP_ROUND)
-            ctx.stroke()
-        elif mtype == "triangle":
-            hw = size * 0.45
-            bx, by = px - ux * size, py - uy * size
-            ctx.move_to(px, py)
-            ctx.line_to(bx + perp[0] * hw, by + perp[1] * hw)
-            ctx.line_to(bx - perp[0] * hw, by - perp[1] * hw)
-            ctx.close_path()
-            ctx.set_source_rgba(*rgba)
-            ctx.fill()
-        elif mtype == "bar":
-            hw = size * 0.5
-            ctx.move_to(px + perp[0] * hw, py + perp[1] * hw)
-            ctx.line_to(px - perp[0] * hw, py - perp[1] * hw)
-            ctx.set_source_rgba(*rgba)
-            ctx.set_line_width(lw)
-            ctx.stroke()
-        else:
-            # centred shapes sit just behind the endpoint so the tip stays crisp
-            cx, cy = px - ux * size * 0.3, py - uy * size * 0.3
-            r = size * 0.32
-            if mtype == "circle":
-                ctx.arc(cx, cy, r, 0.0, 2.0 * math.pi)
-            elif mtype == "square":
-                ctx.move_to(cx + ux * r + perp[0] * r, cy + uy * r + perp[1] * r)
-                ctx.line_to(cx - ux * r + perp[0] * r, cy - uy * r + perp[1] * r)
-                ctx.line_to(cx - ux * r - perp[0] * r, cy - uy * r - perp[1] * r)
-                ctx.line_to(cx + ux * r - perp[0] * r, cy + uy * r - perp[1] * r)
-                ctx.close_path()
-            else:  # diamond
-                ctx.move_to(cx + ux * r, cy + uy * r)
-                ctx.line_to(cx + perp[0] * r, cy + perp[1] * r)
-                ctx.line_to(cx - ux * r, cy - uy * r)
-                ctx.line_to(cx - perp[0] * r, cy - perp[1] * r)
-                ctx.close_path()
-            ctx.set_source_rgba(*rgba)
-            ctx.fill()
-
-    def _draw_markers(ctx, stroke, color, width):
-        """Draw all configured start/end markers for ``stroke``."""
-        if not isinstance(stroke, dict):
-            return
-        markers = get_markers(stroke) if 'get_markers' in globals() else {"start": "none", "end": "none"}
-        if markers.get("start", "none") == "none" and markers.get("end", "none") == "none":
-            return
-        anchors = marker_anchors(stroke) if 'marker_anchors' in globals() else []
-        for which, point, ux, uy in anchors:
-            mtype = markers.get(which, "none")
-            _draw_marker(ctx, mtype, point, ux, uy, color, width)
-
-
-    def _stroke_has_active_thickness(stroke):
-        try:
-            for comp in _stroke_components(stroke):
-                for sv in _get_distortion_styles(comp):
-                    if isinstance(sv, dict) and sv.get("type") == "thickness" and _distortion_style_active(sv):
-                        return True
-        except Exception:
-            pass
-        return False
-
-    def _draw_stroke_segments(ctx, stroke, seg_indices, stroke_color, stroke_width):
-        if not seg_indices:
-            return
-        seg_set = set(seg_indices)
-        if _stroke_needs_variable_width(stroke, seg_set):
-            _draw_variable_width_segments(ctx, stroke, seg_set, None)
-            return
-        segs_all = segs_of(stroke)
-        ranges = _component_ranges(stroke)
-        comps = _stroke_components(stroke)
-
-        def _draw_polyline(pts):
-            if not pts or len(pts) < 2:
-                return False
-            ctx.move_to(pts[0][0], pts[0][1])
-            for pt in pts[1:]:
-                ctx.line_to(pt[0], pt[1])
-            return True
-
-        # draw by components to support per-component styles and wave distortion
-        for ci, (s0, s1) in enumerate(ranges):
-            idxs = [i for i in range(s0, min(s1, len(segs_all))) if i in seg_set]
-            if not idxs:
-                continue
-            sc_i, sw_i = _effective_component_style(stroke, ci)
-            comp = comps[ci] if ci < len(comps) else {}
-            ctx.new_path()
-            drew_c = False
-            is_thickness = False
-            try:
-                _styles = _get_distortion_styles(comp) if '_get_distortion_styles' in dir() else (comp.get("styles") or [])
-                is_thickness = any(isinstance(sv, dict) and sv.get("type") == "thickness" and _distortion_style_active(sv) for sv in _styles)
-            except Exception:
-                is_thickness = False
-            if _component_wave_enabled(comp) and len(idxs) == (min(s1, len(segs_all)) - s0):
-                poly = sample_distorted_component(stroke, ci)
-                if poly and len(poly) >= 2:
-                    if is_thickness:
-                        # Ribbon: [bottom_start..bottom_end, top_end..top_start]
-                        n = len(poly) // 2
-                        if n >= 2:
-                            # Fill closed ribbon
-                            ctx.new_path()
-                            ctx.move_to(poly[0][0], poly[0][1])
-                            for pt in poly[1:]:
-                                ctx.line_to(pt[0], pt[1])
-                            ctx.close_path()
-                            eff_sc = sc_i if _stroke_has_component_styles(stroke) or _component_wave_enabled(comp) else stroke_color
-                            eff_sw = sw_i if _stroke_has_component_styles(stroke) or _component_wave_enabled(comp) else stroke_width
-                            ctx.save()
-                            ctx.set_source_rgba(*color_rgba(eff_sc, DEFAULT_STROKE_RGBA))
-                            ctx.fill_preserve()
-                            # Stroke only top edge + caps, not the bottom baseline
-                            ctx.new_path()
-                            ctx.move_to(poly[n - 1][0], poly[n - 1][1])  # bottom_end -> end cap
-                            for pt in poly[n:]:
-                                ctx.line_to(pt[0], pt[1])  # top_end..top_start
-                            ctx.line_to(poly[0][0], poly[0][1])  # start cap
-                            if eff_sw is not None and float(eff_sw) > 0.0 and color_alpha(eff_sc, 1.0) > 0.0:
-                                ctx.set_line_width(float(eff_sw))
-                                apply_stroke_style(ctx, stroke, float(eff_sw))
-                                ctx.stroke()
-                            else:
-                                ctx.new_path()
-                            ctx.restore()
-                            drew_c = True
-                        else:
-                            drew_c = _draw_polyline(poly)
-                    else:
-                        drew_c = _draw_polyline(poly)
-            if not drew_c:
-                for i in idxs:
-                    p0, c1, c2, p3 = segs_all[i]
-                    ctx.move_to(p0[0], p0[1]); ctx.curve_to(c1[0], c1[1], c2[0], c2[1], p3[0], p3[1])
-                    drew_c = True
-            if drew_c and not is_thickness:
-                eff_sc = sc_i if _stroke_has_component_styles(stroke) or _component_wave_enabled(comp) else stroke_color
-                eff_sw = sw_i if _stroke_has_component_styles(stroke) or _component_wave_enabled(comp) else stroke_width
-                if eff_sw is not None and float(eff_sw) > 0.0 and color_alpha(eff_sc, 1.0) > 0.0:
-                    ctx.save()
-                    ctx.set_source_rgba(*color_rgba(eff_sc, DEFAULT_STROKE_RGBA))
-                    ctx.set_line_width(float(eff_sw))
-                    apply_stroke_style(ctx, stroke, float(eff_sw))
-                    ctx.stroke()
-                    ctx.restore()
-                else:
-                    ctx.new_path()
-            elif drew_c and is_thickness:
-                pass
-
 
     for idx, stroke in enumerate(strokes):
         # Hidden objects (organization/layers) are excluded from all rendering.
@@ -1127,7 +1573,8 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
         show_hidden = edit_mode and selection_submode in ("curve", "nodes") and bool(hidden)
 
         # Hint: show original/base (guide) shape for distorted curves so they remain selectable
-        if (not for_export) and _stroke_has_wave(stroke):
+        if (not for_export) and _stroke_has_wave(stroke):
+
             comps = _stroke_components(stroke)
             ranges = _component_ranges(stroke)
             ctx.save()
@@ -1262,328 +1709,9 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
         if show_hidden:
             _draw_hidden_segments(ctx, stroke, segs, hidden, stroke_width)
 
-    # Draw selection overlays (nodes for single selection, combined bbox for transform)
-    if edit_mode and sel_set:
-        selected_in_range = [i for i in sel_set if 0 <= i < len(strokes)]
-        # Highlight selected stroke/component(s) in curve edit mode
-        if selection_submode == "curve":
-            sel_curves = selected_curves if selected_curves else (([selected_curve] if selected_curve is not None else []))
-            for scv in sel_curves:
-                try:
-                    si, comp_i = scv
-                except Exception:
-                    continue
-                if si not in selected_in_range or not (0 <= si < len(strokes)):
-                    continue
-                segs = segs_of(strokes[si])
-                ranges = _component_ranges(strokes[si])
-                if not (0 <= comp_i < len(ranges)):
-                    continue
-                s0, s1 = ranges[comp_i]
-                dsegs = component_display_segs(strokes[si], comp_i) if 'component_display_segs' in globals() else None
-                if dsegs is not None and len(dsegs) == (min(s1, len(segs)) - s0):
-                    draw_segs = list(dsegs)
-                else:
-                    draw_segs = list(segs[s0:min(s1, len(segs))])
-                for p0, c1, c2, p3 in draw_segs:
-                    ctx.new_path()
-                    ctx.move_to(p0[0], p0[1])
-                    ctx.curve_to(c1[0], c1[1], c2[0], c2[1], p3[0], p3[1])
-                    ctx.set_source_rgba(*EDITOR_ACCENT, 0.9)
-                    w = strokes[si].get("stroke_width", 3.0) if isinstance(strokes[si], dict) else 3.0
-                    ctx.set_line_width(max(4.0, w + 2.0))
-                    ctx.stroke()
-        if selection_submode == "nodes" and len(selected_in_range) == 1:
-            idx = selected_in_range[0]
-            segs = stroke_display_segs(strokes[idx]) if 'stroke_display_segs' in globals() else segs_of(strokes[idx])
-            ctx.set_source_rgba(*EDITOR_GUIDE, 0.8)
-            ctx.set_line_width(EDITOR_LINE_WIDTH_SUBTLE)
-            for si, (p0, c1, c2, p3) in enumerate(segs):
-                ctx.move_to(p0[0], p0[1]); ctx.line_to(c1[0], c1[1])
-                ctx.move_to(p3[0], p3[1]); ctx.line_to(c2[0], c2[1])
-            ctx.stroke()
-            for si, (p0, c1, c2, p3) in enumerate(segs):
-                hr = EDITOR_HANDLE_RADIUS
-                hhalf = EDITOR_HANDLE_HALF
-                if si == 0:
-                    for pt in (p0,):
-                        ctx.set_source_rgb(*EDITOR_HANDLE_FILL); ctx.arc(pt[0], pt[1], hr, 0, 2*math.pi); ctx.fill()
-                        ctx.set_source_rgb(*EDITOR_SELECTION); ctx.set_line_width(EDITOR_LINE_WIDTH_BOLD); ctx.arc(pt[0], pt[1], hr, 0, 2*math.pi); ctx.stroke()
-                for pt in (p3,):
-                    ctx.set_source_rgb(*EDITOR_HANDLE_FILL); ctx.arc(pt[0], pt[1], hr, 0, 2*math.pi); ctx.fill()
-                    ctx.set_source_rgb(*EDITOR_SELECTION); ctx.set_line_width(EDITOR_LINE_WIDTH_BOLD); ctx.arc(pt[0], pt[1], hr, 0, 2*math.pi); ctx.stroke()
-                for pt in (c1, c2):
-                    ctx.set_source_rgb(*EDITOR_HANDLE_FILL); ctx.rectangle(pt[0]-hhalf, pt[1]-hhalf, 2*hhalf, 2*hhalf); ctx.fill_preserve()
-                    ctx.set_source_rgb(*EDITOR_ACCENT); ctx.set_line_width(EDITOR_LINE_WIDTH); ctx.stroke()
-        elif selection_submode == "transform":
-            obb = combined_obb(strokes, selected_in_range)
-            if obb:
-                corners = obb.get("corners", [])
-                handles = bbox_handles(obb, mode=transform_handle_mode)
-                try:
-                    ctx.set_dash([6, 4])
-                except Exception:
-                    pass
-                ctx.set_source_rgb(*EDITOR_SELECTION)
-                ctx.set_line_width(EDITOR_LINE_WIDTH)
-                if corners:
-                    ctx.move_to(corners[0][0], corners[0][1])
-                    for cpt in corners[1:]:
-                        ctx.line_to(cpt[0], cpt[1])
-                    ctx.close_path()
-                    ctx.stroke()
-                try:
-                    ctx.set_dash([])
-                except Exception:
-                    pass
-                # rotation stem only in legacy-style scale mode separate rot handle
-                if transform_handle_mode == "scale" and "n" in handles and "rot" in handles:
-                    npt = handles["n"]; rpt = handles["rot"]
-                    ctx.set_source_rgb(*EDITOR_ROTATION)
-                    ctx.set_line_width(EDITOR_LINE_WIDTH_SUBTLE)
-                    ctx.move_to(npt[0], npt[1]); ctx.line_to(rpt[0], rpt[1])
-                    ctx.stroke()
-                for name, pt in handles.items():
-                    if name == "rot" or name.startswith("rot_"):
-                        ctx.set_source_rgb(*EDITOR_HANDLE_FILL); ctx.arc(pt[0], pt[1], EDITOR_HANDLE_RADIUS, 0, 2*math.pi); ctx.fill()
-                        ctx.set_source_rgb(*EDITOR_ROTATION); ctx.set_line_width(EDITOR_LINE_WIDTH); ctx.arc(pt[0], pt[1], EDITOR_HANDLE_RADIUS, 0, 2*math.pi); ctx.stroke()
-                    elif name.startswith("skew_"):
-                        # skew handles as diamonds
-                        d = EDITOR_SKEW_RADIUS
-                        ctx.move_to(pt[0], pt[1]-d); ctx.line_to(pt[0]+d, pt[1]); ctx.line_to(pt[0], pt[1]+d); ctx.line_to(pt[0]-d, pt[1]); ctx.close_path()
-                        ctx.set_source_rgb(*EDITOR_HANDLE_FILL); ctx.fill_preserve()
-                        ctx.set_source_rgb(*EDITOR_SELECTION); ctx.set_line_width(EDITOR_LINE_WIDTH); ctx.stroke()
-                    else:
-                        ctx.set_source_rgb(*EDITOR_HANDLE_FILL); ctx.rectangle(pt[0]-EDITOR_HANDLE_HALF, pt[1]-EDITOR_HANDLE_HALF, 2*EDITOR_HANDLE_HALF, 2*EDITOR_HANDLE_HALF); ctx.fill_preserve()
-                        ctx.set_source_rgb(*EDITOR_SELECTION); ctx.set_line_width(EDITOR_LINE_WIDTH); ctx.stroke()
-                # Pivot point (rotation/scale center) - draggable
-                pv = pivot_pos if pivot_pos is not None else (obb["cx"], obb["cy"])
-                if pv is not None:
-                    px, py = pv
-                    r_out, r_in = EDITOR_PIVOT_RADIUS, EDITOR_PIVOT_INNER_RADIUS
-                    ctx.set_source_rgb(*EDITOR_HANDLE_FILL)
-                    ctx.arc(px, py, r_out, 0, 2*math.pi); ctx.fill()
-                    ctx.set_source_rgb(*EDITOR_ACCENT)
-                    ctx.set_line_width(EDITOR_LINE_WIDTH_BOLD)
-                    ctx.arc(px, py, r_out, 0, 2*math.pi); ctx.stroke()
-                    ctx.move_to(px - r_out, py); ctx.line_to(px - r_in, py)
-                    ctx.move_to(px + r_in, py); ctx.line_to(px + r_out, py)
-                    ctx.move_to(px, py - r_out); ctx.line_to(px, py - r_in)
-                    ctx.move_to(px, py + r_in); ctx.line_to(px, py + r_out)
-                    ctx.stroke()
-                    ctx.arc(px, py, r_in, 0, 2*math.pi); ctx.fill()
-        elif selection_submode == "nodes" and len(selected_in_range) > 1:
-            # Multi-selection: show combined oriented bbox (node editing requires single selection)
-            obb = combined_obb(strokes, selected_in_range)
-            if obb:
-                corners = obb.get("corners", [])
-                try:
-                    ctx.set_dash([4, 4])
-                except Exception:
-                    pass
-                ctx.set_source_rgb(*EDITOR_SELECTION)
-                ctx.set_line_width(EDITOR_LINE_WIDTH_SUBTLE)
-                if corners:
-                    ctx.move_to(corners[0][0], corners[0][1])
-                    for cpt in corners[1:]:
-                        ctx.line_to(cpt[0], cpt[1])
-                    ctx.close_path()
-                    ctx.stroke()
-                try:
-                    ctx.set_dash([])
-                except Exception:
-                    pass
+    _draw_selection_overlays(ctx, strokes, sel_set, edit_mode, selection_submode, selected_curve, selected_curves, transform_handle_mode, pivot_pos)
 
-    # Gradient on-canvas edit handles (linear direction line / shaped gradient center, radii & rotation)
-    if edit_mode and gradient_edit_info and isinstance(gradient_edit_info, dict):
-        try:
-            gtype = gradient_edit_info.get("type")
-            hs = gradient_edit_info.get("handles") or {}
-            if gtype == "linear" and "p1" in hs and "p2" in hs:
-                p1 = hs["p1"]; p2 = hs["p2"]
-                ctx.set_source_rgba(*EDITOR_SELECTION, 0.95)
-                ctx.set_line_width(EDITOR_LINE_WIDTH_BOLD)
-                ctx.move_to(p1[0], p1[1]); ctx.line_to(p2[0], p2[1])
-                ctx.stroke()
-                # endpoint handles
-                for name in ("p1", "p2"):
-                    pt = hs.get(name)
-                    if pt is None:
-                        continue
-                    ctx.set_source_rgb(*EDITOR_HANDLE_FILL); ctx.arc(pt[0], pt[1], EDITOR_HANDLE_RADIUS, 0, 2*math.pi); ctx.fill()
-                    ctx.set_source_rgb(*EDITOR_SELECTION); ctx.set_line_width(EDITOR_LINE_WIDTH); ctx.arc(pt[0], pt[1], EDITOR_HANDLE_RADIUS, 0, 2*math.pi); ctx.stroke()
-                # center marker
-                cpt = hs.get("center")
-                if cpt is not None:
-                    ctx.set_source_rgb(*EDITOR_HANDLE_FILL); ctx.arc(cpt[0], cpt[1], EDITOR_HANDLE_HALF, 0, 2*math.pi); ctx.fill()
-                    ctx.set_source_rgb(*EDITOR_SELECTION); ctx.set_line_width(EDITOR_LINE_WIDTH); ctx.arc(cpt[0], cpt[1], EDITOR_HANDLE_HALF, 0, 2*math.pi); ctx.stroke()
-            elif gtype in ("radial", "conic", "spiral", "diamond", "square"):
-                cpt = hs.get("center")
-                rx_pt = hs.get("rx")
-                ry_pt = hs.get("ry")
-                edge_pt = hs.get("edge")
-                rot_pt = hs.get("rot")
-                if cpt is not None:
-                    gcx, gcy = cpt
-                    rpx = float(gradient_edit_info.get("radii_px", (0.0, 0.0))[0] or 0.0)
-                    rpy = float(gradient_edit_info.get("radii_px", (0.0, 0.0))[1] or 0.0)
-                    ang = float(gradient_edit_info.get("angle", 0.0) or 0.0)
-                    if rpx > 0.5 and rpy > 0.5:
-                        ctx.save()
-                        ctx.translate(gcx, gcy)
-                        ctx.rotate(ang)
-                        ctx.scale(rpx, rpy)
-                        ctx.new_sub_path()
-                        if gtype == "square":
-                            ctx.rectangle(-1.0, -1.0, 2.0, 2.0)
-                        elif gtype == "diamond":
-                            ctx.move_to(0.0, -1.0); ctx.line_to(1.0, 0.0); ctx.line_to(0.0, 1.0); ctx.line_to(-1.0, 0.0); ctx.close_path()
-                        else:
-                            ctx.arc(0.0, 0.0, 1.0, 0, 2*math.pi)
-                        ctx.restore()
-                        ctx.set_source_rgba(*EDITOR_SELECTION, 0.9)
-                        ctx.set_line_width(EDITOR_LINE_WIDTH)
-                        ctx.stroke()
-                        # axis lines
-                        if rx_pt is not None:
-                            ctx.move_to(gcx, gcy); ctx.line_to(rx_pt[0], rx_pt[1])
-                        if ry_pt is not None:
-                            ctx.move_to(gcx, gcy); ctx.line_to(ry_pt[0], ry_pt[1])
-                        ctx.set_source_rgba(*EDITOR_SELECTION, 0.7)
-                        ctx.set_line_width(EDITOR_LINE_WIDTH_SUBTLE)
-                        ctx.stroke()
-                    # rotation handle stem and marker
-                    if rot_pt is not None and rx_pt is not None:
-                        ctx.set_source_rgba(*EDITOR_ROTATION, 0.8)
-                        ctx.set_line_width(EDITOR_LINE_WIDTH_SUBTLE)
-                        ctx.move_to(rx_pt[0], rx_pt[1]); ctx.line_to(rot_pt[0], rot_pt[1])
-                        ctx.stroke()
-                        ctx.set_source_rgb(*EDITOR_HANDLE_FILL); ctx.arc(rot_pt[0], rot_pt[1], EDITOR_HANDLE_RADIUS, 0, 2*math.pi); ctx.fill()
-                        ctx.set_source_rgb(*EDITOR_ROTATION); ctx.set_line_width(EDITOR_LINE_WIDTH); ctx.arc(rot_pt[0], rot_pt[1], EDITOR_HANDLE_RADIUS, 0, 2*math.pi); ctx.stroke()
-                    # handles
-                    for name, pt in hs.items():
-                        if pt is None:
-                            continue
-                        if name == "center":
-                            ctx.set_source_rgb(*EDITOR_HANDLE_FILL); ctx.arc(pt[0], pt[1], EDITOR_HANDLE_RADIUS, 0, 2*math.pi); ctx.fill()
-                            ctx.set_source_rgb(*EDITOR_ACCENT); ctx.set_line_width(EDITOR_LINE_WIDTH); ctx.arc(pt[0], pt[1], EDITOR_HANDLE_RADIUS, 0, 2*math.pi); ctx.stroke()
-                        elif name in ("rx", "ry", "edge"):
-                            ctx.set_source_rgb(*EDITOR_HANDLE_FILL); ctx.rectangle(pt[0]-EDITOR_HANDLE_HALF, pt[1]-EDITOR_HANDLE_HALF, 2*EDITOR_HANDLE_HALF, 2*EDITOR_HANDLE_HALF); ctx.fill_preserve()
-                            ctx.set_source_rgb(*EDITOR_SELECTION); ctx.set_line_width(EDITOR_LINE_WIDTH); ctx.stroke()
-                        elif name == "rot":
-                            # drawn above as styled rotation handle; skip generic draw
-                            pass
-        except Exception:
-            pass
-
-    if active_stroke and len(active_stroke) >= 2:
-        ctx.set_source_rgb(*ACTIVE_COLOR)
-        ctx.set_line_width(EDITOR_LINE_WIDTH_BOLD)
-        ctx.new_path()
-        ctx.move_to(active_stroke[0][0], active_stroke[0][1])
-        for x, y in active_stroke[1:]:
-            ctx.line_to(x, y)
-        ctx.stroke()
-
-    # Bezier pen tool preview (interactive only).
-    if (not for_export) and bezier_pen and isinstance(bezier_pen, dict):
-        try:
-            anchors = list(bezier_pen.get("anchors") or [])
-            if anchors:
-                preview_pt = bezier_pen.get("preview_pt")
-                # Committed segments between placed anchors.
-                if len(anchors) >= 2:
-                    ctx.set_source_rgb(*EDITOR_SELECTION)
-                    ctx.set_line_width(EDITOR_LINE_WIDTH_BOLD)
-                    ctx.new_path()
-                    ctx.move_to(anchors[0]["pt"][0], anchors[0]["pt"][1])
-                    for i in range(len(anchors) - 1):
-                        a = anchors[i]
-                        b = anchors[i + 1]
-                        p0 = a["pt"]; p3 = b["pt"]
-                        c1 = a.get("h_out") or p0
-                        c2 = b.get("h_in") or p3
-                        ctx.curve_to(c1[0], c1[1], c2[0], c2[1], p3[0], p3[1])
-                    ctx.stroke()
-                # Rubber-band preview to cursor when waiting for next click.
-                if preview_pt is not None and not bezier_pen.get("mouse_down", False):
-                    last = anchors[-1]
-                    lp = last["pt"]
-                    ctx.set_source_rgba(*EDITOR_SELECTION, 0.7)
-                    ctx.set_line_width(EDITOR_LINE_WIDTH)
-                    try:
-                        ctx.set_dash([6, 4])
-                    except Exception:
-                        pass
-                    ctx.new_path()
-                    ctx.move_to(lp[0], lp[1])
-                    ctx.line_to(preview_pt[0], preview_pt[1])
-                    ctx.stroke()
-                    try:
-                        ctx.set_dash([])
-                    except Exception:
-                        pass
-                # Handle lines.
-                ctx.set_source_rgba(*EDITOR_ACCENT, 0.7)
-                ctx.set_line_width(EDITOR_LINE_WIDTH_SUBTLE)
-                for a in anchors:
-                    pt = a["pt"]
-                    for hk in ("h_in", "h_out"):
-                        hp = a.get(hk) or pt
-                        if abs(hp[0] - pt[0]) > 0.5 or abs(hp[1] - pt[1]) > 0.5:
-                            ctx.new_path()
-                            ctx.move_to(pt[0], pt[1])
-                            ctx.line_to(hp[0], hp[1])
-                            ctx.stroke()
-                # Handle points.
-                for a in anchors:
-                    pt = a["pt"]
-                    for hk in ("h_in", "h_out"):
-                        hp = a.get(hk) or pt
-                        if abs(hp[0] - pt[0]) > 0.5 or abs(hp[1] - pt[1]) > 0.5:
-                            ctx.set_source_rgb(*EDITOR_HANDLE_FILL)
-                            ctx.arc(hp[0], hp[1], EDITOR_HANDLE_HALF, 0, 2 * math.pi)
-                            ctx.fill()
-                            ctx.set_source_rgb(*EDITOR_ACCENT)
-                            ctx.set_line_width(EDITOR_LINE_WIDTH)
-                            ctx.arc(hp[0], hp[1], EDITOR_HANDLE_HALF, 0, 2 * math.pi)
-                            ctx.stroke()
-                # Anchor points (last active highlighted).
-                for idx, a in enumerate(anchors):
-                    pt = a["pt"]
-                    s = EDITOR_HANDLE_HALF + 1
-                    ctx.set_source_rgb(*EDITOR_HANDLE_FILL)
-                    ctx.rectangle(pt[0] - s, pt[1] - s, 2 * s, 2 * s)
-                    ctx.fill_preserve()
-                    ctx.set_source_rgb(*(EDITOR_ACCENT if idx == len(anchors) - 1 else EDITOR_SELECTION))
-                    ctx.set_line_width(EDITOR_LINE_WIDTH_BOLD if idx == len(anchors) - 1 else EDITOR_LINE_WIDTH)
-                    ctx.stroke()
-                # Preview anchor marker at cursor when waiting for next click.
-                if preview_pt is not None and not bezier_pen.get("mouse_down", False):
-                    px, py = preview_pt
-                    s = EDITOR_HANDLE_HALF
-                    ctx.set_source_rgba(*EDITOR_HANDLE_FILL, 0.8)
-                    ctx.rectangle(px - s, py - s, 2 * s, 2 * s)
-                    ctx.fill_preserve()
-                    ctx.set_source_rgba(*EDITOR_SELECTION, 0.8)
-                    ctx.set_line_width(EDITOR_LINE_WIDTH)
-                    ctx.stroke()
-                # Highlight first anchor when close-to-close is possible.
-                if len(anchors) >= 3 and preview_pt is not None and not bezier_pen.get("mouse_down", False):
-                    try:
-                        fp = anchors[0]["pt"]
-                        if math.hypot(preview_pt[0] - fp[0], preview_pt[1] - fp[1]) <= 10.0:
-                            ctx.set_source_rgba(*EDITOR_ACCENT, 0.25)
-                            ctx.arc(fp[0], fp[1], EDITOR_SNAP_RADIUS, 0, 2 * math.pi)
-                            ctx.fill()
-                            ctx.set_source_rgb(*EDITOR_ACCENT)
-                            ctx.set_line_width(EDITOR_LINE_WIDTH_BOLD)
-                            ctx.arc(fp[0], fp[1], EDITOR_SNAP_RADIUS, 0, 2 * math.pi)
-                            ctx.stroke()
-                    except Exception:
-                        pass
-        except Exception:
-            pass
+    _draw_gradient_edit_handles(ctx, edit_mode, gradient_edit_info)
 
     if snap_point is not None:
         x, y = snap_point
