@@ -268,7 +268,7 @@ class TestSharedControlPrimitives(unittest.TestCase):
         panel = self._read(self.PANEL)
         views_dir = os.path.join(_ROOT, "src", "views")
         extra = ""
-        for name in ("panel_modes.py", "panel_select.py", "panel_styles.py", "panel_effects.py"):
+        for name in ("panel_modes.py", "panel_select.py", "panel_select_parts.py", "panel_select_parts_b.py", "panel_select_parts_b2.py", "panel_select_parts_c.py", "panel_select_parts_c2.py", "panel_styles.py", "panel_effects.py"):
             p = os.path.join(views_dir, name)
             if os.path.exists(p):
                 extra += "\n" + self._read(p)
