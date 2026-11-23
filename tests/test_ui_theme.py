@@ -237,9 +237,12 @@ class TestDataDefaultsAndControls(unittest.TestCase):
         self.assertIn("CUT_HANDLE_RADIUS", controller)
 
     def test_editor_line_widths_used_in_canvas(self):
-        canvas_path = os.path.join(_ROOT, "src", "views", "canvas.py")
-        with open(canvas_path, encoding="utf-8") as handle:
-            source = handle.read()
+        source = ""
+        views_dir = os.path.join(_ROOT, "src", "views")
+        for fn in sorted(os.listdir(views_dir)):
+            if fn.startswith("canvas") and fn.endswith(".py"):
+                with open(os.path.join(views_dir, fn), encoding="utf-8") as handle:
+                    source += "\n" + handle.read()
         for name in ("EDITOR_LINE_WIDTH", "EDITOR_LINE_WIDTH_BOLD",
                      "EDITOR_LINE_WIDTH_SUBTLE"):
             self.assertIn(name, source)
@@ -310,12 +313,12 @@ class TestMenuBar(unittest.TestCase):
 
     def test_every_menu_item_has_a_controller_action(self):
         from views import menu as menu_view
-        with open(self.CONTROLLER, encoding="utf-8") as handle:
-            source = handle.read()
-        menu_actions = os.path.join(_ROOT, "src", "controllers", "menu_actions.py")
-        if os.path.exists(menu_actions):
-            with open(menu_actions, encoding="utf-8") as handle:
-                source += "\n" + handle.read()
+        ctrl_dir = os.path.join(_ROOT, "src", "controllers")
+        source = ""
+        for fn in os.listdir(ctrl_dir):
+            if fn.endswith(".py"):
+                with open(os.path.join(ctrl_dir, fn), encoding="utf-8") as handle:
+                    source += "\n" + handle.read()
         self.assertIn("def run_menu_action(", source)
         for key in (i[0] for m in menu_view.MENUS for i in m[2] if i):
             self.assertIn(f'"{key}"', source, f"no action for menu item {key}")

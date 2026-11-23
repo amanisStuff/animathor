@@ -14,7 +14,8 @@ from controllers.mouse_button_down_canvas import _handle_canvas_click
 
 
 
-def handle_mousebuttondown1(ctx, event):
+
+def _handle_pre_menu(ctx, event):
     # Library workspace is view/browse-only: no drawing input.
     if ctx.workspace == "library":
         ctx.drawing = False; ctx.current_points = []
@@ -107,6 +108,9 @@ def handle_mousebuttondown1(ctx, event):
         ctx.wave_formula_focus = False
         ctx.state["wave_formula_focus"] = False
     # Top menu bar interactions
+    return None
+
+def _handle_menus(ctx, event):
     menu_handled = False
     if event.pos[1] < ctx.TOP_BAR_H:
         ctx.shape_menu_key = None
@@ -289,6 +293,9 @@ def handle_mousebuttondown1(ctx, event):
     ctx.state["shape_menu_anchor"] = ctx.shape_menu_anchor
     if menu_handled:
         return 'continue'
+    return None
+
+def _handle_toolbar(ctx, event):
     if ctx.btn_undo.hit(event.pos):
         if ctx.do_undo():
             ctx.selected_strokes = {ctx.i for ctx.i in ctx.selected_strokes if 0 <= ctx.i < len(ctx.strokes)}
@@ -375,12 +382,19 @@ def handle_mousebuttondown1(ctx, event):
                 ctx.selected_strokes.clear(); ctx.selected_point = None; ctx.transform_drag = None
             # else: unhandled bottom-bar action for this view; ignore
 
-    elif event.pos[0] >= cfg.PANEL_X:
+    return None
+
+def handle_mousebuttondown1(ctx, event):
+    r = _handle_pre_menu(ctx, event)
+    if r == 'continue': return 'continue'
+    r = _handle_menus(ctx, event)
+    if r == 'continue': return 'continue'
+    r = _handle_toolbar(ctx, event)
+    if r == 'continue': return 'continue'
+    if event.pos[0] >= cfg.PANEL_X:
         _r = _handle_panel_click(ctx, event)
-        if _r == 'continue':
-            return 'continue'
+        if _r == 'continue': return 'continue'
     elif ctx.in_canvas(event.pos):
         _r = _handle_canvas_click(ctx, event)
-        if _r == 'continue':
-            return 'continue'
+        if _r == 'continue': return 'continue'
     return None
