@@ -10,14 +10,11 @@ from controllers.commit.draw_commit import commit_draw
 
 def _cleanup_mouseup(ctx):
     ctx.drag_last = None; ctx.selected_point = None; ctx.transform_drag = None; ctx.gradient_drag = None; ctx.pivot_drag = None
-    ctx.picker_drag_sv = False; ctx.picker_drag_hue = False; ctx.picker_drag_alpha = False; ctx.ref_opacity_drag = False; ctx.fill_stop_pos_drag = False
-    ctx.obj_opacity_drag = False
-    ctx.state["obj_opacity_drag"] = False
-    ctx.bucket_picker_drag = None
-    ctx.wave_slider_drag = None
+    # UI drag flags are owned by UiDragSession (single cleanup path).
+    from controllers.drag.ui_session import UiDragSession
+    UiDragSession().end(ctx, None)
     ctx.wave_custom_drag = None
     ctx.state["wave_custom_drag"] = None
-    ctx.state["picker_drag_sv"] = False; ctx.state["picker_drag_hue"] = False; ctx.state["picker_drag_alpha"] = False; ctx.state["fill_stop_pos_drag"] = False
     ctx.ref_drag = None
     ctx.max_points_per_curve = ctx.slider.value
 

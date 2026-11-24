@@ -1,9 +1,6 @@
 """Controller: mouse motion handler (extracted for SRP)."""
 import copy, math, pygame
 import config as cfg
-from models import *
-from views import *
-from controllers.coordinates import *
 
 def handle_mousemotion(ctx, event):
     for _k in ('drag_last','pending_transform_toggle','smart_snap_guides','start_strokes','pivot_pos','guides','wave_custom_drag'):

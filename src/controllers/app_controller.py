@@ -6,7 +6,22 @@ import copy
 import pygame
 
 import config as cfg
-from config import *
+from config import (
+    ACCENT, ACTIVE_COLOR, BG_COLOR, BOTTOM_BAR_H, BOTTOM_TOOLS, BUCKET_SWATCHES, BUTTON_BG, BUTTON_BORDER,
+    BUTTON_HOVER, DRAW_SHAPES, FILL_SWATCHES, LEFT_BAR_W, MUTED_COLOR, PANEL_BG, PANEL_BORDER, PANEL_W,
+    STROKE_SWATCHES, TEXT_COLOR, TOOLBAR_BG, TOP_BAR_H, TOOL_ACTIVE, TRACE_ALGORITHMS, TRIANGLE_VARIANTS, SURFACE,
+    SURFACE_SUBTLE, SURFACE_ALT, SURFACE_SUNKEN, SURFACE_DISABLED, SHADOW_COLOR, BORDER_SUBTLE, BORDER_STRONG, BORDER_DISABLED,
+    TEXT_PRIMARY, TEXT_SECONDARY, TEXT_DISABLED, TEXT_ON_ACCENT, TEXT_DANGER, TEXT_WARNING, HOVER_BG, ACTIVE_BG,
+    PRIMARY, PRIMARY_HOVER, PRIMARY_SOFT, DANGER, DISABLED, PLOT_BG, PLOT_BG_DISABLED, PLOT_GRID,
+    PLOT_LINE_DISABLED, TOOLTIP_BG, TOOLTIP_BORDER, TOOLTIP_TEXT, CANVAS_BACKDROP, SELECTION_FILL, SELECTION_BORDER, CUT_COLOR,
+    CUT_HANDLE_RADIUS, NO_SWATCH_COLOR, CUSTOM_CURVE_COLOR, HANDLE_OUTLINE, SAMPLE_PLACEHOLDER, EDITOR_SELECTION_RGB, EDITOR_ACCENT_RGB, EDITOR_ROTATION_RGB,
+    EDITOR_HANDLE_FILL_RGB, EDITOR_SELECTION, EDITOR_ACCENT, EDITOR_ROTATION, EDITOR_HANDLE_FILL, EDITOR_GUIDE, EDITOR_TEMPLATE, EDITOR_HANDLE_RADIUS,
+    EDITOR_HANDLE_HALF, EDITOR_SKEW_RADIUS, EDITOR_PIVOT_RADIUS, EDITOR_PIVOT_INNER_RADIUS, EDITOR_SNAP_RADIUS, EDITOR_SNAP_INNER, EDITOR_LINE_WIDTH, EDITOR_LINE_WIDTH_BOLD,
+    EDITOR_LINE_WIDTH_SUBTLE, DEFAULT_STROKE_RGBA, DEFAULT_FILL_RGBA, cairo_rgb, RADIUS_XS, RADIUS_SM, RADIUS_MD, RADIUS_LG,
+    RADIUS_XL, SPACE_XS, SPACE_SM, SPACE_MD, SPACE_LG, SPACE_XL, BORDER_WIDTH, BORDER_WIDTH_ACTIVE,
+    SHADOW_OFFSET, CONTROL_H, ICON_SIZE, MENU_WIDTH, MENU_SEPARATOR_H, PICKER_HANDLE_RADIUS, SLIDER_KNOB_RADIUS, FONT_SIZE_BODY,
+    FONT_SIZE_SMALL, FONT_SIZE_TITLE, FONT_SIZE_TOOLTIP,
+)  # noqa: F401
 
 import models as _dep
 _PLUMBING = {'_m', '_n', '_mod', '_name', 'cfg', 'math', 'copy', 'pygame', 'cairo', '_models', '_views', '_m_geometry', '_m_strokes', '_m_waves', '_v_canvas', 'geometry', 'strokes', 'waves', 'interaction', 'canvas', 'panel', 'toolbar', 'widgets', 'dialogs', 'app_controller', 'coordinates'}
@@ -55,20 +70,40 @@ def main():
         cfg.CANVAS_W = max(200, cfg.WIDTH - LEFT_BAR_W - panel_w)
         cfg.PANEL_X = LEFT_BAR_W + cfg.CANVAS_W
         cairo_surface = make_cairo_surface(cfg.CANVAS_W, cfg.canvas_viewport_height())
+        # Phase 1 (semantic split plan): typed viewport state is the source of
+        # truth for this layout group; cfg module attrs remain live mirrors for
+        # legacy readers until the full typed-state migration completes.
+        app_state.viewport.width = cfg.WIDTH
+        app_state.viewport.height = cfg.HEIGHT
+        app_state.viewport.canvas_x = cfg.CANVAS_X
+        app_state.viewport.canvas_w = cfg.CANVAS_W
+        app_state.viewport.panel_x = cfg.PANEL_X
+        app_state.viewport.panel_collapsed = panel_collapsed
 
     strokes = []
     undo_stack = []
     redo_stack = []
-    MAX_UNDO = 100
+    max_undo = 100
+
+    def _sync_history_locals():
+        """Mirror authoritative typed history state into legacy frame locals."""
+        nonlocal undo_stack, redo_stack, strokes, max_undo
+        undo_stack = app_state.document.undo_stack
+        redo_stack = app_state.document.redo_stack
+        strokes = app_state.document.strokes
+        max_undo = app_state.document.max_undo
 
     def push_undo():
-        _history.push_undo(undo_stack, redo_stack, strokes, MAX_UNDO)
+        _sync_history_locals()
+        _history.push_undo(app_state.document.undo_stack, app_state.document.redo_stack, app_state.document.strokes, app_state.document.max_undo)
 
     def do_undo():
-        return _history.do_undo(undo_stack, redo_stack, strokes)
+        _sync_history_locals()
+        return _history.do_undo(app_state.document.undo_stack, app_state.document.redo_stack, app_state.document.strokes)
 
     def do_redo():
-        return _history.do_redo(undo_stack, redo_stack, strokes)
+        _sync_history_locals()
+        return _history.do_redo(app_state.document.undo_stack, app_state.document.redo_stack, app_state.document.strokes)
 
     current_points = []
     drawing = False
@@ -142,7 +177,204 @@ def main():
     cut_gap_slider.track.width = 0  # shown only while the cutter/gap control is active
 
     # lexical bindings for nested nonlocal
-    _shape_state_counter = _symbol_counter = active_artboard = artboards = bezier_pen = bucket_fill_color = bucket_picker_h = bucket_picker_s = bucket_picker_v = cairo_surface = clipboard_strokes = current_points = curve_cut_mode = cut_points = cutting = document_path = drag_last = draw_tool = drawing = export_dialog_format = export_dialog_open = eyedropper_pick = help_open = panel_collapsed = redrawing_curve = running = selected_curve = selected_curves = selected_point = selected_strokes = selection_submode = shape_states = snap_enabled = strokes = symbols = text_entry = text_family = text_size = tool_mode = transform_drag = workspace = xform_field_buffer = xform_field_focus = None
+    _shape_state_counter = 0
+    _symbol_counter = 0
+    active_artboard = -1
+    artboards = []
+    bezier_pen = None
+    bucket_fill_color = (0.45, 0.72, 1.0)
+    bucket_picker_h = 0.0
+    bucket_picker_s = 0.0
+    bucket_picker_v = 0.1
+    clipboard_strokes = []
+    current_points = []
+    curve_cut_mode = False
+    cut_points = []
+    cutting = False
+    document_path = None
+    drag_last = None
+    draw_tool = "pen"
+    drawing = False
+    export_dialog_format = "png"
+    export_dialog_open = False
+    eyedropper_pick = False
+    help_open = False
+    panel_collapsed = False
+    redrawing_curve = None
+    running = True
+    selected_curve = None
+    selected_curves = set()
+    selected_point = None
+    selected_strokes = set()
+    selection_submode = "transform"
+    shape_states = {}
+    snap_enabled = True
+    strokes = []
+    symbols = {}
+    text_entry = None
+    text_family = "Sans"
+    text_size = 36.0
+    tool_mode = "draw"
+    transform_drag = None
+    workspace = "draw"
+    xform_field_buffer = ""
+    xform_field_focus = None
+
+    # UI cache / state locals injected by _frame.init_ui_caches() (real locals required).
+    color_target = "stroke"
+    picker_h = None
+    picker_s = None
+    picker_v = None
+    picker_drag_sv = False
+    picker_drag_hue = False
+    picker_drag_alpha = False
+    ref_opacity_drag = False
+    picker_rects = {}
+    fill_type_prev_rect_cache = pygame.Rect(0, 0, 0, 0)
+    fill_type_next_rect_cache = pygame.Rect(0, 0, 0, 0)
+    fill_stop_rects_cache = {}
+    fill_stop_add_rect_cache = pygame.Rect(0, 0, 0, 0)
+    fill_stop_remove_rect_cache = pygame.Rect(0, 0, 0, 0)
+    fill_stop_pos_rect_cache = pygame.Rect(0, 0, 0, 0)
+    pattern_type_rect_cache = pygame.Rect(0, 0, 0, 0)
+    pattern_size_minus_rect_cache = pygame.Rect(0, 0, 0, 0)
+    pattern_size_plus_rect_cache = pygame.Rect(0, 0, 0, 0)
+    fill_gradient_stop = 0
+    fill_stop_pos_drag = False
+    trace_algo_prev_rect_cache = pygame.Rect(0, 0, 0, 0)
+    trace_algo_next_rect_cache = pygame.Rect(0, 0, 0, 0)
+    draw_tool_prev_rect_cache = pygame.Rect(0, 0, 0, 0)
+    draw_tool_next_rect_cache = pygame.Rect(0, 0, 0, 0)
+    draw_shape_rects_cache = {}
+    panel_toggle_rect_cache = pygame.Rect(0, 0, 0, 0)
+    shape_menu_key = None
+    shape_menu_anchor = None
+    shape_menu_rect = None
+    shape_menu_item_rects = {}
+    draw_tool_pen_rect_cache = pygame.Rect(0, 0, 0, 0)
+    draw_tool_eraser_rect_cache = pygame.Rect(0, 0, 0, 0)
+    draw_tool_bucket_rect_cache = pygame.Rect(0, 0, 0, 0)
+    draw_tool_cutter_rect_cache = pygame.Rect(0, 0, 0, 0)
+    snap_toggle_rect_cache = pygame.Rect(0, 0, 0, 0)
+    nodes_mode_prev_rect_cache = pygame.Rect(0, 0, 0, 0)
+    nodes_mode_next_rect_cache = pygame.Rect(0, 0, 0, 0)
+    elev_front_rect_cache = pygame.Rect(0, 0, 0, 0)
+    elev_forward_rect_cache = pygame.Rect(0, 0, 0, 0)
+    elev_backward_rect_cache = pygame.Rect(0, 0, 0, 0)
+    elev_back_rect_cache = pygame.Rect(0, 0, 0, 0)
+    bool_union_rect_cache = pygame.Rect(0, 0, 0, 0)
+    bool_intersect_rect_cache = pygame.Rect(0, 0, 0, 0)
+    bool_subtract_rect_cache = pygame.Rect(0, 0, 0, 0)
+    bool_exclude_rect_cache = pygame.Rect(0, 0, 0, 0)
+    distribute_h_rect_cache = pygame.Rect(0, 0, 0, 0)
+    distribute_v_rect_cache = pygame.Rect(0, 0, 0, 0)
+    export_dialog_rects = {}
+    path_close_rect_cache = pygame.Rect(0, 0, 0, 0)
+    path_reverse_rect_cache = pygame.Rect(0, 0, 0, 0)
+    path_add_rect_cache = pygame.Rect(0, 0, 0, 0)
+    path_delete_rect_cache = pygame.Rect(0, 0, 0, 0)
+    path_smooth_rect_cache = pygame.Rect(0, 0, 0, 0)
+    path_corner_rect_cache = pygame.Rect(0, 0, 0, 0)
+    path_expand_rect_cache = pygame.Rect(0, 0, 0, 0)
+    obj_opacity_rect_cache = pygame.Rect(0, 0, 0, 0)
+    shadow_toggle_rect_cache = pygame.Rect(0, 0, 0, 0)
+    shadow_blur_minus_rect_cache = pygame.Rect(0, 0, 0, 0)
+    shadow_blur_plus_rect_cache = pygame.Rect(0, 0, 0, 0)
+    cap_prev_rect_cache = pygame.Rect(0, 0, 0, 0)
+    cap_next_rect_cache = pygame.Rect(0, 0, 0, 0)
+    join_prev_rect_cache = pygame.Rect(0, 0, 0, 0)
+    join_next_rect_cache = pygame.Rect(0, 0, 0, 0)
+    dash_prev_rect_cache = pygame.Rect(0, 0, 0, 0)
+    dash_next_rect_cache = pygame.Rect(0, 0, 0, 0)
+    marker_start_rect_cache = pygame.Rect(0, 0, 0, 0)
+    marker_end_rect_cache = pygame.Rect(0, 0, 0, 0)
+    marker_dropdown = None
+    marker_dropdown_rect = None
+    marker_dropdown_item_rects = {}
+    obj_opacity_drag = False
+    xform_x_rect_cache = pygame.Rect(0, 0, 0, 0)
+    xform_y_rect_cache = pygame.Rect(0, 0, 0, 0)
+    xform_w_rect_cache = pygame.Rect(0, 0, 0, 0)
+    xform_h_rect_cache = pygame.Rect(0, 0, 0, 0)
+    xform_r_rect_cache = pygame.Rect(0, 0, 0, 0)
+    xform_xm_rect_cache = pygame.Rect(0, 0, 0, 0)
+    xform_xp_rect_cache = pygame.Rect(0, 0, 0, 0)
+    xform_ym_rect_cache = pygame.Rect(0, 0, 0, 0)
+    xform_yp_rect_cache = pygame.Rect(0, 0, 0, 0)
+    xform_wm_rect_cache = pygame.Rect(0, 0, 0, 0)
+    xform_wp_rect_cache = pygame.Rect(0, 0, 0, 0)
+    xform_hm_rect_cache = pygame.Rect(0, 0, 0, 0)
+    xform_hp_rect_cache = pygame.Rect(0, 0, 0, 0)
+    xform_rm_rect_cache = pygame.Rect(0, 0, 0, 0)
+    xform_rp_rect_cache = pygame.Rect(0, 0, 0, 0)
+    text_edit_rect_cache = pygame.Rect(0, 0, 0, 0)
+    text_font_rect_cache = pygame.Rect(0, 0, 0, 0)
+    text_size_minus_rect_cache = pygame.Rect(0, 0, 0, 0)
+    text_size_plus_rect_cache = pygame.Rect(0, 0, 0, 0)
+    text_on_path_rect_cache = pygame.Rect(0, 0, 0, 0)
+    text_off_path_rect_cache = pygame.Rect(0, 0, 0, 0)
+    mirror_h_rect_cache = pygame.Rect(0, 0, 0, 0)
+    mirror_v_rect_cache = pygame.Rect(0, 0, 0, 0)
+    align_left_rect_cache = pygame.Rect(0, 0, 0, 0)
+    align_hcenter_rect_cache = pygame.Rect(0, 0, 0, 0)
+    align_right_rect_cache = pygame.Rect(0, 0, 0, 0)
+    align_top_rect_cache = pygame.Rect(0, 0, 0, 0)
+    align_vmiddle_rect_cache = pygame.Rect(0, 0, 0, 0)
+    align_bottom_rect_cache = pygame.Rect(0, 0, 0, 0)
+    curve_hide_rect_cache = pygame.Rect(0, 0, 0, 0)
+    curve_redraw_rect_cache = pygame.Rect(0, 0, 0, 0)
+    curve_cut_rect_cache = pygame.Rect(0, 0, 0, 0)
+    curve_join_rect_cache = pygame.Rect(0, 0, 0, 0)
+    eyedropper_rect_cache = pygame.Rect(0, 0, 0, 0)
+    wave_toggle_rect_cache = pygame.Rect(0, 0, 0, 0)
+    wave_add_rect_cache = pygame.Rect(0, 0, 0, 0)
+    displacement_add_rect_cache = pygame.Rect(0, 0, 0, 0)
+    repeat_add_rect_cache = pygame.Rect(0, 0, 0, 0)
+    thickness_add_rect_cache = pygame.Rect(0, 0, 0, 0)
+    wave_remove_rect_cache = pygame.Rect(0, 0, 0, 0)
+    wave_bake_rect_cache = pygame.Rect(0, 0, 0, 0)
+    wave_shape_prev_rect_cache = pygame.Rect(0, 0, 0, 0)
+    wave_shape_next_rect_cache = pygame.Rect(0, 0, 0, 0)
+    displacement_profile_rects_cache = {}
+    width_profile_prev_rect_cache = pygame.Rect(0, 0, 0, 0)
+    width_profile_next_rect_cache = pygame.Rect(0, 0, 0, 0)
+    displacement_affect_rects_cache = {}
+    wave_formula_rect_cache = pygame.Rect(0, 0, 0, 0)
+    wave_formula_focus = False
+    wave_custom_draw = False
+    repeat_pick_mode = False
+    repeat_pick_target = None
+    wave_custom_box_rect_cache = pygame.Rect(0, 0, 0, 0)
+    wave_smooth_rect_cache = pygame.Rect(0, 0, 0, 0)
+    wave_clear_rect_cache = pygame.Rect(0, 0, 0, 0)
+    wave_done_rect_cache = pygame.Rect(0, 0, 0, 0)
+    repeat_pick_curve_rect_cache = pygame.Rect(0, 0, 0, 0)
+    wave_reverse_rect_cache = pygame.Rect(0, 0, 0, 0)
+    wave_clamp_rect_cache = pygame.Rect(0, 0, 0, 0)
+    wave_custom_drag = None
+    wave_active_index = 0
+    wave_row_rects_cache = {}
+    wave_custom_finished = False
+    wave_slider_rects_cache = {}
+    wave_slider_drag = None
+    panel_scroll = 0
+    export_scale = 1.0
+    export_dpi = 300
+    ref_load_rect_cache = pygame.Rect(0, 0, 0, 0)
+    ref_vis_rect_cache = pygame.Rect(0, 0, 0, 0)
+    ref_clear_rect_cache = pygame.Rect(0, 0, 0, 0)
+    ref_opacity_rect_cache = pygame.Rect(0, 0, 0, 0)
+    bucket_picker_drag = None
+    bucket_sv_rect_cache = pygame.Rect(0, 0, 0, 0)
+    bucket_hue_rect_cache = pygame.Rect(0, 0, 0, 0)
+    bucket_swatch_rects_cache = {}
+    reference_image = None
+    reference_error = None
+    ref_drag = None
+    space_panning = False
+    pan_drag = None
+    hover_snap = None
+    hover_snap_kind = "connect"
     _frame.init_ui_caches()
     _symbol_counter = 0
     shape_states = {}  # {state_id: {"name": str, "strokes": [stroke_dict,...], "origin": [x, y]}}
@@ -169,90 +401,54 @@ def main():
     def _snap_move_delta(sel_indices, dx, dy):
         return _snap.snap_move_delta(strokes, sel_indices, dx, dy, snap_radius(), stroke_bbox, nearest_snap_point)
 
-    def _bucket_ctx():
-        import types as _types
-        ctx = _types.SimpleNamespace()
-        ctx.bucket_fill_color = bucket_fill_color
-        ctx.bucket_picker_h = bucket_picker_h
-        ctx.bucket_picker_s = bucket_picker_s
-        ctx.bucket_picker_v = bucket_picker_v
-        ctx.clamp = clamp
-        ctx.hsv_to_rgb = hsv_to_rgb
-        ctx.rgb_to_hsv = rgb_to_hsv
-        ctx.state = state
-        return ctx
-
-    def _bucket_sync(ctx):
-        nonlocal bucket_fill_color, bucket_picker_h, bucket_picker_s, bucket_picker_v
-        bucket_fill_color = ctx.bucket_fill_color
-        bucket_picker_h = ctx.bucket_picker_h
-        bucket_picker_s = ctx.bucket_picker_s
-        bucket_picker_v = ctx.bucket_picker_v
-
     def bucket_pick(rect, pos, kind):
-        ctx = _bucket_ctx(); _bucket.pick(ctx, rect, pos, kind); _bucket_sync(ctx)
+        # Typed ToolState is passed directly; no SimpleNamespace ctx bag.
+        _bucket.pick(app_state.tools, rect, pos, kind, state, clamp, hsv_to_rgb)
 
     def set_bucket_color(col):
-        ctx = _bucket_ctx(); _bucket.set_color(ctx, col); _bucket_sync(ctx)
+        _bucket.set_color(app_state.tools, col, state, rgb_to_hsv)
 
     def commit_text_entry():
+        # Typed substates are passed directly; no SimpleNamespace ctx bag.
         nonlocal text_entry, selected_strokes, selected_point, selected_curve, selected_curves
-        import types as _types
-        ctx = _types.SimpleNamespace()
-        ctx.text_entry = text_entry
-        ctx.strokes = strokes
-        ctx.selected_strokes = selected_strokes
-        ctx.selected_point = selected_point
-        ctx.selected_curve = selected_curve
-        ctx.selected_curves = selected_curves
-        ctx.push_undo = push_undo
-        ctx.hsv_to_rgb = hsv_to_rgb
-        ctx.picker_h = picker_h
-        ctx.picker_s = picker_s
-        ctx.picker_v = picker_v
-        ctx.new_text_stroke = new_text_stroke
-        r = _text_entry.commit(ctx)
-        text_entry = ctx.text_entry
-        selected_strokes = ctx.selected_strokes
-        selected_point = ctx.selected_point
-        selected_curve = ctx.selected_curve
-        selected_curves = ctx.selected_curves
+        r = _text_entry.commit(
+            app_state.selection, app_state.document, app_state.ui,
+            push_undo, hsv_to_rgb, new_text_stroke,
+        )
+        # Mirror typed results into legacy locals for same-frame readers.
+        text_entry = app_state.ui.text_entry
+        selected_strokes = app_state.selection.selected_strokes
+        selected_point = app_state.selection.selected_point
+        selected_curve = app_state.selection.selected_curve
+        selected_curves = app_state.selection.selected_curves
         return r
 
-    def _xform_ctx():
-        import types as _types
-        ctx = _types.SimpleNamespace()
-        ctx.strokes = strokes
-        ctx.selected_strokes = selected_strokes
-        ctx.push_undo = push_undo
-        ctx.combined_bbox = combined_bbox
-        ctx.translate_stroke = translate_stroke
-        ctx.transform_stroke = transform_stroke
-        ctx.rotate_stroke_around = rotate_stroke_around
-        ctx.xform_field_focus = xform_field_focus
-        ctx.xform_field_buffer = xform_field_buffer
-        ctx.state = state
-        return ctx
-
-    def _xform_sync(ctx):
-        nonlocal xform_field_focus, xform_field_buffer
-        xform_field_focus = ctx.xform_field_focus
-        xform_field_buffer = ctx.xform_field_buffer
-
     def _xform_sel_bbox():
-        ctx = _xform_ctx(); return _xform.sel_bbox(ctx)
+        return _xform.sel_bbox(app_state.selection, app_state.document, combined_bbox)
 
     def _xform_current_value(field):
-        ctx = _xform_ctx(); return _xform.current_value(ctx, field)
+        return _xform.current_value(app_state.selection, app_state.document, field, combined_bbox)
+
+    def _xform_services():
+        return (combined_bbox, push_undo, translate_stroke, transform_stroke, rotate_stroke_around)
 
     def _apply_xform_field(field, target, relative=False):
-        ctx = _xform_ctx(); r = _xform.apply_field(ctx, field, target, relative=relative); _xform_sync(ctx); return r
+        return _xform.apply_field(app_state.selection, app_state.document, field, target,
+                                  *_xform_services(), relative=relative)
 
     def _commit_xform_field():
-        ctx = _xform_ctx(); r = _xform.commit_field(ctx); _xform_sync(ctx); return r
+        nonlocal xform_field_focus, xform_field_buffer
+        result = _xform.commit_field(app_state.ui, state, app_state.selection,
+                                     app_state.document, *_xform_services())
+        xform_field_focus = app_state.ui.xform_field_focus
+        xform_field_buffer = app_state.ui.xform_field_buffer
+        return result
 
     def _cancel_xform_field():
-        ctx = _xform_ctx(); _xform.cancel_field(ctx); _xform_sync(ctx)
+        nonlocal xform_field_focus, xform_field_buffer
+        _xform.cancel_field(app_state.ui, state)
+        xform_field_focus = app_state.ui.xform_field_focus
+        xform_field_buffer = app_state.ui.xform_field_buffer
 
     # --- Bezier pen tool (click-to-place anchors, drag handles) ---
     _bezier_last_click = {"time": 0, "pos": (0.0, 0.0)}
@@ -260,12 +456,13 @@ def main():
     def _bp_ctx():
         import types as _types
         ctx = _types.SimpleNamespace()
-        ctx.bezier_pen = bezier_pen
-        ctx.strokes = strokes
-        ctx.selected_strokes = selected_strokes
-        ctx.selected_point = selected_point
-        ctx.selected_curve = selected_curve
-        ctx.selected_curves = selected_curves
+        ctx.bezier_pen = app_state.tools.bezier_pen
+        ctx.strokes = app_state.document.strokes
+        ctx.selected_strokes = app_state.selection.selected_strokes
+        ctx.selected_point = app_state.selection.selected_point
+    # --- Bezier pen tool (click-to-place anchors, drag handles) ---
+        ctx.selected_curve = app_state.selection.selected_curve
+        ctx.selected_curves = app_state.selection.selected_curves
         ctx.push_undo = push_undo
         ctx.new_stroke = new_stroke
         ctx.merge_connected_strokes = merge_connected_strokes
@@ -280,6 +477,12 @@ def main():
         selected_point = ctx.selected_point
         selected_curve = ctx.selected_curve
         selected_curves = ctx.selected_curves
+        app_state.tools.bezier_pen = bezier_pen
+        app_state.document.strokes = strokes
+        app_state.selection.selected_strokes = selected_strokes
+        app_state.selection.selected_point = selected_point
+        app_state.selection.selected_curve = selected_curve
+        app_state.selection.selected_curves = selected_curves
 
     def _bezier_pen_cancel():
         ctx = _bp_ctx(); _bp.cancel(ctx); _bp_sync(ctx)
@@ -311,11 +514,11 @@ def main():
     except Exception:
         pass
     while running:
-        # AppState-primary slice: refresh locals from AppState before frame processing.
+        # Single frame-start capture point: main()'s direct local mutations
+        # (selection sanitization, pivot reset, hover snap) are mirrored into
+        # typed AppState, which is authoritative when frame helpers dispatch.
         try:
-            import sys as _sys, types as _t
-            from controllers.ctx_sync import sync_to_frame_locals as _sync_locals
-            _sync_locals(_sys._getframe(), _t.SimpleNamespace(**app_state.to_locals_dict()), app_state._SYNC_FIELDS)
+            app_state.sync_from_locals(locals())
         except Exception:
             pass
         mouse_pos = pygame.mouse.get_pos()
@@ -551,19 +754,30 @@ def main():
 
         def run_menu_action(key):
             import types
-            nonlocal _shape_state_counter, _symbol_counter, active_artboard, artboards, clipboard_strokes, current_points, curve_cut_mode, cut_points, cutting, document_path, drag_last, draw_tool, drawing, export_dialog_format, export_dialog_open, eyedropper_pick, help_open, panel_collapsed, redrawing_curve, running, selected_curve, selected_curves, selected_point, selected_strokes, selection_submode, shape_states, snap_enabled, symbols, text_entry, text_family, text_size, tool_mode, transform_drag, workspace
+            # Phase 1, Task 2: typed AppState is the source for command inputs.
+            doc, sel, tools, drag, ui = (
+                app_state.document, app_state.selection, app_state.tools,
+                app_state.drag, app_state.ui,
+            )
             s = types.SimpleNamespace(
-                _shape_state_counter=_shape_state_counter, _symbol_counter=_symbol_counter,
-                active_artboard=active_artboard, artboards=artboards, clipboard_strokes=clipboard_strokes,
-                current_points=current_points, curve_cut_mode=curve_cut_mode, cut_points=cut_points,
-                cutting=cutting, document_path=document_path, drag_last=drag_last, draw_tool=draw_tool,
-                drawing=drawing, export_dialog_format=export_dialog_format, export_dialog_open=export_dialog_open,
-                eyedropper_pick=eyedropper_pick, help_open=help_open, panel_collapsed=panel_collapsed,
-                redrawing_curve=redrawing_curve, running=running, selected_curve=selected_curve,
-                selected_curves=selected_curves, selected_point=selected_point, selected_strokes=selected_strokes,
-                selection_submode=selection_submode, shape_states=shape_states, snap_enabled=snap_enabled,
-                symbols=symbols, text_entry=text_entry, text_family=text_family, text_size=text_size,
-                tool_mode=tool_mode, transform_drag=transform_drag, workspace=workspace,
+                _shape_state_counter=doc._shape_state_counter, _symbol_counter=doc._symbol_counter,
+                active_artboard=doc.active_artboard, artboards=doc.artboards,
+                clipboard_strokes=doc.clipboard_strokes,
+                current_points=drag.current_points, curve_cut_mode=tools.curve_cut_mode,
+                cut_points=drag.cut_points, cutting=drag.cutting,
+                document_path=doc.document_path, drag_last=drag.drag_last,
+                draw_tool=tools.draw_tool, drawing=drag.drawing,
+                export_dialog_format=ui.export_dialog_format, export_dialog_open=ui.export_dialog_open,
+                eyedropper_pick=tools.eyedropper_pick, help_open=ui.help_open,
+                panel_collapsed=app_state.viewport.panel_collapsed,
+                redrawing_curve=drag.redrawing_curve, running=ui.running,
+                selected_curve=sel.selected_curve, selected_curves=sel.selected_curves,
+                selected_point=sel.selected_point, selected_strokes=sel.selected_strokes,
+                selection_submode=sel.selection_submode, shape_states=doc.shape_states,
+                snap_enabled=tools.snap_enabled, symbols=doc.symbols,
+                text_entry=ui.text_entry, text_family=tools.text_family, text_size=tools.text_size,
+                tool_mode=tools.tool_mode, transform_drag=drag.transform_drag,
+                workspace=ui.workspace,
                 _bezier_pen_cancel=_bezier_pen_cancel, _bezier_pen_commit_or_cancel=_bezier_pen_commit_or_cancel,
                 _capture_shape_state=_capture_shape_state, _copy_stroke=_copy_stroke,
                 _delete_shape_state=_delete_shape_state, _insert_shape_state=_insert_shape_state,
@@ -572,16 +786,20 @@ def main():
                 load_document_with_meta=load_document_with_meta, new_group_id=new_group_id,
                 pick_import_svg_path=pick_import_svg_path, pick_open_document_path=pick_open_document_path,
                 pick_save_document_path=pick_save_document_path, push_undo=push_undo, relayout=relayout,
-                save_document=save_document, state=state, strokes=strokes, translate_stroke=translate_stroke,
+                save_document=save_document, state=state, strokes=doc.strokes, translate_stroke=translate_stroke,
             )
-            result = _menu_dispatch.run_menu_action(key, s)
-            # Auto-sync menu action state back to frame locals (no hardcoded field list).
+            result = _menu_dispatch.run_menu_action(key, s, state_fields=app_state._SYNC_FIELDS)
+            # Typed state is authoritative: the menu ctx was seeded from it and
+            # menu_dispatch_controller syncs command results into s; mirror once.
+            app_state.sync_from_locals(s.__dict__)
+            # Auto-sync typed state fields back to frame locals (no callback
+            # blacklist needed: only authoritative typed field names are copied).
             import sys as _sys2
-            _menu_cb = set(_menu_dispatch._MENU_CALLBACK_FIELDS)
+            _state_fields = set(app_state._SYNC_FIELDS)
             _fl = _sys2._getframe().f_locals
             _chg = False
             for _k, _v in s.__dict__.items():
-                if _k in _menu_cb:
+                if _k not in _state_fields:
                     continue
                 if _fl.get(_k) is not _v:
                     _fl[_k] = _v
@@ -594,39 +812,10 @@ def main():
                     pass
             return result
 
-        # Event loop (extracted)
-        try:
-            app_state.sync_from_locals(locals())
-        except Exception:
-            pass
+        # Event loop (extracted). process_event_frame() mirrors changed ctx state
+        # into AppState, so no extra pre-event locals->typed roundtrip is needed.
         _frame.process_event_frame()
-        try:
-            app_state.sync_from_locals(locals())
-            from controllers.ctx_sync import sync_to_frame_locals as _sync_locals
-            import sys as _sys
-            import types as _t
-            _sync_locals(_sys._getframe(), _t.SimpleNamespace(**app_state.to_locals_dict()), app_state._SYNC_FIELDS)
-        except Exception:
-            pass
-        # Render frame (extracted)
-        import types as _types
-        _rf_ctx = _types.SimpleNamespace(**locals())
-        from controllers.render_frame import render_frame as _rf
-        _rf(_rf_ctx)
-        # Auto-sync all frame locals back (eliminates hardcoded render sync list).
-        _frame_loc = _sys._getframe().f_locals
-        _changed = False
-        for _k, _v in _rf_ctx.__dict__.items():
-            if _frame_loc.get(_k) is not _v:
-                _frame_loc[_k] = _v
-                _changed = True
-        if _changed:
-            try:
-                import ctypes as _ct
-                _ct.pythonapi.PyFrame_LocalsToFast(_ct.py_object(_sys._getframe()), _ct.c_int(0))
-            except Exception:
-                pass
-        try:
-            app_state.sync_from_locals(locals())
-        except Exception:
-            pass
+        # Render frame via the frame helper, which performs render-ctx sync back
+        # to frame locals AND mirrors the result into AppState (no separate
+        # end-of-frame locals->typed bridge call).
+        _frame.render_frame_frame()

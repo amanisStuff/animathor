@@ -1,4 +1,5 @@
-"""Color/fill panel actions - stroke/fill target and picker domain (semantic)."""
+"""Color / fill picker panel actions (part B)."""
+from controllers.panel.rects import hit_rect  # noqa: E402
 import pygame
 
 from models.geometry import (
@@ -41,7 +42,7 @@ def handle_bc_part1(ctx, event):
             fc = ctx._c_primary_obj.get("fill_color", None) or (1.0, 1.0, 1.0)
         ctx.picker_h, ctx.picker_s, ctx.picker_v = ctx.rgb_to_hsv(*fc)
         ctx.state["picker_h"] = ctx.picker_h; ctx.state["picker_s"] = ctx.picker_s; ctx.state["picker_v"] = ctx.picker_v
-    elif ctx._c_primary_obj is not None and ctx.state.get("nofill_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos) and ctx.color_target == "fill" and ctx._c_comp_style_target is None:
+    elif ctx._c_primary_obj is not None and hit_rect(ctx, "nofill_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos) and ctx.color_target == "fill" and ctx._c_comp_style_target is None:
         for ctx.si in ctx._c_sel_list:
             if 0 <= ctx.si < len(ctx.strokes):
                 ctx.strokes[ctx.si]["fill_color"] = None
@@ -50,7 +51,7 @@ def handle_bc_part1(ctx, event):
         ctx.state.get(ctx.k, pygame.Rect(0, 0, 0, 0)).collidepoint(event.pos)
         for ctx.k in ("fill_type_prev_rect", "fill_type_next_rect")
     ):
-        _fdir = -1 if ctx.state.get("fill_type_prev_rect", pygame.Rect(0, 0, 0, 0)).collidepoint(event.pos) else 1
+        _fdir = -1 if hit_rect(ctx, "fill_type_prev_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos) else 1
         _fmodes = ["solid", "linear", "radial", "conic", "spiral", "diamond", "square", "mesh", "pattern"]
         _pfg_cur = ctx.get_fill_gradient(ctx._c_primary_obj) if 'get_fill_gradient' in ctx.globals() else (ctx._c_primary_obj.get("fill_gradient") if isinstance(ctx._c_primary_obj.get("fill_gradient"), dict) else None)
         _ppat_cur = get_fill_pattern(ctx._c_primary_obj) if 'get_fill_pattern' in ctx.globals() else ctx._c_primary_obj.get("fill_pattern")
@@ -159,7 +160,7 @@ def handle_bc_part1(ctx, event):
 
 
 def handle_bc_part2(ctx, event):
-    if ctx._c_primary_obj is not None and ctx.color_target == "fill" and ctx._c_comp_style_target is None and ctx.state.get("pattern_type_rect", pygame.Rect(0, 0, 0, 0)).collidepoint(event.pos):
+    if ctx._c_primary_obj is not None and ctx.color_target == "fill" and ctx._c_comp_style_target is None and hit_rect(ctx, "pattern_type_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
         for ctx.si in ctx._c_sel_list:
             if 0 <= ctx.si < len(ctx.strokes):
                 pat = get_fill_pattern(ctx.strokes[ctx.si]) if 'get_fill_pattern' in ctx.globals() else None
@@ -167,7 +168,7 @@ def handle_bc_part2(ctx, event):
                     ctx.strokes[ctx.si]["fill_pattern"] = cycle_pattern_type(pat)
                 elif pat is None and 'new_pattern' in ctx.globals():
                     ctx.strokes[ctx.si]["fill_pattern"] = new_pattern("stripes")
-    elif ctx._c_primary_obj is not None and ctx.color_target == "fill" and ctx._c_comp_style_target is None and ctx.state.get("pattern_size_minus_rect", pygame.Rect(0, 0, 0, 0)).collidepoint(event.pos):
+    elif ctx._c_primary_obj is not None and ctx.color_target == "fill" and ctx._c_comp_style_target is None and hit_rect(ctx, "pattern_size_minus_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
         for ctx.si in ctx._c_sel_list:
             if 0 <= ctx.si < len(ctx.strokes):
                 pat = get_fill_pattern(ctx.strokes[ctx.si]) if 'get_fill_pattern' in ctx.globals() else None
@@ -175,7 +176,7 @@ def handle_bc_part2(ctx, event):
                     pat = dict(pat)
                     pat["size"] = max(2.0, float(pat.get("size", 14.0)) - 2.0)
                     ctx.strokes[ctx.si]["fill_pattern"] = pat
-    elif ctx._c_primary_obj is not None and ctx.color_target == "fill" and ctx._c_comp_style_target is None and ctx.state.get("pattern_size_plus_rect", pygame.Rect(0, 0, 0, 0)).collidepoint(event.pos):
+    elif ctx._c_primary_obj is not None and ctx.color_target == "fill" and ctx._c_comp_style_target is None and hit_rect(ctx, "pattern_size_plus_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
         for ctx.si in ctx._c_sel_list:
             if 0 <= ctx.si < len(ctx.strokes):
                 pat = get_fill_pattern(ctx.strokes[ctx.si]) if 'get_fill_pattern' in ctx.globals() else None
@@ -183,7 +184,7 @@ def handle_bc_part2(ctx, event):
                     pat = dict(pat)
                     pat["size"] = min(120.0, float(pat.get("size", 14.0)) + 2.0)
                     ctx.strokes[ctx.si]["fill_pattern"] = pat
-    elif ctx._c_primary_obj is not None and ctx.color_target == "fill" and ctx._c_comp_style_target is None and ctx.state.get("fill_stop_add_rect", pygame.Rect(0, 0, 0, 0)).collidepoint(event.pos):
+    elif ctx._c_primary_obj is not None and ctx.color_target == "fill" and ctx._c_comp_style_target is None and hit_rect(ctx, "fill_stop_add_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
         cur_stop_i = int(ctx.state.get("fill_gradient_stop", 0) or 0)
         for ctx.si in ctx._c_sel_list:
             if 0 <= ctx.si < len(ctx.strokes):
@@ -201,7 +202,7 @@ def handle_bc_part2(ctx, event):
             fc = get_gradient_stop_color(pfg, ni) if 'get_gradient_stop_color' in ctx.globals() else (1.0, 1.0, 1.0, 1.0)
             ctx.picker_h, ctx.picker_s, ctx.picker_v = ctx.rgb_to_hsv(*fc)
             ctx.state["picker_h"] = ctx.picker_h; ctx.state["picker_s"] = ctx.picker_s; ctx.state["picker_v"] = ctx.picker_v
-    elif ctx._c_primary_obj is not None and ctx.color_target == "fill" and ctx._c_comp_style_target is None and ctx.state.get("fill_stop_remove_rect", pygame.Rect(0, 0, 0, 0)).collidepoint(event.pos):
+    elif ctx._c_primary_obj is not None and ctx.color_target == "fill" and ctx._c_comp_style_target is None and hit_rect(ctx, "fill_stop_remove_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
         cur_stop_i = int(ctx.state.get("fill_gradient_stop", 0) or 0)
         for ctx.si in ctx._c_sel_list:
             if 0 <= ctx.si < len(ctx.strokes):
@@ -218,11 +219,11 @@ def handle_bc_part2(ctx, event):
             fc = get_gradient_stop_color(pfg, ni) if 'get_gradient_stop_color' in ctx.globals() else (1.0, 1.0, 1.0, 1.0)
             ctx.picker_h, ctx.picker_s, ctx.picker_v = ctx.rgb_to_hsv(*fc)
             ctx.state["picker_h"] = ctx.picker_h; ctx.state["picker_s"] = ctx.picker_s; ctx.state["picker_v"] = ctx.picker_v
-    elif ctx._c_primary_obj is not None and ctx.color_target == "fill" and ctx._c_comp_style_target is None and ctx.state.get("fill_stop_pos_rect", pygame.Rect(0, 0, 0, 0)).collidepoint(event.pos):
+    elif ctx._c_primary_obj is not None and ctx.color_target == "fill" and ctx._c_comp_style_target is None and hit_rect(ctx, "fill_stop_pos_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
         fg = ctx.get_fill_gradient(ctx._c_primary_obj) if 'get_fill_gradient' in ctx.globals() else (ctx._c_primary_obj.get("fill_gradient") if isinstance(ctx._c_primary_obj.get("fill_gradient"), dict) else None)
         if fg is not None:
             cur_stop_i = int(ctx.state.get("fill_gradient_stop", 0) or 0)
-            pr = ctx.state.get("fill_stop_pos_rect", pygame.Rect(0, 0, 0, 0))
+            pr = hit_rect(ctx, "fill_stop_pos_rect", pygame.Rect(0,0,0,0))
             # If a stop marker on the ramp is clicked, select that stop.
             stops_for_pick = get_gradient_stops(fg) if 'get_gradient_stops' in ctx.globals() else list(fg.get("stops") or [])
             if stops_for_pick:
@@ -271,7 +272,7 @@ def handle_bc_part3(ctx, event):
     if ctx._c_primary_obj is not None and ctx.color_target == "fill" and ctx._c_comp_style_target is None and any(ctx.r.collidepoint(event.pos) for ctx.r in (ctx.state.get("fill_stop_rects") or {}).values()):
         # reverse so if any overlap occurs, topmost/latest wins
         ctx.items = list((ctx.state.get("fill_stop_rects") or {}).items())
-        skey = ctx.next((ctx.k for ctx.k, ctx.r in reversed(ctx.items) if ctx.r.collidepoint(event.pos)), None)
+        skey = next((ctx.k for ctx.k, ctx.r in reversed(ctx.items) if ctx.r.collidepoint(event.pos)), None)
         if skey is not None:
             try:
                 ctx.state["fill_gradient_stop"] = int(skey)
@@ -343,7 +344,7 @@ def handle_bc_part3(ctx, event):
                             ctx.strokes[ctx.si]["fill_gradient"] = None
         ctx.state["picker_drag_hue"] = True
         ctx.state["picker_h"] = ctx.picker_h; ctx.state["picker_s"] = ctx.picker_s; ctx.state["picker_v"] = ctx.picker_v
-    elif ctx._c_primary_obj is not None and ctx.state.get("alpha_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
+    elif ctx._c_primary_obj is not None and hit_rect(ctx, "alpha_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
         ar = ctx.state["alpha_rect"]
         new_alpha = ctx.clamp((event.pos[0] - ar.x) / max(1, ar.w - 1), 0.0, 1.0)
         if ctx._c_comp_style_target is not None:

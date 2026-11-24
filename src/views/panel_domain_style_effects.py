@@ -1,5 +1,6 @@
 """View: panel_select parts B (SRP)."""
 """View: panel section (split for complexity)."""
+from panel_rects import publish_rect  # noqa: E402
 import math
 import pygame
 import config as cfg
@@ -53,12 +54,12 @@ APPEAR_KEYS = ("obj_opacity_rect", "shadow_toggle_rect", "shadow_blur_minus_rect
 
 def render_displacement_section(screen, font_small, state, x, y, _button, _style_slider, active_style):
     """Explicit-contract render for displacement style section."""
-    state["displacement_profile_rects"] = {}
-    state["wave_custom_box_rect"] = pygame.Rect(0, 0, 0, 0)
+    publish_rect(state, "displacement_profile_rects", {})
+    publish_rect(state, "wave_custom_box_rect", pygame.Rect(0, 0, 0, 0))
     state["wave_custom_draw"] = False
-    state["wave_smooth_rect"] = pygame.Rect(0, 0, 0, 0)
-    state["wave_reverse_rect"] = pygame.Rect(0, 0, 0, 0)
-    state["wave_clamp_rect"] = pygame.Rect(0, 0, 0, 0)
+    publish_rect(state, "wave_smooth_rect", pygame.Rect(0, 0, 0, 0))
+    publish_rect(state, "wave_reverse_rect", pygame.Rect(0, 0, 0, 0))
+    publish_rect(state, "wave_clamp_rect", pygame.Rect(0, 0, 0, 0))
     screen.blit(font_small.render("Point displacement (along path)", True, TEXT_COLOR), (x, y)); y += 20
     screen.blit(font_small.render("Apply to", True, TEXT_COLOR), (x, y)); y += 20
     affect_rects = {}
@@ -72,7 +73,7 @@ def render_displacement_section(screen, font_small, state, x, y, _button, _style
         affect_rects[akey] = r
         on = bool(active_style.get(akey, True))
         _button(r, alabel, active=on)
-    state["displacement_affect_rects"] = affect_rects
+    publish_rect(state, "displacement_affect_rects", affect_rects)
     y += ((len(affect_items) + cols - 1) // cols) * 28 + 6
     screen.blit(font_small.render("Parameters", True, TEXT_COLOR), (x, y)); y += 20
     loc_v = float(active_style.get("location", 0.0) or 0.0)
@@ -99,22 +100,22 @@ def _b2b_disp(c):
 
 def render_repeat_section(screen, font_small, state, x, y, _button, _style_slider, active_style):
     """Explicit-contract render for repeat style section."""
-    state["displacement_affect_rects"] = {}
-    state["wave_shape_prev_rect"] = pygame.Rect(0,0,0,0)
-    state["wave_shape_next_rect"] = pygame.Rect(0,0,0,0)
-    state["wave_shape_rects"] = {}
-    state["wave_formula_rect"] = pygame.Rect(0,0,0,0)
+    publish_rect(state, "displacement_affect_rects", {})
+    publish_rect(state, "wave_shape_prev_rect", pygame.Rect(0,0,0,0))
+    publish_rect(state, "wave_shape_next_rect", pygame.Rect(0,0,0,0))
+    publish_rect(state, "wave_shape_rects", {})
+    publish_rect(state, "wave_formula_rect", pygame.Rect(0,0,0,0))
     state["wave_formula_focus"] = False
-    state["wave_smooth_rect"] = pygame.Rect(0,0,0,0)
-    state["wave_clear_rect"] = pygame.Rect(0,0,0,0)
-    state["wave_done_rect"] = pygame.Rect(0,0,0,0)
-    state["repeat_pick_curve_rect"] = pygame.Rect(0,0,0,0)
-    state["displacement_profile_rects"] = {}
+    publish_rect(state, "wave_smooth_rect", pygame.Rect(0,0,0,0))
+    publish_rect(state, "wave_clear_rect", pygame.Rect(0,0,0,0))
+    publish_rect(state, "wave_done_rect", pygame.Rect(0,0,0,0))
+    publish_rect(state, "repeat_pick_curve_rect", pygame.Rect(0,0,0,0))
+    publish_rect(state, "displacement_profile_rects", {})
     screen.blit(font_small.render("Repeat curve (drawn pattern)", True, TEXT_COLOR), (x, y)); y += 20
     BOX_W = 180; BOX_H = 80
     bx = x + 8; by = y + 8
     box_rect = pygame.Rect(bx, by, BOX_W, BOX_H)
-    state["wave_custom_box_rect"] = box_rect
+    publish_rect(state, "wave_custom_box_rect", box_rect)
     cp = active_style.get("repeat_points", None)
     bg_col = PLOT_BG if (cp and len(cp) >= 2) else PLOT_BG_DISABLED
     pygame.draw.rect(screen, bg_col, box_rect, border_radius=RADIUS_SM)
@@ -139,14 +140,14 @@ def render_repeat_section(screen, font_small, state, x, y, _button, _style_slide
     _button(clr_r, "Clear")
     _button(smooth_r, "Smooth")
     _button(done_r, "Done")
-    state["wave_clear_rect"] = clr_r
-    state["wave_smooth_rect"] = smooth_r
-    state["wave_done_rect"] = done_r
+    publish_rect(state, "wave_clear_rect", clr_r)
+    publish_rect(state, "wave_smooth_rect", smooth_r)
+    publish_rect(state, "wave_done_rect", done_r)
     y += 30
     pick_r = pygame.Rect(x, y, PANEL_W - 40, 24)
     picking = bool(state.get("repeat_pick_mode"))
     _button(pick_r, "Picking curve..." if picking else "Copy Curve As Pattern", active=picking)
-    state["repeat_pick_curve_rect"] = pick_r
+    publish_rect(state, "repeat_pick_curve_rect", pick_r)
     y += 30
     _style_slider("Amplitude (%)", "amplitude", float(active_style.get("amplitude", 8.0)), 0.0, 100.0, fmt=lambda v: f"{v:.1f}")
     _style_slider("Frequency", "frequency", float(active_style.get("frequency", 0.25)), 0.01, 5.0, fmt=lambda v: f"{v:.2f}")
@@ -154,9 +155,9 @@ def render_repeat_section(screen, font_small, state, x, y, _button, _style_slide
     rev_rect = pygame.Rect(x, y, (PANEL_W - 44) // 2, 24)
     clamp_rect = pygame.Rect(rev_rect.right + 4, y, PANEL_W - 40 - rev_rect.w - 4, 24)
     _button(rev_rect, "Reverse", active=bool(active_style.get("reverse")))
-    state["wave_reverse_rect"] = rev_rect
+    publish_rect(state, "wave_reverse_rect", rev_rect)
     _button(clamp_rect, f"Clamp: {active_style.get('clamp','none')}")
-    state["wave_clamp_rect"] = clamp_rect
+    publish_rect(state, "wave_clamp_rect", clamp_rect)
     y += 30
     return y
 
@@ -170,18 +171,18 @@ def _b2b_rep(c):
 
 def render_thickness_section(screen, font_small, state, x, y, _button, _style_slider, active_style):
     """Explicit-contract render for thickness style section."""
-    state["displacement_affect_rects"] = {}
-    state["wave_shape_prev_rect"] = pygame.Rect(0,0,0,0)
-    state["wave_shape_next_rect"] = pygame.Rect(0,0,0,0)
-    state["wave_shape_rects"] = {}
-    state["wave_formula_rect"] = pygame.Rect(0,0,0,0)
+    publish_rect(state, "displacement_affect_rects", {})
+    publish_rect(state, "wave_shape_prev_rect", pygame.Rect(0,0,0,0))
+    publish_rect(state, "wave_shape_next_rect", pygame.Rect(0,0,0,0))
+    publish_rect(state, "wave_shape_rects", {})
+    publish_rect(state, "wave_formula_rect", pygame.Rect(0,0,0,0))
     state["wave_formula_focus"] = False
-    state["displacement_profile_rects"] = {}
+    publish_rect(state, "displacement_profile_rects", {})
     screen.blit(font_small.render("Thickness profile (no repetition)", True, TEXT_COLOR), (x, y)); y += 20
     BOX_W = 180; BOX_H = 80
     bx = x + 8; by = y + 8
     box_rect = pygame.Rect(bx, by, BOX_W, BOX_H)
-    state["wave_custom_box_rect"] = box_rect
+    publish_rect(state, "wave_custom_box_rect", box_rect)
     cp = active_style.get("thickness_points", None)
     bg_col = PLOT_BG if (cp and len(cp) >= 2) else PLOT_BG_DISABLED
     pygame.draw.rect(screen, bg_col, box_rect, border_radius=RADIUS_SM)
@@ -206,22 +207,22 @@ def render_thickness_section(screen, font_small, state, x, y, _button, _style_sl
     _button(clr_r, "Clear")
     _button(smooth_r, "Smooth")
     _button(done_r, "Done")
-    state["wave_clear_rect"] = clr_r
-    state["wave_smooth_rect"] = smooth_r
-    state["wave_done_rect"] = done_r
+    publish_rect(state, "wave_clear_rect", clr_r)
+    publish_rect(state, "wave_smooth_rect", smooth_r)
+    publish_rect(state, "wave_done_rect", done_r)
     y += 30
     pick_r = pygame.Rect(x, y, PANEL_W - 40, 24)
     picking = bool(state.get("repeat_pick_mode"))
     _button(pick_r, "Picking curve..." if picking else "Copy Curve As Pattern", active=picking)
-    state["repeat_pick_curve_rect"] = pick_r
+    publish_rect(state, "repeat_pick_curve_rect", pick_r)
     y += 30
     _style_slider("Amplitude (%)", "amplitude", float(active_style.get("amplitude", 8.0)), 0.0, 100.0, fmt=lambda v: f"{v:.1f}")
     rev_rect = pygame.Rect(x, y, (PANEL_W - 44) // 2, 24)
     clamp_rect = pygame.Rect(rev_rect.right + 4, y, PANEL_W - 40 - rev_rect.w - 4, 24)
     _button(rev_rect, "Reverse", active=bool(active_style.get("reverse")))
-    state["wave_reverse_rect"] = rev_rect
+    publish_rect(state, "wave_reverse_rect", rev_rect)
     _button(clamp_rect, f"Clamp: {active_style.get('clamp','none')}")
-    state["wave_clamp_rect"] = clamp_rect
+    publish_rect(state, "wave_clamp_rect", clamp_rect)
     y += 30
     return y
 
@@ -237,7 +238,7 @@ def render_wave_section(screen, fonts, state, x, y, _button, _queue_tip, _style_
     """Explicit-contract render for wave style section."""
     font, font_small, font_title = fonts
     wave = active_style
-    state["displacement_affect_rects"] = {}
+    publish_rect(state, "displacement_affect_rects", {})
     # Wave style UI (existing behavior)
     wave = active_style
     # ---- shape selector ----
@@ -250,9 +251,9 @@ def render_wave_section(screen, fonts, state, x, y, _button, _queue_tip, _style_
     pr = pygame.Rect(x, y, btn_w, 28)
     vr = pygame.Rect(x + btn_w + 4, y, vw, 28)
     nr = pygame.Rect(vr.right + 4, y, btn_w, 28)
-    state["wave_shape_prev_rect"] = pr
-    state["wave_shape_next_rect"] = nr
-    state["wave_shape_rects"] = {}
+    publish_rect(state, "wave_shape_prev_rect", pr)
+    publish_rect(state, "wave_shape_next_rect", nr)
+    publish_rect(state, "wave_shape_rects", {})
     _button(pr, "<", font_=font_small)
     # value area with small waveform preview
     _button(vr, "", active=False)
@@ -267,11 +268,11 @@ def render_wave_section(screen, fonts, state, x, y, _button, _queue_tip, _style_
     y += 32
 
     # Formula input (contextual: only for the formula shape)
-    state["wave_formula_rect"] = pygame.Rect(0,0,0,0)
+    publish_rect(state, "wave_formula_rect", pygame.Rect(0,0,0,0))
     if shape == "formula":
         screen.blit(font_small.render("Formula (x=p, t,s)", True, TEXT_COLOR), (x, y)); y += 18
         frect = pygame.Rect(x, y, PANEL_W - 40, 26)
-        state["wave_formula_rect"] = frect
+        publish_rect(state, "wave_formula_rect", frect)
         focused = bool(state.get("wave_formula_focus"))
         bg = SURFACE if focused else (BUTTON_HOVER if frect.collidepoint(mouse_pos) else BUTTON_BG)
         pygame.draw.rect(screen, bg, frect, border_radius=RADIUS_MD)
@@ -295,12 +296,12 @@ def render_wave_section(screen, fonts, state, x, y, _button, _queue_tip, _style_
     state["wave_custom_draw"] = False
     if shape != "custom":
         state["wave_custom_finished"] = False
-    state["wave_custom_box_rect"] = pygame.Rect(0, 0, 0, 0)
+    publish_rect(state, "wave_custom_box_rect", pygame.Rect(0, 0, 0, 0))
     if shape == "custom":
         bx = x + 8
         by = y + 8
         box_rect = pygame.Rect(bx, by, BOX_W, BOX_H)
-        state["wave_custom_box_rect"] = box_rect
+        publish_rect(state, "wave_custom_box_rect", box_rect)
         cp = wave.get("custom_points", None)
         bg_col = PLOT_BG if (cp and len(cp) >= 2) else PLOT_BG_DISABLED
         pygame.draw.rect(screen, bg_col, box_rect, border_radius=RADIUS_SM)
@@ -319,7 +320,7 @@ def render_wave_section(screen, fonts, state, x, y, _button, _queue_tip, _style_
         pygame.draw.line(screen, PLOT_GRID, (bx + 6, by + BOX_H - 4), (bx + BOX_W - 6, by + BOX_H - 4), BORDER_WIDTH)
         has_wave_pts = bool(cp and len(cp) >= 2)
         smooth_rect = pygame.Rect(bx, by + BOX_H + 6, 74, 20)
-        state["wave_smooth_rect"] = smooth_rect
+        publish_rect(state, "wave_smooth_rect", smooth_rect)
         _button(smooth_rect, "Smooth", enabled=has_wave_pts)
         if has_wave_pts:
             pt_count = f"{len(cp)} samples"
@@ -355,7 +356,7 @@ def render_wave_section(screen, fonts, state, x, y, _button, _queue_tip, _style_
     # Reverse toggle: invert the wave (-f(x))
     rev = bool(wave.get("reverse"))
     rev_rect = pygame.Rect(x, y, PANEL_W - 40, 22)
-    state["wave_reverse_rect"] = rev_rect
+    publish_rect(state, "wave_reverse_rect", rev_rect)
     _button(rev_rect, f"Reverse wave -f(x): {'ON' if rev else 'OFF'}", active=rev)
     y += 26
     # Clamp: apply the curve on only one side or the other
@@ -364,7 +365,7 @@ def render_wave_section(screen, fonts, state, x, y, _button, _queue_tip, _style_
         clamp_mode = "none"
     clamp_labels = {"none": "Off", "positive": "One side (+)", "negative": "One side (-)"}
     clamp_rect = pygame.Rect(x, y, PANEL_W - 40, 22)
-    state["wave_clamp_rect"] = clamp_rect
+    publish_rect(state, "wave_clamp_rect", clamp_rect)
     _button(clamp_rect, f"Clamp curve: {clamp_labels[clamp_mode]}",
             active=clamp_mode != "none")
     y += 26

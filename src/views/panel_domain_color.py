@@ -1,5 +1,6 @@
 """View: panel_select split parts C/D (SRP)."""
 """View: panel section (split for complexity)."""
+from panel_rects import publish_rect  # noqa: E402
 import math
 import pygame
 import config as cfg
@@ -69,13 +70,13 @@ def render_no_selection_state(screen, font_small, state, x, y):
     """Explicit-contract render for empty selection state."""
     info = font_small.render("Select a stroke", True, MUTED_COLOR)
     screen.blit(info, (x, y)); y += 28
-    state["tab_stroke_rect"] = pygame.Rect(0,0,0,0)
-    state["tab_fill_rect"] = pygame.Rect(0,0,0,0)
-    state["sv_rect"] = pygame.Rect(0,0,0,0)
-    state["hue_rect"] = pygame.Rect(0,0,0,0)
-    state["nofill_rect"] = pygame.Rect(0,0,0,0)
-    state["alpha_rect"] = pygame.Rect(0,0,0,0)
-    state["width_profile_rects"] = {}
+    publish_rect(state, "tab_stroke_rect", pygame.Rect(0,0,0,0))
+    publish_rect(state, "tab_fill_rect", pygame.Rect(0,0,0,0))
+    publish_rect(state, "sv_rect", pygame.Rect(0,0,0,0))
+    publish_rect(state, "hue_rect", pygame.Rect(0,0,0,0))
+    publish_rect(state, "nofill_rect", pygame.Rect(0,0,0,0))
+    publish_rect(state, "alpha_rect", pygame.Rect(0,0,0,0))
+    publish_rect(state, "width_profile_rects", {})
     for i in range(len(state["stroke_swatch_rects"])): state["stroke_swatch_rects"][i] = pygame.Rect(0,0,0,0)
     for i in range(len(state["fill_swatch_rects"])): state["fill_swatch_rects"][i] = pygame.Rect(0,0,0,0)
     return y
@@ -173,15 +174,15 @@ def render_color_section(screen, fonts, mouse_pos, state, x, y, _button, _queue_
         pr = pygame.Rect(vx, y, btn_w, 24)
         vr = pygame.Rect(vx + btn_w + 4, y, vw, 24)
         nr = pygame.Rect(vr.right + 4, y, btn_w, 24)
-        state["width_profile_prev_rect"] = pr
-        state["width_profile_next_rect"] = nr
+        publish_rect(state, "width_profile_prev_rect", pr)
+        publish_rect(state, "width_profile_next_rect", nr)
         _button(pr, "<", font_=font_small)
         _button(vr, labels.get(cur_prof, str(cur_prof)))
         _button(nr, ">", font_=font_small)
         y += 28
     else:
-        state["width_profile_prev_rect"] = pygame.Rect(0, 0, 0, 0)
-        state["width_profile_next_rect"] = pygame.Rect(0, 0, 0, 0)
+        publish_rect(state, "width_profile_prev_rect", pygame.Rect(0, 0, 0, 0))
+        publish_rect(state, "width_profile_next_rect", pygame.Rect(0, 0, 0, 0))
 
     # Cap / join / dash / miter: all shape-level stroke styling.
     STYLE_STEP_KEYS = ("cap_prev_rect", "cap_next_rect", "join_prev_rect", "join_next_rect",
@@ -227,8 +228,8 @@ def render_color_section(screen, fonts, mouse_pos, state, x, y, _button, _queue_
         _mbw = (PANEL_W - 40 - _mgap) // 2
         _sr = pygame.Rect(x, y, _mbw, 24)
         _er = pygame.Rect(x + _mbw + _mgap, y, _mbw, 24)
-        state["marker_start_rect"] = _sr
-        state["marker_end_rect"] = _er
+        publish_rect(state, "marker_start_rect", _sr)
+        publish_rect(state, "marker_end_rect", _er)
         open_start = (state.get("marker_dropdown") == "start")
         open_end = (state.get("marker_dropdown") == "end")
         _button(_sr, "Start: " + str(_mk["start"]).replace("_", " ").title(),
@@ -240,8 +241,8 @@ def render_color_section(screen, fonts, mouse_pos, state, x, y, _button, _queue_
             hint = font_small.render("Closed paths have no marker ends", True, MUTED_COLOR)
             screen.blit(hint, (x, y)); y += 18
     else:
-        state["marker_start_rect"] = pygame.Rect(0, 0, 0, 0)
-        state["marker_end_rect"] = pygame.Rect(0, 0, 0, 0)
+        publish_rect(state, "marker_start_rect", pygame.Rect(0, 0, 0, 0))
+        publish_rect(state, "marker_end_rect", pygame.Rect(0, 0, 0, 0))
 
     # Appearance: object opacity and drop shadow.
     APPEAR_KEYS = ("obj_opacity_rect", "shadow_toggle_rect",
@@ -257,7 +258,7 @@ def render_color_section(screen, fonts, mouse_pos, state, x, y, _button, _queue_
         y += 16
         op_h = 12
         op_rect = pygame.Rect(x, y, PANEL_W - 40, op_h)
-        state["obj_opacity_rect"] = op_rect
+        publish_rect(state, "obj_opacity_rect", op_rect)
         pygame.draw.rect(screen, BUTTON_BORDER, op_rect, 1, border_radius=RADIUS_SM)
         fill_w = int(op_rect.w * clamp(_app["opacity"], 0.0, 1.0))
         if fill_w > 0:
@@ -272,7 +273,7 @@ def render_color_section(screen, fonts, mouse_pos, state, x, y, _button, _queue_
         # Drop shadow toggle + blur stepper.
         sh_on = _app["shadow"] is not None
         sh_r = pygame.Rect(x, y, PANEL_W - 40, 24)
-        state["shadow_toggle_rect"] = sh_r
+        publish_rect(state, "shadow_toggle_rect", sh_r)
         _button(sh_r, "Shadow: ON" if sh_on else "Shadow: OFF", active=sh_on)
         _queue_tip(sh_r, None, "Toggle drop shadow")
         y += 28
@@ -283,8 +284,8 @@ def render_color_section(screen, fonts, mouse_pos, state, x, y, _button, _queue_
             bmw = (PANEL_W - 40 - 6) // 2
             minus_r = pygame.Rect(x, y, bmw, 22)
             plus_r = pygame.Rect(x + bmw + 6, y, bmw, 22)
-            state["shadow_blur_minus_rect"] = minus_r
-            state["shadow_blur_plus_rect"] = plus_r
+            publish_rect(state, "shadow_blur_minus_rect", minus_r)
+            publish_rect(state, "shadow_blur_plus_rect", plus_r)
             _button(minus_r, "- Blur")
             _button(plus_r, "+ Blur")
     else:
@@ -376,8 +377,8 @@ def render_color_picker_section(screen, fonts, mouse_pos, state, x, y, _button, 
     tab_w = (PANEL_W - 40 - 8) // 2
     tab_stroke = pygame.Rect(x, y, tab_w, 26)
     tab_fill = pygame.Rect(x + tab_w + 8, y, tab_w, 26)
-    state["tab_stroke_rect"] = tab_stroke if stroke_color_enabled else pygame.Rect(0,0,0,0)
-    state["tab_fill_rect"] = tab_fill if fill_enabled else pygame.Rect(0,0,0,0)
+    publish_rect(state, "tab_stroke_rect", tab_stroke if stroke_color_enabled else pygame.Rect(0,0,0,0))
+    publish_rect(state, "tab_fill_rect", tab_fill if fill_enabled else pygame.Rect(0,0,0,0))
     for rect, label, key in ((tab_stroke, "Stroke", "stroke"), (tab_fill, "Fill", "fill")):
             enabled_tab = stroke_color_enabled if key == "stroke" else fill_enabled
             active = (color_target == key) and enabled_tab

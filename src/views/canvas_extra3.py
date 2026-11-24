@@ -332,6 +332,24 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
         if show_hidden:
             _draw_hidden_segments(ctx, stroke, segs, hidden, stroke_width)
 
+    # Live drawing preview: in-progress Bezier pen path or freehand stroke.
+    if not for_export and redrawing_curve is None:
+        try:
+            if bezier_pen is not None and isinstance(bezier_pen, dict) and (bezier_pen.get("anchors") or bezier_pen.get("dragging") or bezier_pen.get("preview_pt") is not None):
+                _draw_bezier_pen_preview(ctx, for_export, bezier_pen)
+            elif active_stroke and not edit_mode:
+                _prev_pts = [tuple(p) for p in (active_stroke or [])]
+                if len(_prev_pts) >= 2:
+                    ctx.set_source_rgb(0.1, 0.1, 0.15)
+                    ctx.set_line_width(3.0)
+                    ctx.new_path()
+                    ctx.move_to(_prev_pts[0][0], _prev_pts[0][1])
+                    for _pt in _prev_pts[1:]:
+                        ctx.line_to(_pt[0], _pt[1])
+                    ctx.stroke()
+        except Exception:
+            pass
+
     _draw_selection_overlays(ctx, strokes, sel_set, edit_mode, selection_submode, selected_curve, selected_curves, transform_handle_mode, pivot_pos)
 
     _draw_gradient_edit_handles(ctx, edit_mode, gradient_edit_info)

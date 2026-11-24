@@ -1,9 +1,7 @@
 """Redraw-curve interaction start."""
 
 import pygame
-from models import *  # noqa: F401,F403
-from views import *  # noqa: F401,F403
-from controllers.coordinates import *  # noqa: F401,F403
+from models import draw_snap_point  # noqa: F401
 
 
 def handle_redraw_mode(ctx, event):

@@ -1,10 +1,10 @@
 """Curve selection submode handler."""
 
 import copy
-from models import *  # noqa: F401,F403
-from views import *  # noqa: F401,F403
-from controllers.coordinates import *  # noqa: F401,F403
+from models import hit_test_component, hit_test_stroke  # noqa: F401
 
+
+from models.waves_extra import _segs_to_repeat_points  # noqa: F401
 
 def handle_curve_mode(ctx, event):
     ctx.cpos = ctx.to_canvas(event.pos)

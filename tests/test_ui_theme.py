@@ -318,6 +318,9 @@ class TestMenuBar(unittest.TestCase):
         self.assertEqual(len(keys), len(set(keys)), "duplicate menu item keys")
 
     def test_every_menu_item_has_a_controller_action(self):
+        # Menu item keys are single-sourced from command_ids (neutral module);
+        # controller handlers compare the same CMD.* constants.
+        import command_ids
         from views import menu as menu_view
         ctrl_dir = os.path.join(_ROOT, "src", "controllers")
         source = ""
@@ -327,8 +330,14 @@ class TestMenuBar(unittest.TestCase):
                     with open(os.path.join(dirpath, fn), encoding="utf-8") as handle:
                         source += "\n" + handle.read()
         self.assertIn("def run_menu_action(", source)
-        for key in (i[0] for m in menu_view.MENUS for i in m[2] if i):
-            self.assertIn(f'"{key}"', source, f"no action for menu item {key}")
+        keys = [i[0] for m in menu_view.MENUS for i in m[2] if i]
+        for key in keys:
+            self.assertIn(key, command_ids.ALL_COMMAND_IDS,
+                          f"menu item not a registered command ID: {key}")
+        for name, value in vars(command_ids).items():
+            if name.isupper() and value in keys:
+                self.assertIn("CMD." + name, source,
+                              f"no controller action for command ID {name}")
 
     def test_keyboard_and_menu_share_one_action_path(self):
         ctrl_dir = os.path.join(_ROOT, "src", "controllers")

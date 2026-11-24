@@ -1,8 +1,6 @@
 """Nodes selection submode handler."""
 
-from models import *  # noqa: F401,F403
-from views import *  # noqa: F401,F403
-from controllers.coordinates import *  # noqa: F401,F403
+from models import hit_test_point, hit_test_stroke, stroke_display_segs  # noqa: F401
 
 
 def handle_nodes_mode(ctx, event):

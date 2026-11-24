@@ -1,4 +1,4 @@
-"""Transform/align panel actions (semantic domain)."""
+"""Transform fields / align / distribute / mirror panel actions."""
 import copy, math, pygame
 import config as cfg
 
@@ -165,7 +165,7 @@ def _handle_panel_click_a_p2(ctx, event):
                   "dash_prev_rect", "dash_next_rect")
     ):
         _matched = True
-        skey = ctx.next(ctx.k for ctx.k in ("cap_prev_rect", "cap_next_rect", "join_prev_rect", "join_next_rect",
+        skey = next(ctx.k for ctx.k in ("cap_prev_rect", "cap_next_rect", "join_prev_rect", "join_next_rect",
                                 "dash_prev_rect", "dash_next_rect")
                     if ctx.state.get(ctx.k, pygame.Rect(0,0,0,0)).collidepoint(event.pos))
         if skey.startswith("cap_"):
@@ -190,7 +190,7 @@ def _handle_panel_click_a_p2(ctx, event):
     elif ctx.tool_mode == "selection" and ctx.selected_strokes and ctx.state.get(
         "text_edit_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
         _matched = True
-        _ti = ctx.next(ctx.iter(sorted(ctx.selected_strokes)), None)
+        _ti = next(iter(sorted(ctx.selected_strokes)), None)
         if _ti is not None and 0 <= _ti < len(ctx.strokes) and \
                 isinstance(ctx.strokes[_ti], dict) and ctx.strokes[_ti].get("is_text"):
             _ts = ctx.strokes[_ti]
@@ -208,7 +208,7 @@ def _handle_panel_click_a_p2(ctx, event):
     elif ctx.tool_mode == "selection" and ctx.selected_strokes and ctx.state.get(
         "text_font_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
         _matched = True
-        _ti = ctx.next(ctx.iter(sorted(ctx.selected_strokes)), None)
+        _ti = next(iter(sorted(ctx.selected_strokes)), None)
         if _ti is not None and 0 <= _ti < len(ctx.strokes) and \
                 isinstance(ctx.strokes[_ti], dict) and ctx.strokes[_ti].get("is_text"):
             ctx.push_undo()
@@ -224,7 +224,7 @@ def _handle_panel_click_a_p3(ctx, event):
         ctx.state.get(ctx.k, pygame.Rect(0,0,0,0)).collidepoint(event.pos)
         for ctx.k in ("text_size_minus_rect", "text_size_plus_rect")):
         _matched = True
-        _ti = ctx.next(ctx.iter(sorted(ctx.selected_strokes)), None)
+        _ti = next(iter(sorted(ctx.selected_strokes)), None)
         _key = "text_size_plus_rect" if ctx.state.get(
             "text_size_plus_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos) \
             else "text_size_minus_rect"
@@ -263,7 +263,7 @@ def _handle_panel_click_a_p3(ctx, event):
     elif ctx.tool_mode == "selection" and ctx.state.get("text_off_path_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
         _matched = True
         if len(ctx.selected_strokes) == 1:
-            _ti = ctx.next(ctx.iter(ctx.selected_strokes))
+            _ti = next(iter(ctx.selected_strokes))
             if 0 <= _ti < len(ctx.strokes) and isinstance(ctx.strokes[_ti], dict) and ctx.strokes[_ti].get("is_text") and ctx.strokes[_ti].get("text_path"):
                 try:
                     from models.text import clear_text_path as _clear_text_path
@@ -288,7 +288,7 @@ def _handle_panel_click_a_p3(ctx, event):
     ):
         _matched = True
         appear_keys = ("shadow_toggle_rect", "shadow_blur_minus_rect", "shadow_blur_plus_rect")
-        appear_key = ctx.next(ctx.k for ctx.k in appear_keys
+        appear_key = next(ctx.k for ctx.k in appear_keys
                           if ctx.state.get(ctx.k, pygame.Rect(0,0,0,0)).collidepoint(event.pos))
         ctx.push_undo()
         for ctx.si in sorted(ctx.selected_strokes):
@@ -319,7 +319,7 @@ def _handle_panel_click_a_p3(ctx, event):
         path_keys = ("path_close_rect", "path_reverse_rect", "path_add_rect",
                      "path_delete_rect", "path_smooth_rect", "path_corner_rect",
                      "path_expand_rect")
-        path_key = ctx.next(ctx.k for ctx.k in path_keys
+        path_key = next(ctx.k for ctx.k in path_keys
                         if ctx.state.get(ctx.k, pygame.Rect(0,0,0,0)).collidepoint(event.pos))
         sel_idx = sorted(ctx.i for ctx.i in ctx.selected_strokes if 0 <= ctx.i < len(ctx.strokes))
         if sel_idx:
@@ -385,7 +385,7 @@ def _handle_panel_click_a_p3(ctx, event):
                         for ctx.ci in ctx.idxs:
                             new_selected_curves.add((ctx.si, int(ctx.ci)))
                 ctx.selected_curves = new_selected_curves
-                ctx.selected_curve = ctx.next(ctx.iter(ctx.selected_curves), None)
+                ctx.selected_curve = next(iter(ctx.selected_curves), None)
                 ctx.selected_strokes = {ctx.si for ctx.si, _ in ctx.selected_curves}
         ctx.selected_point = None; ctx.transform_drag = None; ctx.drag_last = None
         ctx.eyedropper_pick = False

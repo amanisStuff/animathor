@@ -2,9 +2,7 @@
 
 import math
 import pygame
-from models import *  # noqa: F401,F403
-from views import *  # noqa: F401,F403
-from controllers.coordinates import *  # noqa: F401,F403
+from models import cut_strokes_with_path  # noqa: F401
 
 
 def commit_cutter(ctx, event):

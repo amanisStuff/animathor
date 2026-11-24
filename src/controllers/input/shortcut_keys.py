@@ -1,9 +1,6 @@
 """Global shortcut and fallback key handling."""
 
 import pygame
-from models import *  # noqa: F401,F403
-from views import *  # noqa: F401,F403
-from controllers.coordinates import *  # noqa: F401,F403
 from controllers.commands import ids as CMD
 
 

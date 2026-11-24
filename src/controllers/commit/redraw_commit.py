@@ -1,9 +1,7 @@
 """Redraw-curve commit."""
 
 import pygame
-from models import *  # noqa: F401,F403
-from views import *  # noqa: F401,F403
-from controllers.coordinates import *  # noqa: F401,F403
+from models import finalize_drawing_points, redraw_stroke_component  # noqa: F401
 
 
 def commit_redraw_curve(ctx, event):

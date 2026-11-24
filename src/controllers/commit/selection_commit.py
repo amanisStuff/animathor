@@ -4,17 +4,9 @@ from models import rects_intersect, expand_group_selection
 
 
 def commit_transform_toggle(ctx, event):
-    """Finalize transform click-toggle / clear transform drag state."""
-    if ctx.pan_drag is not None and getattr(ctx, 'space_panning', False):
-        ctx.pan_drag = None
-    ctx.pivot_drag = None
-    if ctx.pending_transform_toggle is not None and ctx.tool_mode == "selection" and ctx.selection_submode == "transform":
-        if not ctx.pending_transform_toggle.get("moved") and ctx.selected_strokes:
-            ctx.transform_handle_mode = "rotate" if ctx.transform_handle_mode == "scale" else "scale"
-        ctx.pending_transform_toggle = None
-    ctx.transform_drag = None
-    ctx.gradient_drag = None
-    return None
+    """Compat wrapper: transform-toggle is owned by TransformDragSession.end()."""
+    from controllers.drag.transform_session import TransformDragSession
+    return TransformDragSession().end(ctx, event)
 
 
 def commit_marquee(ctx, event):

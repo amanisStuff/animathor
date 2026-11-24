@@ -1,10 +1,11 @@
 """Eyedropper style pick/apply in selection mode."""
 
 import copy
-from models import *  # noqa: F401,F403
-from views import *  # noqa: F401,F403
-from controllers.coordinates import *  # noqa: F401,F403
+from models import hit_test_component, hit_test_stroke  # noqa: F401
 
+
+from models.strokes import _effective_component_style  # noqa: F401
+from models.waves import _get_distortion_styles, _is_distortion_style  # noqa: F401
 
 def handle_eyedropper(ctx, event):
     if not ctx.eyedropper_pick:

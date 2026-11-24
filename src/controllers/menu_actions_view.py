@@ -1,14 +1,12 @@
 """Controller: menu action handler (extracted from app_controller.main for SRP)."""
+from controllers.commands import ids as CMD  # noqa: E402
 import copy
 import math
 import pygame
 import config as cfg
-from models import *
-from views import *
-from controllers.coordinates import *
 
 def _menu_view(ctx, key):
-    if key == "fit":
+    if key == CMD.FIT:
         if ctx.strokes:
             bb = ctx.combined_bbox(ctx.strokes, list(range(len(ctx.strokes))))
             if bb is not None:
@@ -20,26 +18,26 @@ def _menu_view(ctx, key):
                 ctx.cfg.VIEW_PAN_Y = (vh - bh * ctx.cfg.VIEW_ZOOM) / 2 - bb[1] * ctx.cfg.VIEW_ZOOM
         else:
             ctx.cfg.VIEW_ZOOM = 1.0; ctx.cfg.VIEW_PAN_X = 0.0; ctx.cfg.VIEW_PAN_Y = 0.0
-    elif key == "actual_size":
+    elif key == CMD.ACTUAL_SIZE:
         ctx.cfg.VIEW_ZOOM = 1.0; ctx.cfg.VIEW_PAN_X = 0.0; ctx.cfg.VIEW_PAN_Y = 0.0
-    elif key == "toggle_panel":
+    elif key == CMD.TOGGLE_PANEL:
         ctx.panel_collapsed = not ctx.panel_collapsed
         ctx.state["panel_collapsed"] = ctx.panel_collapsed
         ctx.relayout()
-    elif key == "toggle_snap":
+    elif key == CMD.TOGGLE_SNAP:
         ctx.snap_enabled = not ctx.snap_enabled
-    elif key == "toggle_grid":
+    elif key == CMD.TOGGLE_GRID:
         ctx.cfg.SHOW_GRID = not getattr(ctx.cfg, "SHOW_GRID", False)
         ctx.state["show_grid"] = ctx.cfg.SHOW_GRID
-    elif key == "toggle_rulers":
+    elif key == CMD.TOGGLE_RULERS:
         ctx.cfg.SHOW_RULERS = not getattr(ctx.cfg, "SHOW_RULERS", False)
         ctx.state["show_rulers"] = ctx.cfg.SHOW_RULERS
-    elif key == "toggle_grid_snap":
+    elif key == CMD.TOGGLE_GRID_SNAP:
         ctx.cfg.SNAP_TO_GRID = not getattr(ctx.cfg, "SNAP_TO_GRID", False)
         ctx.state["snap_to_grid"] = ctx.cfg.SNAP_TO_GRID
-    elif key == "clear_guides":
+    elif key == CMD.CLEAR_GUIDES:
         guides = []
-    elif key == "artboard_add":
+    elif key == CMD.ARTBOARD_ADD:
         try:
             w = float(getattr(ctx.cfg, "CANVAS_W", 800))
             h = float(getattr(ctx.cfg, "canvas_viewport_height", lambda: getattr(ctx.cfg, "CANVAS_H", 600))())
@@ -47,7 +45,7 @@ def _menu_view(ctx, key):
             w, h = 800.0, 600.0
         ctx.artboards.append({"name": f"Artboard {len(ctx.artboards)+1}", "x": 0.0, "y": 0.0, "w": max(1.0, w), "h": max(1.0, h)})
         ctx.active_artboard = len(ctx.artboards) - 1
-    elif key == "artboard_fit_selection":
+    elif key == CMD.ARTBOARD_FIT_SELECTION:
         sel = [i for i in sorted(ctx.selected_strokes) if 0 <= i < len(ctx.strokes)]
         bb = ctx.combined_bbox(ctx.strokes, sel) if sel else None
         if bb is None and ctx.strokes:
@@ -63,19 +61,19 @@ def _menu_view(ctx, key):
             else:
                 ctx.artboards.append(ab)
                 ctx.active_artboard = len(ctx.artboards) - 1
-    elif key == "artboard_remove":
+    elif key == CMD.ARTBOARD_REMOVE:
         if 0 <= ctx.active_artboard < len(ctx.artboards):
             ctx.artboards.pop(ctx.active_artboard)
             if not ctx.artboards:
                 ctx.active_artboard = -1
             else:
                 ctx.active_artboard = min(ctx.active_artboard, len(ctx.artboards) - 1)
-    elif key == "artboard_next":
+    elif key == CMD.ARTBOARD_NEXT:
         if ctx.artboards:
             ctx.active_artboard = (ctx.active_artboard + 1) % len(ctx.artboards)
         else:
             ctx.active_artboard = -1
-    elif key == "symbol_create":
+    elif key == CMD.SYMBOL_CREATE:
         sel = [i for i in sorted(ctx.selected_strokes) if 0 <= i < len(ctx.strokes)]
         if sel:
             ctx.push_undo()
@@ -96,7 +94,7 @@ def _menu_view(ctx, key):
                 ctx.strokes[i]["symbol_id"] = sid
                 ctx.strokes[i]["symbol_is_master"] = True
                 ctx.strokes[i]["symbol_instance_id"] = inst_id
-    elif key == "symbol_insert":
+    elif key == CMD.SYMBOL_INSERT:
         # Choose symbol: from selection if present, else most recent/any available.
         sid = None
         for i in sorted(ctx.selected_strokes):
@@ -139,7 +137,7 @@ def _menu_view(ctx, key):
             if new_indices:
                 ctx.selected_strokes = set(new_indices)
                 ctx.selected_point = None; ctx.selected_curve = None; ctx.selected_curves.clear()
-    elif key == "symbol_update":
+    elif key == CMD.SYMBOL_UPDATE:
         # Update definition from master ctx.strokes of target symbol and propagate to instances.
         target_sid = None
         for i in sorted(ctx.selected_strokes):
@@ -198,7 +196,7 @@ def _menu_view(ctx, key):
                 # keep selection reasonable
                 ctx.selected_strokes = set(master_idx) if master_idx else set()
                 ctx.selected_point = None; ctx.selected_curve = None; ctx.selected_curves.clear()
-    elif key == "symbol_detach":
+    elif key == CMD.SYMBOL_DETACH:
         sel = [i for i in sorted(ctx.selected_strokes) if 0 <= i < len(ctx.strokes)]
         if sel:
             ctx.push_undo()
@@ -207,20 +205,20 @@ def _menu_view(ctx, key):
                     ctx.strokes[i].pop("symbol_id", None)
                     ctx.strokes[i].pop("symbol_is_master", None)
                     ctx.strokes[i].pop("symbol_instance_id", None)
-    elif key == "shape_state_save":
+    elif key == CMD.SHAPE_STATE_SAVE:
         sel = [i for i in sorted(ctx.selected_strokes) if 0 <= i < len(ctx.strokes)]
         if sel:
             ctx.push_undo()
             sid, _sc = ctx._capture_shape_state(ctx.strokes, sel, ctx.shape_states, ctx._shape_state_counter)
             ctx._shape_state_counter = _sc
-    elif key == "shape_state_insert":
+    elif key == CMD.SHAPE_STATE_INSERT:
         ctx.push_undo()
         new_indices, _sc = ctx._insert_shape_state(ctx.strokes, ctx.shape_states, ctx._shape_state_counter, sorted(ctx.selected_strokes))
         ctx._shape_state_counter = _sc
         if new_indices:
             ctx.selected_strokes = set(new_indices)
             ctx.selected_point = None; ctx.selected_curve = None; ctx.selected_curves.clear(); ctx.redrawing_curve = None
-    elif key == "shape_state_delete":
+    elif key == CMD.SHAPE_STATE_DELETE:
         sid = None
         for i in sorted(ctx.selected_strokes):
             if 0 <= i < len(ctx.strokes) and isinstance(ctx.strokes[i], dict) and ctx.strokes[i].get("shape_state_id"):
@@ -235,15 +233,15 @@ def _menu_view(ctx, key):
     return False
 
 def _menu_tools(ctx, key):
-    if key == "workspace":
+    if key == CMD.WORKSPACE:
         ctx.workspace = "library" if ctx.workspace == "draw" else "draw"
         ctx.state["workspace"] = ctx.workspace
-    elif key == "tool_select":
+    elif key == CMD.TOOL_SELECT:
         ctx._bezier_pen_commit_or_cancel()
         ctx.tool_mode = "selection"; ctx.drawing = False; ctx.current_points = []
         ctx.selected_point = None; ctx.drag_last = None; ctx.transform_drag = None
         ctx.curve_cut_mode = False; ctx.eyedropper_pick = False
-    elif key == "tool_eyedropper":
+    elif key == CMD.TOOL_EYEDROPPER:
         ctx._bezier_pen_commit_or_cancel()
         ctx.tool_mode = "selection"; ctx.drawing = False; ctx.current_points = []
         ctx.eyedropper_pick = True
@@ -251,38 +249,38 @@ def _menu_tools(ctx, key):
         ctx.curve_cut_mode = False
         ctx.redrawing_curve = None
         ctx.selected_point = None; ctx.drag_last = None; ctx.transform_drag = None
-    elif key == "tool_pen":
+    elif key == CMD.TOOL_PEN:
         ctx.tool_mode = "draw"; ctx.draw_tool = "pen"; ctx.drawing = False; ctx.current_points = []
         ctx.selected_strokes.clear(); ctx.selected_point = None; ctx.transform_drag = None
         ctx.eyedropper_pick = False
-    elif key == "tool_eraser":
+    elif key == CMD.TOOL_ERASER:
         ctx._bezier_pen_commit_or_cancel()
         ctx.tool_mode = "draw"; ctx.draw_tool = "eraser"; ctx.drawing = False; ctx.current_points = []
         ctx.selected_strokes.clear(); ctx.selected_point = None; ctx.transform_drag = None
         ctx.eyedropper_pick = False
-    elif key == "tool_bucket":
+    elif key == CMD.TOOL_BUCKET:
         ctx._bezier_pen_commit_or_cancel()
         ctx.tool_mode = "draw"; ctx.draw_tool = "bucket"; ctx.drawing = False; ctx.current_points = []
         ctx.selected_strokes.clear(); ctx.selected_point = None; ctx.transform_drag = None
         ctx.eyedropper_pick = False
-    elif key == "tool_cutter":
+    elif key == CMD.TOOL_CUTTER:
         ctx._bezier_pen_commit_or_cancel()
         ctx.tool_mode = "draw"; ctx.draw_tool = "cutter"; ctx.drawing = False; ctx.current_points = []
         ctx.cutting = False; ctx.cut_points = []
         ctx.selected_strokes.clear(); ctx.selected_point = None; ctx.transform_drag = None
         ctx.eyedropper_pick = False
-    elif key == "tool_text":
+    elif key == CMD.TOOL_TEXT:
         ctx._bezier_pen_commit_or_cancel()
         ctx.tool_mode = "draw"; ctx.draw_tool = "text"; ctx.drawing = False; ctx.current_points = []
         ctx.text_entry = None
         ctx.selected_strokes.clear(); ctx.selected_point = None; ctx.transform_drag = None
         ctx.eyedropper_pick = False
-    elif key == "cycle_submode":
+    elif key == CMD.CYCLE_SUBMODE:
         modes = ["transform", "nodes", "curve"]
         ctx.selection_submode = modes[(modes.index(ctx.selection_submode) + 1) % len(modes)] if ctx.selection_submode in modes else "transform"
         ctx.selected_point = None; ctx.selected_curve = None; ctx.selected_curves.clear(); ctx.transform_drag = None; ctx.drag_last = None; ctx.redrawing_curve = None
         ctx.curve_cut_mode = False
-    elif key == "shortcuts":
+    elif key == CMD.SHORTCUTS:
         ctx.help_open = not ctx.help_open
     return True
     return False

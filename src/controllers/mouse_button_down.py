@@ -1,9 +1,8 @@
 """Controller: MOUSEBUTTONDOWN button 1 handler (extracted for SRP)."""
 import copy, math, pygame
 import config as cfg
-from models import *
-from views import *
-from controllers.coordinates import *
+from models import add_guide, hit_guide, mirror_stroke, set_marker  # noqa: F401
+from views import TRACE_ALGORITHMS, TRIANGLE_VARIANTS, export_scene_image, pick_export_image_path  # noqa: F401
 from controllers.mouse_button_down_panel import _handle_panel_click
 from controllers.mouse_button_down_canvas import _handle_canvas_click
 
@@ -23,7 +22,7 @@ def _handle_pre_menu(ctx, event):
         _edr = ctx.state.get("export_dialog_rects", {}) or {}
         _card = _edr.get("card", pygame.Rect(0, 0, 0, 0))
         if isinstance(_card, pygame.Rect) and _card.collidepoint(event.pos):
-            _hit = ctx.next((ctx.k for ctx.k, ctx.r in _edr.items()
+            _hit = next((ctx.k for ctx.k, ctx.r in _edr.items()
                          if ctx.k != "card" and isinstance(ctx.r, pygame.Rect) and ctx.r.collidepoint(event.pos)), None)
             if _hit in ("cancel", "close"):
                 ctx.export_dialog_open = False
@@ -137,13 +136,13 @@ def _handle_menus(ctx, event):
             ctx.state["workspace"] = ctx.workspace
             ctx.menu_open = None
             menu_handled = True
-        hit = ctx.next((ctx.k for ctx.k, ctx.r in ctx.menu_bar_rects.items()
+        hit = next((ctx.k for ctx.k, ctx.r in ctx.menu_bar_rects.items()
                     if ctx.r.collidepoint(event.pos)), None)
         ctx.menu_open = None if hit is None or ctx.menu_open == hit else hit
         ctx.help_open = False
         menu_handled = True
     elif ctx.menu_open is not None:
-        hit = ctx.next((ctx.k for ctx.k, ctx.r in ctx.menu_item_rects.items()
+        hit = next((ctx.k for ctx.k, ctx.r in ctx.menu_item_rects.items()
                     if ctx.r.collidepoint(event.pos)), None)
         if hit is not None:
             ctx.run_menu_action(hit)
@@ -152,7 +151,7 @@ def _handle_menus(ctx, event):
         menu_handled = True
     if ctx.marker_dropdown is not None:
         _mk_items = ctx.state.get("marker_dropdown_item_rects", {}) or {}
-        _mk_hit = ctx.next((ctx.k for ctx.k, ctx.r in _mk_items.items()
+        _mk_hit = next((ctx.k for ctx.k, ctx.r in _mk_items.items()
                         if isinstance(ctx.r, pygame.Rect) and ctx.r.collidepoint(event.pos)), None)
         _mk_anchor = ctx.state.get("marker_start_rect" if ctx.marker_dropdown == "start" else "marker_end_rect", pygame.Rect(0, 0, 0, 0))
         if _mk_hit is not None:
@@ -172,7 +171,7 @@ def _handle_menus(ctx, event):
         ctx.state["marker_dropdown"] = ctx.marker_dropdown
     if ctx.shape_menu_key is not None:
         _menu_items = ctx.state.get("shape_menu_item_rects", {})
-        _menu_hit = ctx.next((ctx.k for ctx.k, ctx.r in _menu_items.items() if ctx.r.collidepoint(event.pos)), None)
+        _menu_hit = next((ctx.k for ctx.k, ctx.r in _menu_items.items() if ctx.r.collidepoint(event.pos)), None)
         if _menu_hit is not None:
             if _menu_hit == "snap":
                 ctx.snap_enabled = not ctx.snap_enabled
@@ -327,7 +326,7 @@ def _handle_toolbar(ctx, event):
         ctx.tool_mode = "selection"; ctx.drawing = False; ctx.current_points = []; ctx.selected_point = None; ctx.drag_last = None; ctx.transform_drag = None; ctx.selection_submode = "transform"
         ctx.curve_cut_mode = False
     elif any(ctx.r.collidepoint(event.pos) for ctx.r in ctx.state.get("draw_shape_rects", {}).values()):
-        _hit_key = ctx.next((ctx.k for ctx.k, ctx.r in ctx.state.get("draw_shape_rects", {}).items() if ctx.r.collidepoint(event.pos)), None)
+        _hit_key = next((ctx.k for ctx.k, ctx.r in ctx.state.get("draw_shape_rects", {}).items() if ctx.r.collidepoint(event.pos)), None)
         if _hit_key is not None:
             _mirror_align = {"mirror_h", "mirror_v", "align_left", "align_hcenter", "align_right", "align_top", "align_vmiddle", "align_bottom"}
             ctx._draw_keys = {ctx.k for ctx.k, _ in ctx.DRAW_SHAPES} | {ctx.k for ctx.k, _ in ctx.BOTTOM_TOOLS}

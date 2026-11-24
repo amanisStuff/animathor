@@ -1,9 +1,9 @@
 """Render frame (extracted for SRP)."""
 import copy, math, pygame
 import config as cfg
-from models import *
-from views import *
-from controllers.coordinates import *
+from config import RULER_BG_RGB, RULER_SIZE, RULER_TEXT_RGB, RULER_TICK_RGB  # noqa: F401
+from models import combined_obb, grid_positions, normalize_rect, ruler_ticks  # noqa: F401
+from views import BORDER_WIDTH, CANVAS_BACKDROP, CUT_COLOR, CUT_HANDLE_RADIUS, EDITOR_LINE_WIDTH_BOLD, PANEL_BORDER, SELECTION_BORDER, SELECTION_FILL, SURFACE, draw_bottom_shape_toolbar, draw_export_dialog, draw_left_toolbar, draw_marker_dropdown, draw_menu_bar, draw_panel, draw_panel_toggle, draw_scene, draw_shape_context_menu, draw_shortcuts_overlay, surface_to_pygame  # noqa: F401
 
 def render_frame(ctx):
     # Draw scene (Cairo) and blit at canvas offset
@@ -336,6 +336,5 @@ def render_frame(ctx):
     pygame.display.flip()
     ctx.clock.tick(120)
 
-    pygame.quit()
     return 0
     return None

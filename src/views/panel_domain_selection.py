@@ -1,4 +1,5 @@
 """View: panel_select split parts (SRP)."""
+from panel_rects import publish_rect  # noqa: E402
 
 import math
 import pygame
@@ -141,9 +142,9 @@ def render_selection_a(screen, fonts, mouse_pos, state, x, y, _button, _queue_ti
     pr = pygame.Rect(vx, y, btn_w, 28)
     vr = pygame.Rect(vx + btn_w + 4, y, vw, 28)
     nr = pygame.Rect(vr.right + 4, y, btn_w, 28)
-    state["nodes_mode_prev_rect"] = pr
-    state["nodes_mode_next_rect"] = nr
-    state["nodes_toggle_rect"] = pygame.Rect(0, 0, 0, 0)
+    publish_rect(state, "nodes_mode_prev_rect", pr)
+    publish_rect(state, "nodes_mode_next_rect", nr)
+    publish_rect(state, "nodes_toggle_rect", pygame.Rect(0, 0, 0, 0))
     _button(pr, "<", font_=font_small)
     _button(vr, mode_labels.get(submode, "Transform"))
     _button(nr, ">", font_=font_small)
@@ -152,7 +153,7 @@ def render_selection_a(screen, fonts, mouse_pos, state, x, y, _button, _queue_ti
     # Eyedropper (pick style) - tool within selection panel
     pick_active = bool(state.get("eyedropper_pick"))
     ed_rect = pygame.Rect(x, y, PANEL_W - 40, 28)
-    state["eyedropper_rect"] = ed_rect
+    publish_rect(state, "eyedropper_rect", ed_rect)
     ed_label = "Eyedropper: click a stroke..." if pick_active else "Eyedropper - pick style (I)"
     _button(ed_rect, ed_label, active=pick_active, icon="eyedropper")
     _queue_tip(ed_rect, "eyedropper")
@@ -181,10 +182,10 @@ def render_selection_a(screen, fonts, mouse_pos, state, x, y, _button, _queue_ti
                 _queue_tip(r, icon_name)
             y += 2 * 28 + 8
     else:
-            state["elev_front_rect"] = pygame.Rect(0,0,0,0)
-            state["elev_forward_rect"] = pygame.Rect(0,0,0,0)
-            state["elev_backward_rect"] = pygame.Rect(0,0,0,0)
-            state["elev_back_rect"] = pygame.Rect(0,0,0,0)
+            publish_rect(state, "elev_front_rect", pygame.Rect(0,0,0,0))
+            publish_rect(state, "elev_forward_rect", pygame.Rect(0,0,0,0))
+            publish_rect(state, "elev_backward_rect", pygame.Rect(0,0,0,0))
+            publish_rect(state, "elev_back_rect", pygame.Rect(0,0,0,0))
 
     # Text controls: shown when exactly one editable text object is selected.
     for _k in ("text_edit_rect", "text_font_rect",
@@ -197,12 +198,12 @@ def render_selection_a(screen, fonts, mouse_pos, state, x, y, _button, _queue_ti
             content = str(_txt_obj.get("text_content", ""))
             shown = content if len(content) <= 26 else content[:25] + "..."
             er = pygame.Rect(x, y, PANEL_W - 40, 24)
-            state["text_edit_rect"] = er
+            publish_rect(state, "text_edit_rect", er)
             _button(er, f"Edit: \"{shown}\"")
             _queue_tip(er, None, "Re-edit text content")
             y += 28
             fr = pygame.Rect(x, y, PANEL_W - 40, 24)
-            state["text_font_rect"] = fr
+            publish_rect(state, "text_font_rect", fr)
             _button(fr, f"Font: {_txt_obj.get('font_family', 'Sans')}")
             _queue_tip(fr, None, "Cycle font family")
             y += 28
@@ -210,8 +211,8 @@ def render_selection_a(screen, fonts, mouse_pos, state, x, y, _button, _queue_ti
             fhalf = (PANEL_W - 40 - fgap) // 2
             smr = pygame.Rect(x, y, fhalf, 24)
             spr = pygame.Rect(x + fhalf + fgap, y, fhalf, 24)
-            state["text_size_minus_rect"] = smr
-            state["text_size_plus_rect"] = spr
+            publish_rect(state, "text_size_minus_rect", smr)
+            publish_rect(state, "text_size_plus_rect", spr)
             _button(smr, "A-", font_=font_small)
             _button(spr, "A+", font_=font_small)
             _queue_tip(smr, None, "Decrease font size")
@@ -224,12 +225,12 @@ def render_selection_a(screen, fonts, mouse_pos, state, x, y, _button, _queue_ti
             onp = _txt_obj.get("text_path")
             if isinstance(onp, dict) and onp.get("segs"):
                 opr = pygame.Rect(x, y, PANEL_W - 40, 24)
-                state["text_off_path_rect"] = opr
+                publish_rect(state, "text_off_path_rect", opr)
                 _button(opr, "Remove from Path")
                 _queue_tip(opr, None, "Reflow text back to a straight baseline")
                 y += 28
             else:
-                state["text_off_path_rect"] = pygame.Rect(0, 0, 0, 0)
+                publish_rect(state, "text_off_path_rect", pygame.Rect(0, 0, 0, 0))
             # Put on Path shown when 2 selected (text + path) - handled via state hint or selection info
             _can_put_on_path = False
             if sel_count == 2:
@@ -243,12 +244,12 @@ def render_selection_a(screen, fonts, mouse_pos, state, x, y, _button, _queue_ti
                                 _can_put_on_path = True
             if _can_put_on_path:
                 ppr = pygame.Rect(x, y, PANEL_W - 40, 24)
-                state["text_on_path_rect"] = ppr
+                publish_rect(state, "text_on_path_rect", ppr)
                 _button(ppr, "Put on Path")
                 _queue_tip(ppr, None, "Flow this text along the other selected path")
                 y += 28
             else:
-                state["text_on_path_rect"] = pygame.Rect(0, 0, 0, 0)
+                publish_rect(state, "text_on_path_rect", pygame.Rect(0, 0, 0, 0))
     else:
             for _k in ("text_edit_rect", "text_font_rect",
                        "text_size_minus_rect", "text_size_plus_rect",
@@ -365,14 +366,14 @@ def render_selection_a(screen, fonts, mouse_pos, state, x, y, _button, _queue_ti
                 _queue_tip(ar, icon_name)
             y += 2 * 26 + 8
     else:
-            state["mirror_h_rect"] = pygame.Rect(0, 0, 0, 0)
-            state["mirror_v_rect"] = pygame.Rect(0, 0, 0, 0)
-            state["align_left_rect"] = pygame.Rect(0, 0, 0, 0)
-            state["align_hcenter_rect"] = pygame.Rect(0, 0, 0, 0)
-            state["align_right_rect"] = pygame.Rect(0, 0, 0, 0)
-            state["align_top_rect"] = pygame.Rect(0, 0, 0, 0)
-            state["align_vmiddle_rect"] = pygame.Rect(0, 0, 0, 0)
-            state["align_bottom_rect"] = pygame.Rect(0, 0, 0, 0)
+            publish_rect(state, "mirror_h_rect", pygame.Rect(0, 0, 0, 0))
+            publish_rect(state, "mirror_v_rect", pygame.Rect(0, 0, 0, 0))
+            publish_rect(state, "align_left_rect", pygame.Rect(0, 0, 0, 0))
+            publish_rect(state, "align_hcenter_rect", pygame.Rect(0, 0, 0, 0))
+            publish_rect(state, "align_right_rect", pygame.Rect(0, 0, 0, 0))
+            publish_rect(state, "align_top_rect", pygame.Rect(0, 0, 0, 0))
+            publish_rect(state, "align_vmiddle_rect", pygame.Rect(0, 0, 0, 0))
+            publish_rect(state, "align_bottom_rect", pygame.Rect(0, 0, 0, 0))
 
     # Even distribution (transform mode, 3+ selected shapes).
     DIST_KEYS = ("distribute_h_rect", "distribute_v_rect")

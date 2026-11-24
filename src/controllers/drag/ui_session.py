@@ -31,18 +31,20 @@ class UiDragSession(DragSession):
         return False
 
     def end(self, ctx, event):
-        # Cleanup is handled by mouse_button_up/_cleanup_mouseup; keep idempotent.
-        for k in _UI_DRAG_FLAGS:
+        # Own the full UI-drag cleanup: mirror cleared flags into state, then
+        # clear the ctx flags (idempotent, safe to call from mouse-up cleanup
+        # even when DragManager never began a session this frame).
+        for k in ('obj_opacity_drag', 'picker_drag_sv', 'picker_drag_hue',
+                  'picker_drag_alpha', 'fill_stop_pos_drag'):
             if hasattr(ctx, k):
-                if k == 'bucket_picker_drag':
-                    ctx.bucket_picker_drag = None
-                elif k == 'wave_slider_drag':
-                    ctx.wave_slider_drag = None
-                else:
-                    setattr(ctx, k, False)
-        ctx.state["obj_opacity_drag"] = bool(getattr(ctx, 'obj_opacity_drag', False))
-        ctx.state["picker_drag_sv"] = bool(getattr(ctx, 'picker_drag_sv', False))
-        ctx.state["picker_drag_hue"] = bool(getattr(ctx, 'picker_drag_hue', False))
-        ctx.state["picker_drag_alpha"] = bool(getattr(ctx, 'picker_drag_alpha', False))
-        ctx.state["fill_stop_pos_drag"] = bool(getattr(ctx, 'fill_stop_pos_drag', False))
+                ctx.state[k] = False
+        for k in _UI_DRAG_FLAGS:
+            if not hasattr(ctx, k):
+                continue
+            if k == 'bucket_picker_drag':
+                ctx.bucket_picker_drag = None
+            elif k == 'wave_slider_drag':
+                ctx.wave_slider_drag = None
+            else:
+                setattr(ctx, k, False)
         return True

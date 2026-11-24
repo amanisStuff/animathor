@@ -1,5 +1,6 @@
 """View: panel_select parts B (SRP)."""
 """View: panel section (split for complexity)."""
+from panel_rects import publish_rect  # noqa: E402
 import math
 import pygame
 import config as cfg
@@ -70,7 +71,7 @@ def render_path_section(screen, fonts, mouse_pos, state, x, y, _button, _queue_t
             _queue_tip(pr, None, plabel)
         y += 28 * 3
         expand_r = pygame.Rect(x, y, PANEL_W - 40, 24)
-        state["path_expand_rect"] = expand_r
+        publish_rect(state, "path_expand_rect", expand_r)
         _button(expand_r, "Expand Stroke")
         _queue_tip(expand_r, None, "Expand stroke into a filled outline")
         y += 28 + 8
@@ -110,10 +111,10 @@ def render_multi_curve_section(screen, fonts, state, x, y, _button, _queue_tip, 
         screen.blit(font_small.render(f"Selected curves: {len(sel_curves_panel)}", True, MUTED_COLOR), (x, y)); y += 22
         screen.blit(font_small.render("Shift+click to add or remove curves.", True, MUTED_COLOR), (x, y)); y += 20
         join_rect = pygame.Rect(x, y, PANEL_W - 40, 30)
-        state["curve_join_rect"] = join_rect
-        state["curve_hide_rect"] = pygame.Rect(0,0,0,0)
-        state["curve_redraw_rect"] = pygame.Rect(0,0,0,0)
-        state["curve_cut_rect"] = pygame.Rect(0,0,0,0)
+        publish_rect(state, "curve_join_rect", join_rect)
+        publish_rect(state, "curve_hide_rect", pygame.Rect(0,0,0,0))
+        publish_rect(state, "curve_redraw_rect", pygame.Rect(0,0,0,0))
+        publish_rect(state, "curve_cut_rect", pygame.Rect(0,0,0,0))
         _button(join_rect, "Join curves")
         _queue_tip(join_rect, None, "Join selected curves (adjacent components)")
         y += 38
@@ -124,10 +125,10 @@ def render_multi_curve_section(screen, fonts, state, x, y, _button, _queue_tip, 
                   "wave_formula_rect","wave_custom_box_rect","wave_smooth_rect","wave_clear_rect","wave_done_rect",
                   "repeat_pick_curve_rect","wave_reverse_rect","wave_clamp_rect"):
             state[k] = pygame.Rect(0,0,0,0)
-        state["wave_slider_rects"] = {}
-        state["wave_shape_rects"] = {}
-        state["displacement_profile_rects"] = {}
-        state["wave_row_rects"] = []
+        publish_rect(state, "wave_slider_rects", {})
+        publish_rect(state, "wave_shape_rects", {})
+        publish_rect(state, "displacement_profile_rects", {})
+        publish_rect(state, "wave_row_rects", [])
     return y
 
 

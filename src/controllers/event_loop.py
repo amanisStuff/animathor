@@ -1,9 +1,7 @@
 """Event loop (extracted for SRP)."""
 import copy, math, pygame
 import config as cfg
-from models import *
-from views import *
-from controllers.coordinates import *
+from models import set_point_width  # noqa: F401
 
 
 def _sync_all(ctx, src):
@@ -87,7 +85,7 @@ def process_events(ctx):
                 comp_style_target = (scv[0], scv[1])
         point_style_target = None
         if ctx.tool_mode == "selection" and ctx.selection_submode == "nodes" and ctx.selected_point and len(ctx.selected_strokes) == 1:
-            ctx.si = ctx.next(iter(ctx.selected_strokes))
+            ctx.si = next(iter(ctx.selected_strokes))
             seg_i, pname = ctx.selected_point
             if pname in ("p0", "p3") and 0 <= ctx.si < len(ctx.strokes):
                 point_style_target = (ctx.si, seg_i, pname)
@@ -138,7 +136,7 @@ def process_events(ctx):
                 continue
             # Right-click a bottom-bar shape tool: its options popup above the button.
             _shape_rects = ctx.state.get("draw_shape_rects", {})
-            _rc_hit = ctx.next((ctx.k for ctx.k, ctx.r in _shape_rects.items() if ctx.r.collidepoint(ctx.event.pos)), None)
+            _rc_hit = next((ctx.k for ctx.k, ctx.r in _shape_rects.items() if ctx.r.collidepoint(ctx.event.pos)), None)
             _draw_keys = {ctx.k for ctx.k, ctx._ in ctx.DRAW_SHAPES} | {ctx.k for ctx.k, ctx._ in ctx.BOTTOM_TOOLS}
             if _rc_hit is not None and ctx.tool_mode == "draw" and _rc_hit in _draw_keys:
                 if ctx.shape_menu_key == _rc_hit:
@@ -152,13 +150,8 @@ def process_events(ctx):
             ctx.state["shape_menu_key"] = ctx.shape_menu_key
             ctx.state["shape_menu_anchor"] = ctx.shape_menu_anchor
         elif ctx.event.type == pygame.MOUSEBUTTONDOWN and ctx.event.button == 1:
+            # Bezier pen begin is owned by BezierPenSession via tools/draw_mode.
             _r = _ev_mbd1(ctx)
-            dm = getattr(ctx, 'drag_manager', None)
-            if dm is not None and dm.active is None:
-                if (ctx.tool_mode == 'draw' and ctx.draw_tool == 'pen'
-                        and ctx.draw_shape == 'pen' and ctx.bezier_pen is not None):
-                    from controllers.drag.bezier_session import BezierPenSession
-                    dm.begin(BezierPenSession(), ctx, ctx.event)
             if _r == 'continue': continue
         elif ctx.event.type == pygame.MOUSEMOTION:
             dm = getattr(ctx, 'drag_manager', None)

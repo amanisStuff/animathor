@@ -1,14 +1,12 @@
 """File menu commands."""
 
+from controllers.commands import ids as CMD  # noqa: E402
 import copy
 import config as cfg
-from models import *  # noqa: F401,F403
-from views import *  # noqa: F401,F403
-from controllers.coordinates import *  # noqa: F401,F403
 
 
 def handle_file_command(ctx, key):
-    if key == "new":
+    if key == CMD.NEW:
         ctx._bezier_pen_cancel()
         ctx.push_undo()
         ctx.strokes.clear()
@@ -23,7 +21,7 @@ def handle_file_command(ctx, key):
         ctx.shape_states = {}
         ctx._shape_state_counter = 0
         return True
-    if key == "save":
+    if key == CMD.SAVE:
         try:
             if ctx.document_path is None:
                 ctx.document_path = ctx.pick_save_document_path()
@@ -32,7 +30,7 @@ def handle_file_command(ctx, key):
         except Exception:
             pass
         return True
-    if key == "save_as":
+    if key == CMD.SAVE_AS:
         try:
             path = ctx.pick_save_document_path()
             if path:
@@ -41,7 +39,7 @@ def handle_file_command(ctx, key):
         except Exception:
             pass
         return True
-    if key == "open":
+    if key == CMD.OPEN:
         try:
             path = ctx.pick_open_document_path()
             if path:
@@ -92,7 +90,7 @@ def handle_file_command(ctx, key):
         except Exception:
             pass
         return True
-    if key == "import_svg":
+    if key == CMD.IMPORT_SVG:
         try:
             path = ctx.pick_import_svg_path()
             if path:
@@ -114,11 +112,11 @@ def handle_file_command(ctx, key):
         except Exception:
             pass
         return True
-    if key == "export":
+    if key == CMD.EXPORT:
         ctx.export_dialog_open = True
         ctx.help_open = False
         return True
-    if key == "quit":
+    if key == CMD.QUIT:
         ctx.running = False
         return True
     return False

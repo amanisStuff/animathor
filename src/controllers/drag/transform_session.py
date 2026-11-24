@@ -125,6 +125,14 @@ class TransformDragSession(DragSession):
         return True
 
     def end(self, ctx, event):
-        from controllers.commit.selection_commit import commit_transform_toggle
-        commit_transform_toggle(ctx, event)
+        """Own transform-release: pan/pivot cleanup and click-toggle mode."""
+        if ctx.pan_drag is not None and getattr(ctx, 'space_panning', False):
+            ctx.pan_drag = None
+        ctx.pivot_drag = None
+        if ctx.pending_transform_toggle is not None and ctx.tool_mode == "selection" and ctx.selection_submode == "transform":
+            if not ctx.pending_transform_toggle.get("moved") and ctx.selected_strokes:
+                ctx.transform_handle_mode = "rotate" if ctx.transform_handle_mode == "scale" else "scale"
+            ctx.pending_transform_toggle = None
+        ctx.transform_drag = None
+        ctx.gradient_drag = None
         return True

@@ -1,9 +1,7 @@
 """Guide drag commit."""
 
 import pygame
-from models import *  # noqa: F401,F403
-from views import *  # noqa: F401,F403
-from controllers.coordinates import *  # noqa: F401,F403
+from models import remove_guide  # noqa: F401
 import config as cfg
 
 

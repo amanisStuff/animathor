@@ -1,9 +1,6 @@
 """Split helpers for mouse_motion (SRP)."""
 import copy, math, pygame
 import config as cfg
-from models import *
-from views import *
-from controllers.coordinates import *
 
 
 def mm_part1(ctx, event):

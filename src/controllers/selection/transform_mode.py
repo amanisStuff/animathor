@@ -3,9 +3,7 @@
 import copy
 import math
 import pygame
-from models import *  # noqa: F401,F403
-from views import *  # noqa: F401,F403
-from controllers.coordinates import *  # noqa: F401,F403
+from models import group_id_of, group_members, hit_test_bbox_handle, hit_test_stroke, point_in_bbox  # noqa: F401
 
 
 def handle_transform_mode(ctx, event):

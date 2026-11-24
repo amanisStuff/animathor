@@ -1,9 +1,7 @@
 """Draw/eraser mouse-up commit."""
 
 import pygame
-from models import *  # noqa: F401,F403
-from views import *  # noqa: F401,F403
-from controllers.coordinates import *  # noqa: F401,F403
+from models import finalize_drawing_points, shape_from_doodle, stroke_to_beziers  # noqa: F401
 
 
 def commit_draw(ctx, event):

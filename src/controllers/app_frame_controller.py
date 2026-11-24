@@ -39,10 +39,30 @@ def _write_back(frame):
         pass
 
 
+def _build_ctx(frame, loc):
+    """Build handler ctx with typed ``AppState`` as the authoritative snapshot.
+
+    Legacy frame locals are captured into ``AppState`` first, then typed fields
+    override ctx values at dispatch, so handlers always see typed-owned state.
+    """
+    app_state = loc.get('app_state')
+    if app_state is not None and hasattr(app_state, 'to_locals_dict'):
+        try:
+            # Typed state is authoritative: do NOT seed it from legacy locals
+            # here. main() captures its direct local mutations once at frame
+            # start; handlers refresh typed state after dispatch.
+            return _types.SimpleNamespace(
+                **{**frame.f_globals, **loc, **app_state.to_locals_dict()}
+            )
+        except Exception:
+            pass
+    return _types.SimpleNamespace(**{**frame.f_globals, **loc})
+
+
 def process_event_frame(frame_locals=None):
     frame = sys._getframe(1)
     loc = frame.f_locals if frame_locals is None else frame_locals
-    ctx = _types.SimpleNamespace(**loc)
+    ctx = _build_ctx(frame, loc)
     from controllers.event_loop import process_events as _pe
     _pe(ctx)
     if _sync_back(ctx, loc):
@@ -59,7 +79,7 @@ def process_event_frame(frame_locals=None):
 def render_frame_frame(frame_locals=None):
     frame = sys._getframe(1)
     loc = frame.f_locals if frame_locals is None else frame_locals
-    ctx = _types.SimpleNamespace(**loc)
+    ctx = _build_ctx(frame, loc)
     from controllers.render_frame import render_frame as _rf
     _rf(ctx)
     if _sync_back(ctx, loc):
@@ -138,7 +158,7 @@ def init_ui_caches(frame_locals=None):
     """Initialize UI rect caches/drag flags in main() locals for SRP."""
     frame = sys._getframe(1)
     loc = frame.f_locals if frame_locals is None else frame_locals
-    pg = loc.get("pygame")
+    pg = loc.get("pygame") or frame.f_globals.get("pygame")
     R = pg.Rect
     DS = loc.get("DRAW_SHAPES") or frame.f_globals.get("DRAW_SHAPES") or []
     BT = loc.get("BOTTOM_TOOLS") or frame.f_globals.get("BOTTOM_TOOLS") or []

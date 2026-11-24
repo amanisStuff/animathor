@@ -2,9 +2,7 @@
 
 import math
 import pygame
-from models import *  # noqa: F401,F403
-from views import *  # noqa: F401,F403
-from controllers.coordinates import *  # noqa: F401,F403
+from models import draw_snap_point, erase_curve_at, hit_test_stroke  # noqa: F401
 
 
 def handle_draw_mode(ctx, event):
@@ -81,33 +79,14 @@ def handle_draw_mode(ctx, event):
         return 'handled'
 
     if ctx.draw_tool == "pen" and ctx.draw_shape == "pen":
-        # Bezier pen: click-to-place anchors, drag handles.
-        ctx.shift_held = bool(ctx.mods & pygame.KMOD_SHIFT)
-        ctx.pos = draw_snap_point(ctx.cpos, ctx.strokes, ctx.snap_radius(), ctx.shift_held)
-        if ctx.pos is None:
-            ctx.pos = ctx.snap_world(ctx.cpos)
+        # Bezier pen pointer-down is owned by BezierPenSession (Phase 4).
+        from controllers.drag.bezier_session import BezierPenSession
+        session = BezierPenSession()
+        dm = getattr(ctx, 'drag_manager', None)
+        if dm is not None:
+            dm.begin(session, ctx, event)
         else:
-            ctx.pos = ctx.snap_world(ctx.pos)
-        now = pygame.time.get_ticks()
-        is_double = (now - ctx._bezier_last_click.get("time", 0) < 400 and
-                     math.hypot(ctx.pos[0] - ctx._bezier_last_click.get("pos", (1e9, 1e9))[0],
-                                 ctx.pos[1] - ctx._bezier_last_click.get("pos", (1e9, 1e9))[1]) < 8.0)
-        if ctx.bezier_pen and ctx._bezier_pen_near_first(ctx.pos, max(10.0, float(ctx.snap_radius() or 0))) and len(ctx.bezier_pen.get("anchors", [])) >= 3:
-            # Close path: drag on first anchor adjusts its handles, finalize on mouseup.
-            ctx.first = ctx.bezier_pen["anchors"][0]
-            ctx.bezier_pen["mouse_down"] = True
-            ctx.bezier_pen["dragging"] = True
-            ctx.bezier_pen["dragging_first"] = True
-            ctx.bezier_pen["down_pos"] = ctx.first["pt"]
-            ctx.bezier_pen["preview_pt"] = ctx.pos
-        elif is_double and ctx.bezier_pen and len(ctx.bezier_pen.get("anchors", [])) >= 2:
-            ctx._bezier_pen_finish(close_path=False)
-        else:
-            ctx._bezier_pen_add_anchor(ctx.pos)
-        ctx._bezier_last_click["time"] = now
-        ctx._bezier_last_click["pos"] = ctx.pos
-        ctx.drawing = False
-        ctx.current_points = []
+            session.begin(ctx, event)
         return 'handled'
 
     # If starting a non-bezier drawing gesture, cancel unfinished bezier path.

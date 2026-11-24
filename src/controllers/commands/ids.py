@@ -1,44 +1,14 @@
-"""Command IDs shared by menus, shortcuts, and UI actions."""
+"""Command IDs shared by menus, shortcuts, and UI actions.
 
-# File
-NEW = "new"
-SAVE = "save"
-SAVE_AS = "save_as"
-OPEN = "open"
-IMPORT_SVG = "import_svg"
-EXPORT = "export"
-QUIT = "quit"
+Compatibility re-export: canonical IDs now live in the neutral ``command_ids``
+module so views and controllers single-source them without a package cycle.
+"""
 
-# Edit
-UNDO = "undo"
-REDO = "redo"
-SELECT_ALL = "select_all"
-DUPLICATE = "duplicate"
-GROUP = "group"
-UNGROUP = "ungroup"
-COPY = "copy"
-CUT = "cut"
-PASTE = "paste"
-DELETE = "delete"
-
-# View / tools
-TOOL_SELECT = "tool_select"
-TOOL_EYEDROPPER = "tool_eyedropper"
-TOOL_PEN = "tool_pen"
-TOOL_ERASER = "tool_eraser"
-TOOL_BUCKET = "tool_bucket"
-TOOL_CUTTER = "tool_cutter"
-TOOL_TEXT = "tool_text"
-TOGGLE_SNAP = "toggle_snap"
-TOGGLE_GRID = "toggle_grid"
-TOGGLE_RULERS = "toggle_rulers"
-FIT = "fit"
-ACTUAL_SIZE = "actual_size"
-CYCLE_SUBMODE = "cycle_submode"
-
-ALL_COMMAND_IDS = {
-    NEW, SAVE, SAVE_AS, OPEN, IMPORT_SVG, EXPORT, QUIT,
-    UNDO, REDO, SELECT_ALL, DUPLICATE, GROUP, UNGROUP, COPY, CUT, PASTE, DELETE,
-    TOOL_SELECT, TOOL_EYEDROPPER, TOOL_PEN, TOOL_ERASER, TOOL_BUCKET, TOOL_CUTTER, TOOL_TEXT,
-    TOGGLE_SNAP, TOGGLE_GRID, TOGGLE_RULERS, FIT, ACTUAL_SIZE, CYCLE_SUBMODE,
-}
+from command_ids import (
+    ACTUAL_SIZE, ALL_COMMAND_IDS, ARTBOARD_ADD, ARTBOARD_FIT_SELECTION, ARTBOARD_NEXT, ARTBOARD_REMOVE, CLEAR_GUIDES, COPY,
+    CUT, CYCLE_SUBMODE, DELETE, DUPLICATE, EXPORT, FIT, GROUP, IMPORT_SVG,
+    NEW, OPEN, PASTE, QUIT, REDO, SAVE, SAVE_AS, SELECT_ALL,
+    SHAPE_STATE_DELETE, SHAPE_STATE_INSERT, SHAPE_STATE_SAVE, SHORTCUTS, SYMBOL_CREATE, SYMBOL_DETACH, SYMBOL_INSERT, SYMBOL_UPDATE,
+    TOGGLE_GRID, TOGGLE_GRID_SNAP, TOGGLE_PANEL, TOGGLE_RULERS, TOGGLE_SNAP, TOOL_BUCKET, TOOL_CUTTER, TOOL_ERASER,
+    TOOL_EYEDROPPER, TOOL_PEN, TOOL_SELECT, TOOL_TEXT, UNDO, UNGROUP, WORKSPACE,
+)  # noqa: F401  # noqa: F401,F403

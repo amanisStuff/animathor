@@ -1,4 +1,4 @@
-"""Color/fill panel actions - tabs/stops/picker domain (semantic)."""
+"""Fill type / gradient stops / picker panel actions (part C)."""
 import pygame
 
 from models.geometry import (
@@ -245,7 +245,7 @@ def handle_c_stops(ctx, event):
 def handle_c_picker(ctx, event):
     if ctx.color_target == "fill" and ctx._c_comp_style_target is None and any(ctx.r.collidepoint(event.pos) for ctx.r in (ctx.state.get("fill_stop_rects") or {}).values()):
         ctx.items = list((ctx.state.get("fill_stop_rects") or {}).items())
-        skey = ctx.next((ctx.k for ctx.k, ctx.r in reversed(ctx.items) if ctx.r.collidepoint(event.pos)), None)
+        skey = next((ctx.k for ctx.k, ctx.r in reversed(ctx.items) if ctx.r.collidepoint(event.pos)), None)
         if skey is not None:
             try:
                 ctx.state["fill_gradient_stop"] = int(skey)

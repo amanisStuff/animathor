@@ -1,5 +1,6 @@
 """View: panel_select parts B (SRP)."""
 """View: panel section (split for complexity)."""
+from panel_rects import publish_rect  # noqa: E402
 import math
 import pygame
 import config as cfg
@@ -88,9 +89,9 @@ def _part_b2b_main(c):
             btn_w = (total_w - btn_gap) // 2
             redraw_rect = pygame.Rect(x, y, btn_w, 30)
             cut_rect = pygame.Rect(x + btn_w + btn_gap, y, total_w - btn_w - btn_gap, 30)
-            state["curve_hide_rect"] = pygame.Rect(0,0,0,0)
-            state["curve_redraw_rect"] = redraw_rect
-            state["curve_cut_rect"] = cut_rect
+            publish_rect(state, "curve_hide_rect", pygame.Rect(0,0,0,0))
+            publish_rect(state, "curve_redraw_rect", redraw_rect)
+            publish_rect(state, "curve_cut_rect", cut_rect)
             _button(redraw_rect, "Redraw", icon="curve_redraw")
             _queue_tip(redraw_rect, "curve_redraw")
             cut_active = bool(state.get("curve_cut_mode"))
@@ -132,30 +133,30 @@ def _part_b2b_main(c):
             if has_dist:
                 header_label += f" ({n_dist})"
             hdr_rect = pygame.Rect(x, y, PANEL_W - 40, 22)
-            state["wave_list_header_rect"] = hdr_rect
+            publish_rect(state, "wave_list_header_rect", hdr_rect)
             hbg = BUTTON_HOVER if hdr_rect.collidepoint(mouse_pos) else None
             if hbg:
                 pygame.draw.rect(screen, hbg, hdr_rect, border_radius=RADIUS_MD)
             screen.blit(font_small.render(header_label, True, TEXT_COLOR), (x + 4, y + 3))
             y += 24
 
-            state["wave_add_rect"] = pygame.Rect(0,0,0,0)
-            state["displacement_add_rect"] = pygame.Rect(0,0,0,0)
-            state["wave_remove_rect"] = pygame.Rect(0,0,0,0)
-            state["wave_bake_rect"] = pygame.Rect(0,0,0,0)
-            state["wave_toggle_rect"] = pygame.Rect(0,0,0,0)
-            state["wave_slider_rects"] = {}
-            state["wave_shape_rects"] = {}
-            state["displacement_profile_rects"] = {}
-            state["wave_row_rects"] = []
-            state["wave_formula_rect"] = pygame.Rect(0,0,0,0)
-            state["wave_custom_box_rect"] = pygame.Rect(0,0,0,0)
-            state["wave_smooth_rect"] = pygame.Rect(0,0,0,0)
-            state["wave_clear_rect"] = pygame.Rect(0,0,0,0)
-            state["wave_done_rect"] = pygame.Rect(0,0,0,0)
-            state["repeat_pick_curve_rect"] = pygame.Rect(0,0,0,0)
-            state["wave_reverse_rect"] = pygame.Rect(0,0,0,0)
-            state["wave_clamp_rect"] = pygame.Rect(0,0,0,0)
+            publish_rect(state, "wave_add_rect", pygame.Rect(0,0,0,0))
+            publish_rect(state, "displacement_add_rect", pygame.Rect(0,0,0,0))
+            publish_rect(state, "wave_remove_rect", pygame.Rect(0,0,0,0))
+            publish_rect(state, "wave_bake_rect", pygame.Rect(0,0,0,0))
+            publish_rect(state, "wave_toggle_rect", pygame.Rect(0,0,0,0))
+            publish_rect(state, "wave_slider_rects", {})
+            publish_rect(state, "wave_shape_rects", {})
+            publish_rect(state, "displacement_profile_rects", {})
+            publish_rect(state, "wave_row_rects", [])
+            publish_rect(state, "wave_formula_rect", pygame.Rect(0,0,0,0))
+            publish_rect(state, "wave_custom_box_rect", pygame.Rect(0,0,0,0))
+            publish_rect(state, "wave_smooth_rect", pygame.Rect(0,0,0,0))
+            publish_rect(state, "wave_clear_rect", pygame.Rect(0,0,0,0))
+            publish_rect(state, "wave_done_rect", pygame.Rect(0,0,0,0))
+            publish_rect(state, "repeat_pick_curve_rect", pygame.Rect(0,0,0,0))
+            publish_rect(state, "wave_reverse_rect", pygame.Rect(0,0,0,0))
+            publish_rect(state, "wave_clamp_rect", pygame.Rect(0,0,0,0))
 
             def _draw_add_style_buttons(x0, y0):
                 # Add buttons: wave distortion, displacement, repeat curve, thickness
@@ -168,10 +169,10 @@ def _part_b2b_main(c):
                 for rect, key, label in ((w_rect, "wave_add", "Wave"), (d_rect, "displacement_add", "Displace"), (r_rect, "repeat_add", "Repeat"), (t_rect, "thickness_add", "Thick")):
                     _button(rect, label, icon=key)
                     _queue_tip(rect, key)
-                state["wave_add_rect"] = w_rect
-                state["displacement_add_rect"] = d_rect
-                state["repeat_add_rect"] = r_rect
-                state["thickness_add_rect"] = t_rect
+                publish_rect(state, "wave_add_rect", w_rect)
+                publish_rect(state, "displacement_add_rect", d_rect)
+                publish_rect(state, "repeat_add_rect", r_rect)
+                publish_rect(state, "thickness_add_rect", t_rect)
                 return y0 + 30
 
             if collapsed:
@@ -213,8 +214,8 @@ def _part_b2b_main(c):
                     if is_active:
                         tog_rect = pygame.Rect(row.right - 74, row.y + 3, 46, row_h - 6)
                         rem_rect = pygame.Rect(row.right - 26, row.y + 3, 22, row_h - 6)
-                        state["wave_toggle_rect"] = tog_rect
-                        state["wave_remove_rect"] = rem_rect
+                        publish_rect(state, "wave_toggle_rect", tog_rect)
+                        publish_rect(state, "wave_remove_rect", rem_rect)
                         draw_toggle(screen, tog_rect, sv_on, font_small, mouse_pos=mouse_pos)
                         _queue_tip(tog_rect, "wave_toggle")
                         draw_button(screen, rem_rect, "\u00d7", font_small,
@@ -254,7 +255,7 @@ def _part_b2b_main(c):
                 bake_rect = pygame.Rect(x, y, PANEL_W - 40, 24)
                 _button(bake_rect, "Bake styles", icon="wave_apply")
                 _queue_tip(bake_rect, "wave_apply")
-                state["wave_bake_rect"] = bake_rect
+                publish_rect(state, "wave_bake_rect", bake_rect)
                 y += 30
                 y += 2
 
@@ -301,58 +302,58 @@ def _part_b2b_main(c):
                 screen.blit(font_small.render("No curve styles added", True, MUTED_COLOR), (x, y)); y += 18
         else:
             screen.blit(font_small.render("Click a stroke to edit separately", True, MUTED_COLOR), (x, y)); y += 24
-            state["curve_hide_rect"] = pygame.Rect(0,0,0,0)
-            state["curve_redraw_rect"] = pygame.Rect(0,0,0,0)
-            state["curve_cut_rect"] = pygame.Rect(0,0,0,0)
-            state["curve_join_rect"] = pygame.Rect(0,0,0,0)
+            publish_rect(state, "curve_hide_rect", pygame.Rect(0,0,0,0))
+            publish_rect(state, "curve_redraw_rect", pygame.Rect(0,0,0,0))
+            publish_rect(state, "curve_cut_rect", pygame.Rect(0,0,0,0))
+            publish_rect(state, "curve_join_rect", pygame.Rect(0,0,0,0))
             _gap_slider = state.get("cut_gap_slider")
             if _gap_slider is not None:
                 _gap_slider.track.width = 0
-            state["wave_toggle_rect"] = pygame.Rect(0,0,0,0)
-            state["wave_add_rect"] = pygame.Rect(0,0,0,0)
-            state["displacement_add_rect"] = pygame.Rect(0,0,0,0)
-            state["wave_remove_rect"] = pygame.Rect(0,0,0,0)
-            state["wave_bake_rect"] = pygame.Rect(0,0,0,0)
-            state["wave_slider_rects"] = {}
-            state["wave_shape_rects"] = {}
-            state["displacement_profile_rects"] = {}
-            state["wave_row_rects"] = []
+            publish_rect(state, "wave_toggle_rect", pygame.Rect(0,0,0,0))
+            publish_rect(state, "wave_add_rect", pygame.Rect(0,0,0,0))
+            publish_rect(state, "displacement_add_rect", pygame.Rect(0,0,0,0))
+            publish_rect(state, "wave_remove_rect", pygame.Rect(0,0,0,0))
+            publish_rect(state, "wave_bake_rect", pygame.Rect(0,0,0,0))
+            publish_rect(state, "wave_slider_rects", {})
+            publish_rect(state, "wave_shape_rects", {})
+            publish_rect(state, "displacement_profile_rects", {})
+            publish_rect(state, "wave_row_rects", [])
 
     elif submode == "curve":
         screen.blit(font_small.render("Click a stroke to edit separately", True, MUTED_COLOR), (x, y)); y += 24
-        state["curve_hide_rect"] = pygame.Rect(0,0,0,0)
-        state["curve_redraw_rect"] = pygame.Rect(0,0,0,0)
-        state["curve_cut_rect"] = pygame.Rect(0,0,0,0)
-        state["curve_join_rect"] = pygame.Rect(0,0,0,0)
+        publish_rect(state, "curve_hide_rect", pygame.Rect(0,0,0,0))
+        publish_rect(state, "curve_redraw_rect", pygame.Rect(0,0,0,0))
+        publish_rect(state, "curve_cut_rect", pygame.Rect(0,0,0,0))
+        publish_rect(state, "curve_join_rect", pygame.Rect(0,0,0,0))
         _gap_slider = state.get("cut_gap_slider")
         if _gap_slider is not None:
             _gap_slider.track.width = 0
-        state["wave_toggle_rect"] = pygame.Rect(0,0,0,0)
-        state["wave_add_rect"] = pygame.Rect(0,0,0,0)
-        state["displacement_add_rect"] = pygame.Rect(0,0,0,0)
-        state["wave_remove_rect"] = pygame.Rect(0,0,0,0)
-        state["wave_bake_rect"] = pygame.Rect(0,0,0,0)
-        state["wave_slider_rects"] = {}
-        state["wave_shape_rects"] = {}
-        state["displacement_profile_rects"] = {}
-        state["wave_row_rects"] = []
+        publish_rect(state, "wave_toggle_rect", pygame.Rect(0,0,0,0))
+        publish_rect(state, "wave_add_rect", pygame.Rect(0,0,0,0))
+        publish_rect(state, "displacement_add_rect", pygame.Rect(0,0,0,0))
+        publish_rect(state, "wave_remove_rect", pygame.Rect(0,0,0,0))
+        publish_rect(state, "wave_bake_rect", pygame.Rect(0,0,0,0))
+        publish_rect(state, "wave_slider_rects", {})
+        publish_rect(state, "wave_shape_rects", {})
+        publish_rect(state, "displacement_profile_rects", {})
+        publish_rect(state, "wave_row_rects", [])
     else:
-        state["curve_hide_rect"] = pygame.Rect(0,0,0,0)
-        state["curve_redraw_rect"] = pygame.Rect(0,0,0,0)
-        state["curve_cut_rect"] = pygame.Rect(0,0,0,0)
-        state["curve_join_rect"] = pygame.Rect(0,0,0,0)
+        publish_rect(state, "curve_hide_rect", pygame.Rect(0,0,0,0))
+        publish_rect(state, "curve_redraw_rect", pygame.Rect(0,0,0,0))
+        publish_rect(state, "curve_cut_rect", pygame.Rect(0,0,0,0))
+        publish_rect(state, "curve_join_rect", pygame.Rect(0,0,0,0))
         _gap_slider = state.get("cut_gap_slider")
         if _gap_slider is not None:
             _gap_slider.track.width = 0
-        state["wave_toggle_rect"] = pygame.Rect(0,0,0,0)
-        state["wave_add_rect"] = pygame.Rect(0,0,0,0)
-        state["displacement_add_rect"] = pygame.Rect(0,0,0,0)
-        state["wave_remove_rect"] = pygame.Rect(0,0,0,0)
-        state["wave_bake_rect"] = pygame.Rect(0,0,0,0)
-        state["wave_slider_rects"] = {}
-        state["wave_shape_rects"] = {}
-        state["displacement_profile_rects"] = {}
-        state["wave_row_rects"] = []
+        publish_rect(state, "wave_toggle_rect", pygame.Rect(0,0,0,0))
+        publish_rect(state, "wave_add_rect", pygame.Rect(0,0,0,0))
+        publish_rect(state, "displacement_add_rect", pygame.Rect(0,0,0,0))
+        publish_rect(state, "wave_remove_rect", pygame.Rect(0,0,0,0))
+        publish_rect(state, "wave_bake_rect", pygame.Rect(0,0,0,0))
+        publish_rect(state, "wave_slider_rects", {})
+        publish_rect(state, "wave_shape_rects", {})
+        publish_rect(state, "displacement_profile_rects", {})
+        publish_rect(state, "wave_row_rects", [])
 
     c.y=y; c.help_lines=help_lines; c.sel_stroke=sel_stroke; c.submode=submode
     c.sel_count=sel_count; c.sel_strokes=sel_strokes

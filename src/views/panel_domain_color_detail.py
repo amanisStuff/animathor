@@ -1,5 +1,6 @@
 """View: panel_select split parts C/D (SRP)."""
 """View: panel section (split for complexity)."""
+from panel_rects import publish_rect  # noqa: E402
 import math
 import pygame
 import config as cfg
@@ -74,11 +75,11 @@ def render_color_tail_section(
     # No fill button
     if color_target == "fill":
         nofill = pygame.Rect(x + 150, y + 4, 70, 26)
-        state["nofill_rect"] = nofill
+        publish_rect(state, "nofill_rect", nofill)
         nf_active = not has_fill_now
         _button(nofill, "No fill", active=nf_active)
     else:
-        state["nofill_rect"] = pygame.Rect(0, 0, 0, 0)
+        publish_rect(state, "nofill_rect", pygame.Rect(0, 0, 0, 0))
     y += 40
     # Fill type + gradient stop controls
     for _k in ("fill_type_prev_rect", "fill_type_next_rect"):
@@ -107,8 +108,8 @@ def render_color_tail_section(
         pr = pygame.Rect(vx, y, btn_w, 24)
         vr = pygame.Rect(vx + btn_w + 4, y, vw, 24)
         nr = pygame.Rect(vr.right + 4, y, btn_w, 24)
-        state["fill_type_prev_rect"] = pr
-        state["fill_type_next_rect"] = nr
+        publish_rect(state, "fill_type_prev_rect", pr)
+        publish_rect(state, "fill_type_next_rect", nr)
         _button(pr, "<", font_=font_small)
         _button(vr, fill_labels.get(fill_mode, str(fill_mode).title()))
         _button(nr, ">", font_=font_small)
@@ -119,12 +120,12 @@ def render_color_tail_section(
         if fill_pat is not None:
             _avail = PANEL_W - 40
             _mrow = pygame.Rect(x, y, _avail - 60, 24)
-            state["pattern_type_rect"] = _mrow
+            publish_rect(state, "pattern_type_rect", _mrow)
             _button(_mrow, f"Motif: {str(fill_pat.get('type', 'stripes')).title()}")
             _smr = pygame.Rect(x + _avail - 56, y, 26, 24)
             _spr = pygame.Rect(x + _avail - 28, y, 26, 24)
-            state["pattern_size_minus_rect"] = _smr
-            state["pattern_size_plus_rect"] = _spr
+            publish_rect(state, "pattern_size_minus_rect", _smr)
+            publish_rect(state, "pattern_size_plus_rect", _spr)
             _button(_smr, "-", font_=font_small)
             _button(_spr, "+", font_=font_small)
             y += 28
@@ -134,10 +135,10 @@ def render_color_tail_section(
             for _pk in ("pattern_type_rect", "pattern_size_minus_rect", "pattern_size_plus_rect"):
                 state[_pk] = pygame.Rect(0, 0, 0, 0)
         # gradient stops (multi-stop) - not applicable to mesh gradients
-        state["fill_stop_rects"] = {}
-        state["fill_stop_add_rect"] = pygame.Rect(0, 0, 0, 0)
-        state["fill_stop_remove_rect"] = pygame.Rect(0, 0, 0, 0)
-        state["fill_stop_pos_rect"] = pygame.Rect(0, 0, 0, 0)
+        publish_rect(state, "fill_stop_rects", {})
+        publish_rect(state, "fill_stop_add_rect", pygame.Rect(0, 0, 0, 0))
+        publish_rect(state, "fill_stop_remove_rect", pygame.Rect(0, 0, 0, 0))
+        publish_rect(state, "fill_stop_pos_rect", pygame.Rect(0, 0, 0, 0))
         if fill_grad is not None and str(fill_grad.get("type", "")) != "mesh":
             _get_stops = globals().get("get_gradient_stops")
             if callable(_get_stops):
@@ -201,8 +202,8 @@ def render_color_tail_section(
             bx = x + sw_area_w + gap
             add_r = pygame.Rect(bx, y, btn_w, sw)
             rem_r = pygame.Rect(bx + btn_w + 4, y, btn_w, sw)
-            state["fill_stop_add_rect"] = add_r
-            state["fill_stop_remove_rect"] = rem_r
+            publish_rect(state, "fill_stop_add_rect", add_r)
+            publish_rect(state, "fill_stop_remove_rect", rem_r)
             for r, label, enabled_btn in ((add_r, "+", True), (rem_r, "-", nstops > 2)):
                 _button(r, label, enabled=enabled_btn)
             y += sw + 6
@@ -219,7 +220,7 @@ def render_color_tail_section(
             y += 16
             pos_h = 10
             pos_rect = pygame.Rect(x, y, PANEL_W - 40, pos_h)
-            state["fill_stop_pos_rect"] = pos_rect
+            publish_rect(state, "fill_stop_pos_rect", pos_rect)
             for ix in range(pos_rect.w):
                 tt = ix / max(1, pos_rect.w - 1)
                 samp = SAMPLE_PLACEHOLDER
@@ -283,23 +284,23 @@ def render_color_tail_section(
                     pygame.draw.rect(screen, BORDER_STRONG, mr.inflate(2, 2), BORDER_WIDTH, border_radius=RADIUS_XS)
             y += pos_h + 8
         else:
-            state["fill_stop_rects"] = {}
-            state["fill_stop_add_rect"] = pygame.Rect(0, 0, 0, 0)
-            state["fill_stop_remove_rect"] = pygame.Rect(0, 0, 0, 0)
-            state["fill_stop_pos_rect"] = pygame.Rect(0, 0, 0, 0)
+            publish_rect(state, "fill_stop_rects", {})
+            publish_rect(state, "fill_stop_add_rect", pygame.Rect(0, 0, 0, 0))
+            publish_rect(state, "fill_stop_remove_rect", pygame.Rect(0, 0, 0, 0))
+            publish_rect(state, "fill_stop_pos_rect", pygame.Rect(0, 0, 0, 0))
     else:
-        state["fill_type_prev_rect"] = pygame.Rect(0, 0, 0, 0)
-        state["fill_type_next_rect"] = pygame.Rect(0, 0, 0, 0)
-        state["fill_stop_rects"] = {}
-        state["fill_stop_add_rect"] = pygame.Rect(0, 0, 0, 0)
-        state["fill_stop_remove_rect"] = pygame.Rect(0, 0, 0, 0)
-        state["fill_stop_pos_rect"] = pygame.Rect(0, 0, 0, 0)
+        publish_rect(state, "fill_type_prev_rect", pygame.Rect(0, 0, 0, 0))
+        publish_rect(state, "fill_type_next_rect", pygame.Rect(0, 0, 0, 0))
+        publish_rect(state, "fill_stop_rects", {})
+        publish_rect(state, "fill_stop_add_rect", pygame.Rect(0, 0, 0, 0))
+        publish_rect(state, "fill_stop_remove_rect", pygame.Rect(0, 0, 0, 0))
+        publish_rect(state, "fill_stop_pos_rect", pygame.Rect(0, 0, 0, 0))
 
     # SV square
     sv_w = PANEL_W - 40
     sv_h = 110
     sv_rect = pygame.Rect(x, y, sv_w, sv_h)
-    state["sv_rect"] = sv_rect
+    publish_rect(state, "sv_rect", sv_rect)
     # draw SV gradient for current hue
     screen.blit(_sv_surface(ph, sv_w, sv_h), sv_rect.topleft)
     pygame.draw.rect(screen, BUTTON_BORDER, sv_rect, 1, border_radius=RADIUS_SM)
@@ -312,7 +313,7 @@ def render_color_tail_section(
     # Hue bar
     hue_h = 14
     hue_rect = pygame.Rect(x, y, sv_w, hue_h)
-    state["hue_rect"] = hue_rect
+    publish_rect(state, "hue_rect", hue_rect)
     screen.blit(_hue_bar_surface(sv_w, hue_h), hue_rect.topleft)
     pygame.draw.rect(screen, BUTTON_BORDER, hue_rect, 1, border_radius=RADIUS_SM)
     hx = hue_rect.x + int((ph / 360.0) * (sv_w - 1))
@@ -321,14 +322,14 @@ def render_color_tail_section(
 
     # Alpha / opacity slider (stroke always; fill only when a fill color exists)
     show_alpha = (color_target == "stroke") or (cur_color is not None)
-    state["alpha_rect"] = pygame.Rect(0, 0, 0, 0)
+    publish_rect(state, "alpha_rect", pygame.Rect(0, 0, 0, 0))
     if show_alpha:
         cur_alpha = color_alpha(cur_color, 1.0)
         screen.blit(font_small.render(f"Opacity {int(round(cur_alpha * 100))}%", True, TEXT_COLOR), (x, y))
         y += 16
         alpha_h = 12
         alpha_rect = pygame.Rect(x, y, sv_w, alpha_h)
-        state["alpha_rect"] = alpha_rect
+        publish_rect(state, "alpha_rect", alpha_rect)
         # simple gradient bar from transparent to current rgb
         base_rgb = color_rgb(display_color, (1.0, 1.0, 1.0))
         for ix in range(sv_w):
@@ -350,8 +351,8 @@ def render_color_tail_section(
     # Preset swatches
     presets = STROKE_SWATCHES
     sw = 26
-    state["stroke_swatch_rects"] = [pygame.Rect(0, 0, 0, 0) for _ in presets]
-    state["fill_swatch_rects"] = [pygame.Rect(0, 0, 0, 0) for _ in presets]
+    publish_rect(state, "stroke_swatch_rects", [pygame.Rect(0, 0, 0, 0) for _ in presets])
+    publish_rect(state, "fill_swatch_rects", [pygame.Rect(0, 0, 0, 0) for _ in presets])
     for i, col in enumerate(presets):
         r = pygame.Rect(x + i * (sw + 6), y, sw, sw)
         if color_target == "stroke":
@@ -364,34 +365,34 @@ def render_color_tail_section(
 
     # Disable non-applicable style controls
     if not fill_enabled:
-        state["tab_fill_rect"] = pygame.Rect(0, 0, 0, 0)
-        state["nofill_rect"] = pygame.Rect(0, 0, 0, 0)
-        state["fill_type_rects"] = {}
-        state["fill_stop_rects"] = {}
-        state["fill_stop_add_rect"] = pygame.Rect(0, 0, 0, 0)
-        state["fill_stop_remove_rect"] = pygame.Rect(0, 0, 0, 0)
-        state["fill_stop_pos_rect"] = pygame.Rect(0, 0, 0, 0)
+        publish_rect(state, "tab_fill_rect", pygame.Rect(0, 0, 0, 0))
+        publish_rect(state, "nofill_rect", pygame.Rect(0, 0, 0, 0))
+        publish_rect(state, "fill_type_rects", {})
+        publish_rect(state, "fill_stop_rects", {})
+        publish_rect(state, "fill_stop_add_rect", pygame.Rect(0, 0, 0, 0))
+        publish_rect(state, "fill_stop_remove_rect", pygame.Rect(0, 0, 0, 0))
+        publish_rect(state, "fill_stop_pos_rect", pygame.Rect(0, 0, 0, 0))
         if not stroke_color_enabled:
-            state["tab_stroke_rect"] = pygame.Rect(0, 0, 0, 0)
+            publish_rect(state, "tab_stroke_rect", pygame.Rect(0, 0, 0, 0))
     if not (stroke_color_enabled or fill_enabled):
-        state["sv_rect"] = pygame.Rect(0, 0, 0, 0)
-        state["hue_rect"] = pygame.Rect(0, 0, 0, 0)
-        state["alpha_rect"] = pygame.Rect(0, 0, 0, 0)
-        state["stroke_swatch_rects"] = [pygame.Rect(0, 0, 0, 0) for _ in STROKE_SWATCHES]
-        state["fill_swatch_rects"] = [pygame.Rect(0, 0, 0, 0) for _ in STROKE_SWATCHES]
-        state["fill_type_rects"] = {}
-        state["fill_stop_rects"] = {}
-        state["fill_stop_add_rect"] = pygame.Rect(0, 0, 0, 0)
-        state["fill_stop_remove_rect"] = pygame.Rect(0, 0, 0, 0)
-        state["fill_stop_pos_rect"] = pygame.Rect(0, 0, 0, 0)
+        publish_rect(state, "sv_rect", pygame.Rect(0, 0, 0, 0))
+        publish_rect(state, "hue_rect", pygame.Rect(0, 0, 0, 0))
+        publish_rect(state, "alpha_rect", pygame.Rect(0, 0, 0, 0))
+        publish_rect(state, "stroke_swatch_rects", [pygame.Rect(0, 0, 0, 0) for _ in STROKE_SWATCHES])
+        publish_rect(state, "fill_swatch_rects", [pygame.Rect(0, 0, 0, 0) for _ in STROKE_SWATCHES])
+        publish_rect(state, "fill_type_rects", {})
+        publish_rect(state, "fill_stop_rects", {})
+        publish_rect(state, "fill_stop_add_rect", pygame.Rect(0, 0, 0, 0))
+        publish_rect(state, "fill_stop_remove_rect", pygame.Rect(0, 0, 0, 0))
+        publish_rect(state, "fill_stop_pos_rect", pygame.Rect(0, 0, 0, 0))
     elif component_stroke_enabled and not fill_enabled:
         # only stroke color editable for selected curve; fill swatches/controls off
-        state["fill_swatch_rects"] = [pygame.Rect(0, 0, 0, 0) for _ in STROKE_SWATCHES]
-        state["fill_type_rects"] = {}
-        state["fill_stop_rects"] = {}
-        state["fill_stop_add_rect"] = pygame.Rect(0, 0, 0, 0)
-        state["fill_stop_remove_rect"] = pygame.Rect(0, 0, 0, 0)
-        state["fill_stop_pos_rect"] = pygame.Rect(0, 0, 0, 0)
+        publish_rect(state, "fill_swatch_rects", [pygame.Rect(0, 0, 0, 0) for _ in STROKE_SWATCHES])
+        publish_rect(state, "fill_type_rects", {})
+        publish_rect(state, "fill_stop_rects", {})
+        publish_rect(state, "fill_stop_add_rect", pygame.Rect(0, 0, 0, 0))
+        publish_rect(state, "fill_stop_remove_rect", pygame.Rect(0, 0, 0, 0))
+        publish_rect(state, "fill_stop_pos_rect", pygame.Rect(0, 0, 0, 0))
     state["component_style_target"] = comp_style_target if component_stroke_enabled else None
 
     sel_label = "-" if sel_count == 0 else (str(next(iter(sel_strokes)) + 1) if sel_count == 1 else f"{sel_count}")

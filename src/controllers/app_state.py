@@ -32,6 +32,12 @@ class DocumentState:
     active_artboard: int = -1
     symbols: dict = field(default_factory=dict)
     document_path: str | None = None
+    clipboard_strokes: list = field(default_factory=list)
+    undo_stack: list = field(default_factory=list)
+    redo_stack: list = field(default_factory=list)
+    max_undo: int = 100
+    _shape_state_counter: int = 0
+    _symbol_counter: int = 0
 
 
 @dataclass
@@ -52,6 +58,13 @@ class ToolState:
     snap_enabled: bool = True
     eyedropper_pick: bool = False
     curve_cut_mode: bool = False
+    bucket_fill_color: tuple = (0.45, 0.72, 1.0)
+    bucket_picker_h: float = 0.0
+    bucket_picker_s: float = 0.0
+    bucket_picker_v: float = 0.1
+    bezier_pen: Any = None
+    text_family: str = "Sans"
+    text_size: float = 36.0
 
 
 @dataclass
@@ -96,6 +109,19 @@ class UiCacheState:
     wave_active_index: int = 0
     repeat_pick_mode: bool = False
     repeat_pick_target: Any = None
+    # Text/xform input-mode state used by the controller ctx builders.
+    text_entry: Any = None
+    xform_field_focus: Any = None
+    xform_field_buffer: str = ""
+    picker_h: Any = None
+    picker_s: Any = None
+    picker_v: Any = None
+    # Session/lifecycle state used by menu command dispatch.
+    export_dialog_open: bool = False
+    export_dialog_format: str = "png"
+    help_open: bool = False
+    workspace: str = "draw"
+    running: bool = True
 
 
 @dataclass
@@ -109,7 +135,10 @@ class AppState:
 
     @staticmethod
     def _substates(obj):
-        return (obj.document, obj.selection, obj.tools, obj.drag, obj.ui)
+        # Typed substate groups owned by AppState. viewport is included so
+        # layout/panel geometry state flows through the typed contract instead
+        # of living only as module-level cfg locals / frame locals.
+        return (obj.viewport, obj.document, obj.selection, obj.tools, obj.drag, obj.ui)
 
     @property
     def _SYNC_FIELDS(self):

@@ -1,7 +1,7 @@
 """Wave formula/custom-draw input mode key handling."""
 
 import pygame
-from models import *  # noqa: F401,F403 - preserve extracted behavior
+from models.waves import _get_distortion_style, _set_distortion_style  # noqa: F401
 
 
 def handle_wave_keys(ctx, event):

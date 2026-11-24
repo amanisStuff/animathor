@@ -1,4 +1,4 @@
-"""Wave/effects panel actions (semantic domain)."""
+"""Wave / displacement / repeat / thickness effects panel actions."""
 import copy, math, pygame
 import config as cfg
 
@@ -357,7 +357,7 @@ def _b3_wave_sliders(ctx, event, _w_hit):
         _w_hit = True
     return _w_hit
 
-from controllers.mbd_panel_b_color import _b3_color
+from controllers.panel.color_target import _b3_color
 
 
 def handle_b_part3(ctx, event):
