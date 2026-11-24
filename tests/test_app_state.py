@@ -95,6 +95,48 @@ class TestAppStateSync(unittest.TestCase):
         ctx = _build_ctx(frame, loc)
         self.assertEqual(ctx.tool_mode, "select")
 
+    def test_narrow_sync_does_not_clobber_typed_fields(self):
+        st = AppState()
+        st.tools.tool_mode = "select"
+        st.sync_from_locals(
+            {"tool_mode": "draw", "selected_strokes": {1}},
+            fields={"selected_strokes"},
+        )
+        self.assertEqual(st.tools.tool_mode, "select")
+        self.assertEqual(st.selection.selected_strokes, {1})
+
+    def test_extended_tool_and_drag_fields_sync(self):
+        st = AppState()
+        ns = {
+            "max_points_per_curve": 8,
+            "rect_variant": "square",
+            "cut_gap": 4,
+            "guides": [{"axis": "x", "pos": 10}],
+            "pivot_pos": (1.0, 2.0),
+            "prev_selection_set": {1},
+        }
+        st.sync_from_locals(ns)
+        self.assertEqual(st.tools.max_points_per_curve, 8)
+        self.assertEqual(st.tools.rect_variant, "square")
+        self.assertEqual(st.drag.cut_gap, 4)
+        self.assertEqual(st.drag.guides, [{"axis": "x", "pos": 10}])
+        self.assertEqual(st.drag.pivot_pos, (1.0, 2.0))
+        self.assertEqual(st.selection.prev_selection_set, {1})
+
+
+    def test_appstate_covers_main_rect_cache_locals(self):
+        import os
+        import re
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        path = os.path.join(root, "src", "controllers", "app_controller.py")
+        with open(path, encoding="utf-8") as handle:
+            src = handle.read()
+        locals_rect = set(re.findall(
+            r'^    ([a-z][a-z0-9_]*(?:_cache|_rects|_rect))\s*=', src, re.M))
+        fields = set(AppState()._SYNC_FIELDS)
+        self.assertEqual(locals_rect - fields, set(),
+                         "rect-cache locals missing from typed AppState")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -48,6 +48,7 @@ class SelectionState:
     selected_curves: set = field(default_factory=set)
     selection_submode: str = "transform"
     transform_handle_mode: str = "scale"
+    prev_selection_set: set = field(default_factory=set)
 
 
 @dataclass
@@ -65,6 +66,19 @@ class ToolState:
     bezier_pen: Any = None
     text_family: str = "Sans"
     text_size: float = 36.0
+    max_points_per_curve: int = 4
+    boost_points: bool = False
+    trace_algorithm: str = "fit"
+    triangle_variant: str = "isosceles"
+    rect_variant: str = "rect"
+    ellipse_variant: str = "ellipse"
+    line_constrain: bool = False
+    line_arrow: bool = False
+    corner_radius: int = 0
+    ellipse_segments: int = 4
+    polygon_sides: int = 6
+    star_points: int = 5
+    star_inner_ratio: float = 0.5
 
 
 @dataclass
@@ -79,10 +93,16 @@ class DragState:
     guide_drag: Any = None
     cutting: bool = False
     cut_points: list = field(default_factory=list)
+    cut_gap: int = 0
     drawing: bool = False
     current_points: list = field(default_factory=list)
     redrawing_curve: Any = None
     drag_manager: Any = None
+    pivot_pos: Any = None
+    pending_transform_toggle: Any = None
+    guides: list = field(default_factory=list)
+    guide_drag: Any = None
+    smart_snap_guides: list = field(default_factory=list)
 
 
 @dataclass
@@ -116,6 +136,124 @@ class UiCacheState:
     picker_h: Any = None
     picker_s: Any = None
     picker_v: Any = None
+    align_bottom_rect_cache: Any = None
+    align_hcenter_rect_cache: Any = None
+    align_left_rect_cache: Any = None
+    align_right_rect_cache: Any = None
+    align_top_rect_cache: Any = None
+    align_vmiddle_rect_cache: Any = None
+    bool_exclude_rect_cache: Any = None
+    bool_intersect_rect_cache: Any = None
+    bool_subtract_rect_cache: Any = None
+    bool_union_rect_cache: Any = None
+    bucket_hue_rect_cache: Any = None
+    bucket_sv_rect_cache: Any = None
+    bucket_swatch_rects_cache: dict = field(default_factory=dict)
+    cap_next_rect_cache: Any = None
+    cap_prev_rect_cache: Any = None
+    curve_cut_rect_cache: Any = None
+    curve_hide_rect_cache: Any = None
+    curve_join_rect_cache: Any = None
+    curve_redraw_rect_cache: Any = None
+    dash_next_rect_cache: Any = None
+    dash_prev_rect_cache: Any = None
+    displacement_add_rect_cache: Any = None
+    displacement_affect_rects_cache: dict = field(default_factory=dict)
+    displacement_profile_rects_cache: dict = field(default_factory=dict)
+    distribute_h_rect_cache: Any = None
+    distribute_v_rect_cache: Any = None
+    draw_shape_rects_cache: dict = field(default_factory=dict)
+    draw_tool_bucket_rect_cache: Any = None
+    draw_tool_cutter_rect_cache: Any = None
+    draw_tool_eraser_rect_cache: Any = None
+    draw_tool_next_rect_cache: Any = None
+    draw_tool_pen_rect_cache: Any = None
+    draw_tool_prev_rect_cache: Any = None
+    elev_back_rect_cache: Any = None
+    elev_backward_rect_cache: Any = None
+    elev_forward_rect_cache: Any = None
+    elev_front_rect_cache: Any = None
+    eyedropper_rect_cache: Any = None
+    fill_stop_add_rect_cache: Any = None
+    fill_stop_pos_rect_cache: Any = None
+    fill_stop_rects_cache: dict = field(default_factory=dict)
+    fill_stop_remove_rect_cache: Any = None
+    fill_type_next_rect_cache: Any = None
+    fill_type_prev_rect_cache: Any = None
+    join_next_rect_cache: Any = None
+    join_prev_rect_cache: Any = None
+    marker_end_rect_cache: Any = None
+    marker_start_rect_cache: Any = None
+    mirror_h_rect_cache: Any = None
+    mirror_v_rect_cache: Any = None
+    nodes_mode_next_rect_cache: Any = None
+    nodes_mode_prev_rect_cache: Any = None
+    obj_opacity_rect_cache: Any = None
+    panel_toggle_rect_cache: Any = None
+    path_add_rect_cache: Any = None
+    path_close_rect_cache: Any = None
+    path_corner_rect_cache: Any = None
+    path_delete_rect_cache: Any = None
+    path_expand_rect_cache: Any = None
+    path_reverse_rect_cache: Any = None
+    path_smooth_rect_cache: Any = None
+    pattern_size_minus_rect_cache: Any = None
+    pattern_size_plus_rect_cache: Any = None
+    pattern_type_rect_cache: Any = None
+    picker_rects: dict = field(default_factory=dict)
+    ref_clear_rect_cache: Any = None
+    ref_load_rect_cache: Any = None
+    ref_opacity_rect_cache: Any = None
+    ref_vis_rect_cache: Any = None
+    repeat_add_rect_cache: Any = None
+    repeat_pick_curve_rect_cache: Any = None
+    shadow_blur_minus_rect_cache: Any = None
+    shadow_blur_plus_rect_cache: Any = None
+    shadow_toggle_rect_cache: Any = None
+    snap_toggle_rect_cache: Any = None
+    swatch_rects_cache: Any = None
+    text_edit_rect_cache: Any = None
+    text_font_rect_cache: Any = None
+    text_off_path_rect_cache: Any = None
+    text_on_path_rect_cache: Any = None
+    text_size_minus_rect_cache: Any = None
+    text_size_plus_rect_cache: Any = None
+    thickness_add_rect_cache: Any = None
+    trace_algo_next_rect_cache: Any = None
+    trace_algo_prev_rect_cache: Any = None
+    wave_add_rect_cache: Any = None
+    wave_bake_rect_cache: Any = None
+    wave_clamp_rect_cache: Any = None
+    wave_clear_rect_cache: Any = None
+    wave_custom_box_rect_cache: Any = None
+    wave_done_rect_cache: Any = None
+    wave_formula_rect_cache: Any = None
+    wave_remove_rect_cache: Any = None
+    wave_reverse_rect_cache: Any = None
+    wave_row_rects_cache: dict = field(default_factory=dict)
+    wave_shape_next_rect_cache: Any = None
+    wave_shape_prev_rect_cache: Any = None
+    wave_slider_rects_cache: dict = field(default_factory=dict)
+    wave_smooth_rect_cache: Any = None
+    wave_toggle_rect_cache: Any = None
+    width_profile_next_rect_cache: Any = None
+    width_profile_prev_rect_cache: Any = None
+    xform_h_rect_cache: Any = None
+    xform_hm_rect_cache: Any = None
+    xform_hp_rect_cache: Any = None
+    xform_r_rect_cache: Any = None
+    xform_rm_rect_cache: Any = None
+    xform_rp_rect_cache: Any = None
+    xform_w_rect_cache: Any = None
+    xform_wm_rect_cache: Any = None
+    xform_wp_rect_cache: Any = None
+    xform_x_rect_cache: Any = None
+    xform_xm_rect_cache: Any = None
+    xform_xp_rect_cache: Any = None
+    xform_y_rect_cache: Any = None
+    xform_ym_rect_cache: Any = None
+    xform_yp_rect_cache: Any = None
+
     # Session/lifecycle state used by menu command dispatch.
     export_dialog_open: bool = False
     export_dialog_format: str = "png"
@@ -149,11 +287,16 @@ class AppState:
                 fields.append(k)
         return tuple(fields)
 
-    def sync_from_locals(self, ns: dict):
-        """Incremental bridge: mirror legacy locals into typed contracts."""
+    def sync_from_locals(self, ns: dict, fields=None):
+        """Incremental bridge: mirror legacy locals into typed contracts.
+
+        ``fields`` optionally narrows the bridge to a named subset, so a caller
+        can capture only its own direct mutations without overwriting typed
+        state owned by handlers.
+        """
         for st in self._substates(self):
             for k in st.__dataclass_fields__:
-                if k in ns:
+                if (fields is None or k in fields) and k in ns:
                     setattr(st, k, ns[k])
         return self
 

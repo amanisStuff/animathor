@@ -85,7 +85,7 @@ From the analysis doc plus direct inspection of the working tree:
 
 ### 3.3 Verification baseline (updated this session)
 
-- Tests: `python -m unittest discover -s tests -t .` → **Ran 300 tests … OK**
+- Tests: `python -m unittest discover -s tests -t .` → **Ran 306 tests … OK**
   (baseline 282 + typed-state/dispatch + panel-domain + drag-session + typed-controller tests).
 - Complexity: `python tools/complexity_score.py --top 20` → max score **8**
   (scale 0–10; median 4.0), mean 4.2; no regression. `app_broken_wave.py` still
@@ -143,11 +143,55 @@ bottleneck in `app_controller.main()`.
       captures its own direct local mutations at a single frame-start point;
       frame helpers sync typed state after event/render dispatch. Added
       `test_typed_state_is_authoritative_at_dispatch`.
-- [x] **Ctx-bag removal started**: `bucket_controller` now accepts typed
-      `ToolState` directly (explicit params: `tools, rect, pos, kind, state,
-      clamp, hsv_to_rgb`); `app_controller` deleted `_bucket_ctx` / `_bucket_sync`
-      entirely — `bucket_pick` / `set_bucket_color` call the typed API. Added
-      `tests/test_typed_controllers.py` (2 tests). Suite green (300 OK).
+- [x] **Mid-frame curve sanitization migrated**: `selected_curve` / `redrawing_curve`
+      invalidation in `main` now writes typed `AppState` (selection/drag) first and
+      mirrors legacy locals; the view-model `state` dict reads those typed fields
+      directly. Completes the drag/interaction group end-to-end (Task 4).
+      Suite + 5-frame event smoke green.
+- [x] **Drag/interaction group extended into the view model**: `bezier_pen`,
+      `selected_point`, `selected_curves` in the per-frame `state` dict now read
+      typed `AppState` substates (selected_curve/redrawing_curve remain local reads
+      until their mid-frame sanitization is migrated). Event smoke green.
+- [x] **Phase 1 Task 1 coverage completed for UI caches**: `UiCacheState` extended
+      with 117 rect/cache fields from `main`, so all 124 `*_rect`/`*_cache` locals
+      are now typed `AppState` fields (auto-derived `_SYNC_FIELDS`). Added
+      `test_appstate_covers_main_rect_cache_locals` asserting zero missing fields.
+      Full suite + 5-frame event smoke green (306 OK).
+- [x] **Tools/selection substate group migrated end-to-end into the view model**:
+      17 fields in `main`'s per-frame `state` dict now read typed `AppState`
+      substates directly (`tool_mode`, `draw_tool`, `draw_shape`, variants,
+      `snap_enabled`, `selection_submode`, `selected_strokes`, `guides`,
+      `cut_gap`, `curve_cut_mode`, `eyedropper_pick`, `workspace`, etc.) instead
+      of legacy frame locals. Full event smoke green.
+- [x] **Phase 1 Task 3 fully closed**: deleted `controllers/ctx_sync.py` entirely
+      (grep confirmed zero source references — only historical doc mentions remain).
+      The old `sync_attrs` / `sync_to_frame_locals` bridge helpers no longer exist.
+      Full suite + 5-frame event smoke green.
+- [x] **Typed substates extended** (Phase 1 Task 1): added 22 more typed fields
+      to `app_state.py` (tool shape options/counters, drag guide/pivot/cut state,
+      selection `prev_selection_set`), including the ten fields `main` mutates
+      at frame start; narrow capture set updated. Added
+      `test_extended_tool_and_drag_fields_sync`. Suite green (305 OK).
+- [x] **Narrowed frame-start capture**: `AppState.sync_from_locals(ns, fields=...)`
+      supports a named subset; `app_controller.main` now captures only the six
+      fields it mutates directly (`selected_strokes`, `selected_curve`,
+      `redrawing_curve`, `transform_handle_mode`, `xform_field_focus/buffer`)
+      instead of overwriting every typed field from stale legacy locals. Added
+      `test_narrow_sync_does_not_clobber_typed_fields`. Suite green (304 OK).
+- [x] **Legacy locals reduced**: removed 22 duplicate frame-local declarations in
+      `app_controller.main` (the second init block re-assigned values already
+      initialized in the first block with identical values). `app_controller.py`
+      is now 714 SLOC / complexity 7 (from 829 SLOC at the start of the migration).
+      Full-suite + 5-frame event smoke still green.
+- [x] **Ctx-bag removal (four builders)**: `bucket_controller`, `text_entry_controller`,
+      `transform_field_controller`, and `bezier_pen_controller` now accept typed
+      `AppState` substates directly with explicit service params. `app_controller`
+      deleted `_bucket_ctx`/`_bucket_sync`, `_xform_ctx`/`_xform_sync`, `_bp_ctx`/`_bp_sync`,
+      and the `commit_text_entry` ctx construction. Added `tests/test_typed_controllers.py`
+      (5 tests). Suite green (303 OK).
+- [x] Remaining ctx adapters are dispatch-only: `run_menu_action` command ctx
+      (single-sourced from typed state) and `_build_ctx` (typed-authoritative
+      dispatch snapshot).
 - [x] Runtime verification: 5-frame event smoke (KEYDOWN, MOUSEMOTION,
       MOUSEBUTTONDOWN, MOUSEBUTTONUP, QUIT) passes on top of 2-frame render smoke.
 - [x] **Phase 1 Task 3 (complete)**: both event-side and both frame-loop bridge
@@ -287,7 +331,7 @@ hot-loop bridge is gone.
 
 ## 6. Verification & acceptance gates
 
-- `python -m unittest discover -s tests -t .` → expect **300 OK** (baseline 282 + typed-state/dispatch + panel-domain + drag-session + typed-controller tests; no regressions).
+- `python -m unittest discover -s tests -t .` → expect **306 OK** (baseline 282 + typed-state/dispatch + panel-domain + drag-session + typed-controller tests; no regressions).
 - `python tools/complexity_score.py --top 20` → controllers trending toward low scores.
 - New tests added per phase must keep suite green; complexity must not regress.
 

@@ -181,41 +181,19 @@ def main():
     _symbol_counter = 0
     active_artboard = -1
     artboards = []
-    bezier_pen = None
     bucket_fill_color = (0.45, 0.72, 1.0)
     bucket_picker_h = 0.0
     bucket_picker_s = 0.0
     bucket_picker_v = 0.1
     clipboard_strokes = []
-    current_points = []
-    curve_cut_mode = False
-    cut_points = []
-    cutting = False
     document_path = None
-    drag_last = None
-    draw_tool = "pen"
-    drawing = False
     export_dialog_format = "png"
     export_dialog_open = False
-    eyedropper_pick = False
     help_open = False
-    panel_collapsed = False
-    redrawing_curve = None
     running = True
-    selected_curve = None
-    selected_curves = set()
-    selected_point = None
-    selected_strokes = set()
-    selection_submode = "transform"
     shape_states = {}
     snap_enabled = True
-    strokes = []
     symbols = {}
-    text_entry = None
-    text_family = "Sans"
-    text_size = 36.0
-    tool_mode = "draw"
-    transform_drag = None
     workspace = "draw"
     xform_field_buffer = ""
     xform_field_focus = None
@@ -453,54 +431,44 @@ def main():
     # --- Bezier pen tool (click-to-place anchors, drag handles) ---
     _bezier_last_click = {"time": 0, "pos": (0.0, 0.0)}
 
-    def _bp_ctx():
-        import types as _types
-        ctx = _types.SimpleNamespace()
-        ctx.bezier_pen = app_state.tools.bezier_pen
-        ctx.strokes = app_state.document.strokes
-        ctx.selected_strokes = app_state.selection.selected_strokes
-        ctx.selected_point = app_state.selection.selected_point
-    # --- Bezier pen tool (click-to-place anchors, drag handles) ---
-        ctx.selected_curve = app_state.selection.selected_curve
-        ctx.selected_curves = app_state.selection.selected_curves
-        ctx.push_undo = push_undo
-        ctx.new_stroke = new_stroke
-        ctx.merge_connected_strokes = merge_connected_strokes
-        ctx._close_path_if_needed = _close_path_if_needed
-        return ctx
-
-    def _bp_sync(ctx):
+    def _bp_mirror_locals():
         nonlocal bezier_pen, strokes, selected_strokes, selected_point, selected_curve, selected_curves
-        bezier_pen = ctx.bezier_pen
-        strokes = ctx.strokes
-        selected_strokes = ctx.selected_strokes
-        selected_point = ctx.selected_point
-        selected_curve = ctx.selected_curve
-        selected_curves = ctx.selected_curves
-        app_state.tools.bezier_pen = bezier_pen
-        app_state.document.strokes = strokes
-        app_state.selection.selected_strokes = selected_strokes
-        app_state.selection.selected_point = selected_point
-        app_state.selection.selected_curve = selected_curve
-        app_state.selection.selected_curves = selected_curves
+        bezier_pen = app_state.tools.bezier_pen
+        strokes = app_state.document.strokes
+        selected_strokes = app_state.selection.selected_strokes
+        selected_point = app_state.selection.selected_point
+        selected_curve = app_state.selection.selected_curve
+        selected_curves = app_state.selection.selected_curves
+
+    def _bp_services():
+        return (push_undo, new_stroke, _close_path_if_needed, merge_connected_strokes)
 
     def _bezier_pen_cancel():
-        ctx = _bp_ctx(); _bp.cancel(ctx); _bp_sync(ctx)
+        _bp.cancel(app_state.tools)
+        _bp_mirror_locals()
 
     def _bezier_pen_finish(close_path=False):
-        ctx = _bp_ctx(); r = _bp.finish(ctx, close_path=close_path); _bp_sync(ctx); return r
+        r = _bp.finish(app_state.tools, app_state.document, app_state.selection,
+                       *_bp_services(), close_path=close_path)
+        _bp_mirror_locals()
+        return r
 
     def _bezier_pen_add_anchor(pos):
-        ctx = _bp_ctx(); _bp.add_anchor(ctx, pos); _bp_sync(ctx)
+        _bp.add_anchor(app_state.tools, pos)
+        _bp_mirror_locals()
 
     def _bezier_pen_update_drag(pos):
-        ctx = _bp_ctx(); _bp.update_drag(ctx, pos); _bp_sync(ctx)
+        _bp.update_drag(app_state.tools, pos)
+        _bp_mirror_locals()
 
     def _bezier_pen_near_first(pos, radius=10.0):
-        ctx = _bp_ctx(); return _bp.near_first(ctx, pos, radius=radius)
+        return _bp.near_first(app_state.tools, pos, radius=radius)
 
     def _bezier_pen_commit_or_cancel():
-        ctx = _bp_ctx(); r = _bp.commit_or_cancel(ctx); _bp_sync(ctx); return r
+        r = _bp.commit_or_cancel(app_state.tools, app_state.document,
+                                 app_state.selection, *_bp_services())
+        _bp_mirror_locals()
+        return r
 
 
 
@@ -514,11 +482,16 @@ def main():
     except Exception:
         pass
     while running:
-        # Single frame-start capture point: main()'s direct local mutations
-        # (selection sanitization, pivot reset, hover snap) are mirrored into
-        # typed AppState, which is authoritative when frame helpers dispatch.
+        # Capture only the fields main() itself mutates directly between
+        # dispatch boundaries; all other typed fields stay authoritative from
+        # their owning handlers (no full locals->typed overwrite).
+        _main_mutations = {
+            "selected_strokes", "selected_curve", "redrawing_curve",
+            "transform_handle_mode", "xform_field_focus", "xform_field_buffer",
+            "pivot_pos", "prev_selection_set", "rect_variant", "ellipse_variant",
+        }
         try:
-            app_state.sync_from_locals(locals())
+            app_state.sync_from_locals(locals(), fields=_main_mutations)
         except Exception:
             pass
         mouse_pos = pygame.mouse.get_pos()
@@ -539,18 +512,25 @@ def main():
             xform_field_focus = None
             xform_field_buffer = ""
         prev_selection_set = set(selected_strokes)
+        # Sanitize curve selection in typed AppState (sole owner), then mirror
+        # the result into legacy locals for the remaining local-only readers.
+        selected_curve = app_state.selection.selected_curve
+        redrawing_curve = app_state.drag.redrawing_curve
         if selected_curve is not None:
             si, comp_i = selected_curve
             comps = _stroke_components(strokes[si]) if 0 <= si < len(strokes) else []
             if si not in selected_strokes or not (0 <= si < len(strokes)) or not (0 <= comp_i < len(comps)):
                 selected_curve = None
                 redrawing_curve = None
+                app_state.selection.selected_curve = None
+                app_state.drag.redrawing_curve = None
         if redrawing_curve is not None:
             rsi = redrawing_curve.get("stroke_idx")
             rcomp = redrawing_curve.get("comp_idx", redrawing_curve.get("seg_idx"))
             comps = _stroke_components(strokes[rsi]) if 0 <= rsi < len(strokes) else []
             if rsi not in selected_strokes or not (0 <= rsi < len(strokes)) or not (0 <= rcomp < len(comps)):
                 redrawing_curve = None
+                app_state.drag.redrawing_curve = None
         state_selected_curve = selected_curve
         state_selected_curves = set(selected_curves)
         state_redrawing_curve = redrawing_curve
@@ -559,17 +539,17 @@ def main():
         if draw_shape in ("ellipse", "circle"):
             ellipse_variant = draw_shape
         state = {
-            "tool_mode": tool_mode, "max_points": max_points_per_curve, "boost_points": boost_points,
-            "workspace": workspace,
-            "snap_enabled": snap_enabled,
+            "tool_mode": app_state.tools.tool_mode, "max_points": app_state.tools.max_points_per_curve, "boost_points": app_state.tools.boost_points,
+            "workspace": app_state.ui.workspace,
+            "snap_enabled": app_state.tools.snap_enabled,
             "show_grid": bool(getattr(cfg, "SHOW_GRID", False)),
             "show_rulers": bool(getattr(cfg, "SHOW_RULERS", False)),
             "snap_to_grid": bool(getattr(cfg, "SNAP_TO_GRID", False)),
-            "guides": [dict(g) for g in guides],
-            "guide_count": len(guides),
+            "guides": [dict(g) for g in app_state.drag.guides],
+            "guide_count": len(app_state.drag.guides),
             "NORMAL_MAX_POINTS": NORMAL_MAX_POINTS, "BOOST_MAX_POINTS": BOOST_MAX_POINTS,
             "slider": slider, "width_slider": width_slider, "buttons": buttons,
-            "stroke_count": len(strokes), "strokes": strokes, "selected_strokes": set(selected_strokes), "selected_obj": sel_obj,
+            "stroke_count": len(strokes), "strokes": strokes, "selected_strokes": set(app_state.selection.selected_strokes), "selected_obj": sel_obj,
             "text_edit_rect": text_edit_rect_cache,
             "text_font_rect": text_font_rect_cache,
             "text_size_minus_rect": text_size_minus_rect_cache,
@@ -592,7 +572,7 @@ def main():
             "pattern_size_minus_rect": pattern_size_minus_rect_cache,
             "pattern_size_plus_rect": pattern_size_plus_rect_cache,
             "fill_stop_pos_drag": fill_stop_pos_drag,
-            "selection_submode": selection_submode,
+            "selection_submode": app_state.selection.selection_submode,
             "selection_bbox": bb,
             "nodes_mode_prev_rect": nodes_mode_prev_rect_cache,
             "nodes_mode_next_rect": nodes_mode_next_rect_cache,
@@ -662,11 +642,11 @@ def main():
             "trace_algo_next_rect": trace_algo_next_rect_cache,
             "draw_tool_prev_rect": draw_tool_prev_rect_cache,
             "draw_tool_next_rect": draw_tool_next_rect_cache,
-            "draw_shape": draw_shape,
+            "draw_shape": app_state.tools.draw_shape,
             "draw_shape_rects": draw_shape_rects_cache,
-            "draw_shape_variant": triangle_variant,
-            "rect_variant": rect_variant,
-            "ellipse_variant": ellipse_variant,
+            "draw_shape_variant": app_state.tools.triangle_variant,
+            "rect_variant": app_state.tools.rect_variant,
+            "ellipse_variant": app_state.tools.ellipse_variant,
             "line_constrain": line_constrain,
             "line_arrow": line_arrow,
             "corner_radius": corner_radius,
@@ -681,12 +661,12 @@ def main():
             "panel_collapsed": panel_collapsed,
             "panel_toggle_rect": panel_toggle_rect_cache,
             "workspace_rect": pygame.Rect(0, 0, 0, 0),
-            "draw_tool": draw_tool,
+            "draw_tool": app_state.tools.draw_tool,
             "draw_tool_pen_rect": draw_tool_pen_rect_cache,
             "draw_tool_eraser_rect": draw_tool_eraser_rect_cache,
             "draw_tool_bucket_rect": draw_tool_bucket_rect_cache,
             "draw_tool_cutter_rect": draw_tool_cutter_rect_cache,
-            "bezier_pen": bezier_pen,
+            "bezier_pen": app_state.tools.bezier_pen,
             "bucket_fill_color": bucket_fill_color,
             "bucket_picker_h": bucket_picker_h,
             "bucket_picker_s": bucket_picker_s,
@@ -696,18 +676,18 @@ def main():
             "bucket_hue_rect": bucket_hue_rect_cache,
             "bucket_swatch_rects": bucket_swatch_rects_cache,
             "snap_toggle_rect": snap_toggle_rect_cache,
-            "selected_curve": state_selected_curve,
-            "selected_curves": state_selected_curves,
-            "selected_point": selected_point,
-            "redrawing_curve": state_redrawing_curve,
+            "selected_curve": app_state.selection.selected_curve,
+            "selected_curves": set(app_state.selection.selected_curves),
+            "selected_point": app_state.selection.selected_point,
+            "redrawing_curve": app_state.drag.redrawing_curve,
             "curve_hide_rect": curve_hide_rect_cache,
             "curve_redraw_rect": curve_redraw_rect_cache,
             "curve_cut_rect": curve_cut_rect_cache,
             "curve_join_rect": curve_join_rect_cache,
-            "curve_cut_mode": curve_cut_mode,
-            "eyedropper_pick": eyedropper_pick,
+            "curve_cut_mode": app_state.tools.curve_cut_mode,
+            "eyedropper_pick": app_state.tools.eyedropper_pick,
             "eyedropper_rect": eyedropper_rect_cache,
-            "cut_gap": cut_gap,
+            "cut_gap": app_state.drag.cut_gap,
             "cut_gap_slider": cut_gap_slider,
             "wave_toggle_rect": wave_toggle_rect_cache,
             "wave_add_rect": wave_add_rect_cache,
