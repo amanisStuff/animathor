@@ -1,9 +1,6 @@
 """Split helper for mbd_panel_b color section (SRP)."""
 import copy, math, pygame
 import config as cfg
-from models import *
-from views import *
-from controllers.coordinates import *
 
 
 def _b3_color(ctx, event, _w_hit):
@@ -25,6 +22,10 @@ def _b3_color(ctx, event, _w_hit):
                     ctx.strokes[si]["components"] = ctx.comps
             ctx._c_set_comp_stroke_color = _set_comp_stroke_color
             if ctx._c_primary_obj is not None:
-                from controllers.mbd_panel_b_color_parts import handle_bc_part1, handle_bc_part2, handle_bc_part3
-                handle_bc_part1(ctx, event) or handle_bc_part2(ctx, event) or handle_bc_part3(ctx, event)
+                from controllers.panel_actions.color_fill import (
+                    handle_color_targets,
+                    handle_fill_stops,
+                    handle_color_picker,
+                )
+                handle_color_targets(ctx, event) or handle_fill_stops(ctx, event) or handle_color_picker(ctx, event)
     return _w_hit

@@ -1,23 +1,20 @@
 """Panel click helpers (split for SRP)."""
 import copy, math, pygame
 import config as cfg
-from models import *
-from views import *
-from controllers.coordinates import *
+from config import TRACE_ALGORITHMS
+
+from views.canvas_extra2 import load_reference_image
+from views.dialogs import pick_reference_image_path
 from controllers.mbd_panel_a2 import _handle_panel_click_a_p2, _handle_panel_click_a_p3
 
-# _handle_panel_click_a
-
 def _handle_panel_click_a(ctx, event):
-    _r = _handle_panel_click_a_p1(ctx, event)
-    if _r == 'continue': return 'continue'
-    if _r == 'break': return 'break'
-    _r = _handle_panel_click_a_p2(ctx, event)
-    if _r == 'continue': return 'continue'
-    if _r == 'break': return 'break'
-    _r = _handle_panel_click_a_p3(ctx, event)
-    if _r == 'continue': return 'continue'
-    if _r == 'break': return 'break'
+    """Semantic panel dispatch: draw options -> transform align -> transform nudge."""
+    for handler in (_handle_panel_click_a_p1, _handle_panel_click_a_p2, _handle_panel_click_a_p3):
+        _r = handler(ctx, event)
+        if _r == 'continue':
+            return 'continue'
+        if _r == 'break':
+            return 'break'
     return None
 
 def _handle_panel_click_a_p1(ctx, event):

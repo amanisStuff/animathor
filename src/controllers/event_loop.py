@@ -6,64 +6,39 @@ from views import *
 from controllers.coordinates import *
 
 
-def _ev_keydown(ctx):
+def _sync_all(ctx, src):
+    """Sync all attributes from handler ctx back to event ctx.
+
+    Replaces hardcoded per-handler sync field lists. This keeps the extraction
+    boundary behavior-preserving while eliminating sync-plumbing maintenance.
+    """
+    ctx.__dict__.update(src.__dict__)
+
+
+def _call_handler(ctx, handler_fn):
     import types as _types
-    _ex_ctx = ctx._types.SimpleNamespace()
-    _ex_ctx.__dict__.update({ctx.k:ctx.v for ctx.k,ctx.v in ctx.locals().items()})
-    from controllers.key_down import handle_keydown as _hf
-    _ex_r = _hf(_ex_ctx, ctx.event)
-    for _k in ['_bezier_last_click', 'anchors', 'bezier_pen', 'bucket_fill_color', 'bucket_picker_drag', 'clock', 'color_target', 'comp_i', 'comps', 'current_points', 'curve_cut_mode', 'cut_points', 'cutting', 'drag_last', 'draw_shape', 'draw_tool', 'drawing', 'export_dialog_format', 'export_dialog_open', 'export_dpi', 'export_scale', 'eyedropper_pick', 'fill_stop_pos_drag', 'gradient_drag', 'guide_drag', 'guides', 'help_open', 'limit', 'marquee_select', 'max_points_per_curve', 'menu_open', 'obj_opacity_drag', 'pan_drag', 'panel_collapsed', 'pending_transform_toggle', 'picker_drag_alpha', 'picker_drag_hue', 'picker_drag_sv', 'picker_h', 'picker_s', 'picker_v', 'pivot_drag', 'pivot_pos', 'redrawing_curve', 'ref_drag', 'ref_opacity_drag', 'reference_error', 'reference_image', 'repeat_pick_mode', 'repeat_pick_target', 'running', 'screen', 'selected_curve', 'selected_curves', 'selected_point', 'selected_strokes', 'selection_submode', 'shape_menu_anchor', 'shape_menu_key', 'si', 'smart_snap_guides', 'snap', 'snap_enabled', 'space_panning', 'state', 'strokes', 'text_entry', 'tool_mode', 'transform_drag', 'w', 'wave_custom_drag', 'wave_formula_focus', 'wave_slider_drag', 'workspace', 'xform_field_buffer', 'xform_field_focus']:
-        if hasattr(_ex_ctx, _k):
-            setattr(ctx, _k, getattr(_ex_ctx, _k))
-    if hasattr(_ex_ctx, 'mods'): mods = _ex_ctx.mods
-    if hasattr(_ex_ctx, 'shift'): shift = _ex_ctx.shift
-    if hasattr(_ex_ctx, 'step'): step = _ex_ctx.step
-    if hasattr(_ex_ctx, 'wi'): wi = _ex_ctx.wi
-    if _ex_r == 'continue':
-        return 'continue'
-    return None
+    ex = _types.SimpleNamespace(**ctx.__dict__)
+    result = handler_fn(ex, ctx.event)
+    _sync_all(ctx, ex)
+    return result
+
+
+def _ev_keydown(ctx):
+    from controllers.key_down import handle_keydown
+    r = _call_handler(ctx, handle_keydown)
+    return 'continue' if r == 'continue' else None
+
 
 def _ev_mbd1(ctx):
-    import types as _types
-    _mbd_ctx = ctx._types.SimpleNamespace()
-    _mbd_ctx.__dict__.update({ctx.k:ctx.v for ctx.k,ctx.v in ctx.locals().items()})
-    from controllers.mouse_button_down import handle_mousebuttondown1 as _hmbd
-    _mbd_result = _hmbd(_mbd_ctx, ctx.event)
-    for _k in ['_bezier_last_click', 'a', 'alpha', 'b', 'bar', 'base', 'bb', 'best_d', 'bezier_pen', 'boost_points', 'boxes', 'bucket_fill_color', 'bucket_picker_drag', 'c1', 'col', 'color_target', 'comp_i', 'comps', 'corner_radius', 'cpos', 'current_points', 'curve_cut_mode', 'cut_gap', 'cut_points', 'cutting', 'cx', 'cy', 'd', 'drag_last', 'draw_shape', 'draw_tool', 'drawing', 'dx', 'dy', 'ellipse_segments', 'ellipse_variant', 'end', 'export_dialog_format', 'export_dialog_open', 'export_dpi', 'export_scale', 'eyedropper_pick', 'field', 'fill_color', 'fill_stop_pos_drag', 'first', 'fixed_end', 'fixed_start', 'gradient_drag', 'guide_drag', 'guides', 'h', 'help_open', 'i', 'idxs', 'items', 'k', 'key', 'limit', 'line_arrow', 'line_constrain', 'marker_dropdown', 'marquee_select', 'max_points_per_curve', 'menu_open', 'mode', 'n', 'obj_opacity_drag', 'only', 'opacity', 'pan_drag', 'panel_collapsed', 'path', 'pending_transform_toggle', 'picker_drag_alpha', 'picker_drag_hue', 'picker_drag_sv', 'picker_h', 'picker_s', 'picker_v', 'pivot_drag', 'pivot_pos', 'polygon_sides', 'pos', 'primary', 'primary_i', 'r', 'rect_variant', 'redrawing_curve', 'ref_drag', 'ref_opacity_drag', 'reference_error', 'reference_image', 'repeat_pick_mode', 'repeat_pick_target', 'result', 'running', 's', 's1', 'scx', 'scy', 'segs', 'sel', 'sel_list', 'selected_curve', 'selected_curves', 'selected_point', 'selected_strokes', 'selection_submode', 'shadow', 'shape_menu_anchor', 'shape_menu_key', 'shift_held', 'si', 'smart_snap_guides', 'snap_enabled', 'sp', 'space_panning', 'st', 'star_inner_ratio', 'star_points', 'start_strokes', 'state', 'strokes', 'sv', 'sx1', 'sy1', 'tcx', 'tcy', 'text_entry', 'text_family', 'text_size', 'tool_mode', 'trace_algorithm', 'transform_drag', 'triangle_variant', 'tx1', 'ty1', 'val', 'w', 'wave_custom_drag', 'wave_formula_focus', 'wave_slider_drag', 'workspace', 'xform_field_buffer', 'xform_field_focus']:
-        if hasattr(_mbd_ctx, _k):
-            setattr(ctx, _k, getattr(_mbd_ctx, _k))
-    if hasattr(_mbd_ctx, 'cfg'): cfg = _mbd_ctx.cfg
-    if hasattr(_mbd_ctx, 'ci'): ci = _mbd_ctx.ci
-    if hasattr(_mbd_ctx, 'comp'): comp = _mbd_ctx.comp
-    if hasattr(_mbd_ctx, 'comp_style_target'): comp_style_target = _mbd_ctx.comp_style_target
-    if hasattr(_mbd_ctx, 'handled'): handled = _mbd_ctx.handled
-    if hasattr(_mbd_ctx, 'mods'): mods = _mbd_ctx.mods
-    if hasattr(_mbd_ctx, 'picked'): picked = _mbd_ctx.picked
-    if hasattr(_mbd_ctx, 'pname'): pname = _mbd_ctx.pname
-    if hasattr(_mbd_ctx, 'rects'): rects = _mbd_ctx.rects
-    if hasattr(_mbd_ctx, 'seg_i'): seg_i = _mbd_ctx.seg_i
-    if hasattr(_mbd_ctx, 'shift'): shift = _mbd_ctx.shift
-    if hasattr(_mbd_ctx, 'step'): step = _mbd_ctx.step
-    if hasattr(_mbd_ctx, 't'): t = _mbd_ctx.t
-    if hasattr(_mbd_ctx, 'wi'): wi = _mbd_ctx.wi
-    if _mbd_result == 'continue':
-        return 'continue'
-    return None
+    from controllers.mouse_button_down import handle_mousebuttondown1
+    r = _call_handler(ctx, handle_mousebuttondown1)
+    return 'continue' if r == 'continue' else None
+
 
 def _ev_mbup1(ctx):
-    import types as _types
-    _ex_ctx = ctx._types.SimpleNamespace()
-    _ex_ctx.__dict__.update({ctx.k:ctx.v for ctx.k,ctx.v in ctx.locals().items()})
-    from controllers.mouse_button_up import handle_mousebuttonup1 as _hf
-    _ex_r = _hf(_ex_ctx, ctx.event)
-    for _k in ['_bezier_last_click', 'algo_name', 'base', 'bezier_pen', 'bucket_fill_color', 'bucket_picker_drag', 'c1', 'c2', 'clock', 'color_target', 'comp_i', 'cpos', 'current_points', 'curve_cut_mode', 'cut_points', 'cutting', 'drag_last', 'draw_shape', 'draw_tool', 'drawing', 'export_dialog_format', 'export_dialog_open', 'export_dpi', 'export_scale', 'eyedropper_pick', 'fill_stop_pos_drag', 'fixed_end', 'fixed_start', 'gradient_drag', 'guide_drag', 'guides', 'help_open', 'i', 'keys', 'marquee_select', 'max_points_per_curve', 'menu_open', 'obj_opacity_drag', 'only', 'p', 'p0', 'p3', 'pan_drag', 'panel_collapsed', 'pending_transform_toggle', 'picker_drag_alpha', 'picker_drag_hue', 'picker_drag_sv', 'picker_h', 'picker_s', 'picker_v', 'pivot_drag', 'pivot_pos', 'pts', 'r', 'redrawing_curve', 'ref_drag', 'ref_opacity_drag', 'reference_error', 'reference_image', 'repeat_pick_mode', 'repeat_pick_target', 'running', 's', 'screen', 'selected_curve', 'selected_curves', 'selected_point', 'selected_strokes', 'selection_submode', 'shape_menu_anchor', 'shape_menu_key', 'shift_held', 'si', 'smart_snap_guides', 'snap_enabled', 'space_panning', 'st', 'state', 'strokes', 'text_entry', 'tool_mode', 'transform_drag', 'transform_handle_mode', 'wave_custom_drag', 'wave_formula_focus', 'wave_slider_drag', 'workspace', 'xform_field_buffer', 'xform_field_focus']:
-        if hasattr(_ex_ctx, _k):
-            setattr(ctx, _k, getattr(_ex_ctx, _k))
-    if hasattr(_ex_ctx, 'comp'): comp = _ex_ctx.comp
-    if hasattr(_ex_ctx, 'picked'): picked = _ex_ctx.picked
-    if _ex_r == 'continue':
-        return 'continue'
-    return None
+    from controllers.mouse_button_up import handle_mousebuttonup1
+    r = _call_handler(ctx, handle_mousebuttonup1)
+    return 'continue' if r == 'continue' else None
 
 def process_events(ctx):
     for ctx.event in pygame.event.get():
@@ -152,7 +127,12 @@ def process_events(ctx):
                             ctx.redrawing_curve["points"][-1] = ctx.snap
 
         elif ctx.event.type == pygame.MOUSEBUTTONDOWN and ctx.event.button == 2:
-            ctx.pan_drag = {"start_mouse": ctx.event.pos, "start_pan": (getattr(cfg, "VIEW_PAN_X", 0.0), getattr(cfg, "VIEW_PAN_Y", 0.0))}
+            dm = getattr(ctx, 'drag_manager', None)
+            if dm is not None:
+                from controllers.drag.pan_session import PanDragSession
+                dm.begin(PanDragSession(), ctx, ctx.event)
+            else:
+                ctx.pan_drag = {"start_mouse": ctx.event.pos, "start_pan": (getattr(cfg, "VIEW_PAN_X", 0.0), getattr(cfg, "VIEW_PAN_Y", 0.0))}
         elif ctx.event.type == pygame.MOUSEBUTTONDOWN and ctx.event.button == 3:
             if ctx.export_dialog_open:
                 continue
@@ -173,17 +153,45 @@ def process_events(ctx):
             ctx.state["shape_menu_anchor"] = ctx.shape_menu_anchor
         elif ctx.event.type == pygame.MOUSEBUTTONDOWN and ctx.event.button == 1:
             _r = _ev_mbd1(ctx)
+            dm = getattr(ctx, 'drag_manager', None)
+            if dm is not None and dm.active is None:
+                if (ctx.tool_mode == 'draw' and ctx.draw_tool == 'pen'
+                        and ctx.draw_shape == 'pen' and ctx.bezier_pen is not None):
+                    from controllers.drag.bezier_session import BezierPenSession
+                    dm.begin(BezierPenSession(), ctx, ctx.event)
             if _r == 'continue': continue
         elif ctx.event.type == pygame.MOUSEMOTION:
+            dm = getattr(ctx, 'drag_manager', None)
+            if dm is not None:
+                from controllers.drag.ui_session import ui_drag_active, UiDragSession
+                if dm.active is None and ui_drag_active(ctx):
+                    dm.begin(UiDragSession(), ctx, ctx.event)
+                if dm.active is not None and dm.active.name == 'ui':
+                    if dm.move(ctx, ctx.event):
+                        continue
+                    dm.end(ctx, ctx.event)
+            if dm is not None and dm.active is not None and dm.active.name in ('pan', 'guide', 'marquee', 'pivot', 'ref', 'transform', 'gradient', 'cutter', 'draw', 'redraw'):
+                if dm.move(ctx, ctx.event):
+                    continue
+            if dm is not None:
+                from controllers.drag.bezier_session import BezierPenSession
+                if dm.modal_motion(BezierPenSession(), ctx, ctx.event):
+                    continue
             import types as _types
-            _mm_ctx = ctx._types.SimpleNamespace()
-            _mm_ctx.__dict__.update({ctx.k:ctx.v for ctx.k,ctx.v in ctx.locals().items()})
+            _mm_ctx = _types.SimpleNamespace(**ctx.__dict__)
             from controllers.mouse_motion import handle_mousemotion as _hmm
             _hmm(_mm_ctx, ctx.event)
+            _sync_all(ctx, _mm_ctx)
 
         elif ctx.event.type == pygame.MOUSEBUTTONUP and ctx.event.button == 2:
-            if ctx.pan_drag is not None and not ctx.space_panning:
+            dm = getattr(ctx, 'drag_manager', None)
+            if dm is not None and dm.active is not None and dm.active.name == 'pan':
+                dm.end(ctx, ctx.event)
+            elif ctx.pan_drag is not None and not ctx.space_panning:
                 ctx.pan_drag = None
         elif ctx.event.type == pygame.MOUSEBUTTONUP and ctx.event.button == 1:
             _r = _ev_mbup1(ctx)
+            dm = getattr(ctx, 'drag_manager', None)
+            if dm is not None and dm.active is not None and dm.active.name in ('guide', 'pan', 'marquee', 'pivot', 'ref', 'transform', 'gradient', 'cutter', 'draw', 'redraw', 'bezier', 'ui'):
+                dm.end(ctx, ctx.event)
             if _r == 'continue': continue

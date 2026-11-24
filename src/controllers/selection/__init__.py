@@ -1,0 +1,1 @@
+"""Semantic selection-mode handlers."""

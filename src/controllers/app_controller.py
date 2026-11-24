@@ -78,6 +78,11 @@ def main():
     selected_curve = None  # (stroke_idx, comp_idx) in curve edit mode
     redrawing_curve = None  # {"stroke_idx", "comp_idx", "points", "started", "fixed_start", "fixed_end"}
     drag_last = None
+    from controllers.drag import DragManager
+    from controllers.app_state import AppState
+    drag_manager = DragManager()  # semantic drag session manager (incremental migration)
+    app_state = AppState()  # typed state contract (incremental migration target)
+    app_state.drag.drag_manager = drag_manager
     selection_submode = "transform"  # "transform", "nodes", or "curve"
     transform_handle_mode = "scale"  # "scale" or "rotate" (Inkscape-like toggle inside transform)
     transform_drag = None  # {"handle": name, "start_mouse": (x,y), "start_strokes": {i: copy}, "center": (cx,cy), "start_bbox": bbox, "mode": str}
@@ -300,7 +305,19 @@ def main():
         return _snap.snap_world(pos, guides, cfg, threshold_px=threshold_px)
 
     running = True
+    # Seed AppState from initialized locals (AppState becomes primary for its slice).
+    try:
+        app_state.sync_from_locals(locals())
+    except Exception:
+        pass
     while running:
+        # AppState-primary slice: refresh locals from AppState before frame processing.
+        try:
+            import sys as _sys, types as _t
+            from controllers.ctx_sync import sync_to_frame_locals as _sync_locals
+            _sync_locals(_sys._getframe(), _t.SimpleNamespace(**app_state.to_locals_dict()), app_state._SYNC_FIELDS)
+        except Exception:
+            pass
         mouse_pos = pygame.mouse.get_pos()
         _frame.compute_hover_snap()
 
@@ -558,203 +575,58 @@ def main():
                 save_document=save_document, state=state, strokes=strokes, translate_stroke=translate_stroke,
             )
             result = _menu_dispatch.run_menu_action(key, s)
-            _shape_state_counter = s._shape_state_counter; _symbol_counter = s._symbol_counter
-            active_artboard = s.active_artboard; artboards = s.artboards; clipboard_strokes = s.clipboard_strokes
-            current_points = s.current_points; curve_cut_mode = s.curve_cut_mode; cut_points = s.cut_points
-            cutting = s.cutting; document_path = s.document_path; drag_last = s.drag_last
-            draw_tool = s.draw_tool; drawing = s.drawing; export_dialog_format = s.export_dialog_format
-            export_dialog_open = s.export_dialog_open; eyedropper_pick = s.eyedropper_pick
-            help_open = s.help_open; panel_collapsed = s.panel_collapsed; redrawing_curve = s.redrawing_curve
-            running = s.running; selected_curve = s.selected_curve; selected_curves = s.selected_curves
-            selected_point = s.selected_point; selected_strokes = s.selected_strokes
-            selection_submode = s.selection_submode; shape_states = s.shape_states; snap_enabled = s.snap_enabled
-            symbols = s.symbols; text_entry = s.text_entry; text_family = s.text_family; text_size = s.text_size
-            tool_mode = s.tool_mode; transform_drag = s.transform_drag; workspace = s.workspace
+            # Auto-sync menu action state back to frame locals (no hardcoded field list).
+            import sys as _sys2
+            _menu_cb = set(_menu_dispatch._MENU_CALLBACK_FIELDS)
+            _fl = _sys2._getframe().f_locals
+            _chg = False
+            for _k, _v in s.__dict__.items():
+                if _k in _menu_cb:
+                    continue
+                if _fl.get(_k) is not _v:
+                    _fl[_k] = _v
+                    _chg = True
+            if _chg:
+                try:
+                    import ctypes as _ct
+                    _ct.pythonapi.PyFrame_LocalsToFast(_ct.py_object(_sys2._getframe()), _ct.c_int(0))
+                except Exception:
+                    pass
             return result
 
         # Event loop (extracted)
+        try:
+            app_state.sync_from_locals(locals())
+        except Exception:
+            pass
         _frame.process_event_frame()
+        try:
+            app_state.sync_from_locals(locals())
+            from controllers.ctx_sync import sync_to_frame_locals as _sync_locals
+            import sys as _sys
+            import types as _t
+            _sync_locals(_sys._getframe(), _t.SimpleNamespace(**app_state.to_locals_dict()), app_state._SYNC_FIELDS)
+        except Exception:
+            pass
         # Render frame (extracted)
         import types as _types
-        _rf_ctx=_types.SimpleNamespace()
-        _rf_ctx.__dict__.update({k:v for k,v in locals().items()})
+        _rf_ctx = _types.SimpleNamespace(**locals())
         from controllers.render_frame import render_frame as _rf
         _rf(_rf_ctx)
-        if hasattr(_rf_ctx,'_n'): _n=_rf_ctx._n
-        if hasattr(_rf_ctx,'active'): active=_rf_ctx.active
-        if hasattr(_rf_ctx,'align_bottom_rect_cache'): align_bottom_rect_cache=_rf_ctx.align_bottom_rect_cache
-        if hasattr(_rf_ctx,'align_hcenter_rect_cache'): align_hcenter_rect_cache=_rf_ctx.align_hcenter_rect_cache
-        if hasattr(_rf_ctx,'align_left_rect_cache'): align_left_rect_cache=_rf_ctx.align_left_rect_cache
-        if hasattr(_rf_ctx,'align_right_rect_cache'): align_right_rect_cache=_rf_ctx.align_right_rect_cache
-        if hasattr(_rf_ctx,'align_top_rect_cache'): align_top_rect_cache=_rf_ctx.align_top_rect_cache
-        if hasattr(_rf_ctx,'align_vmiddle_rect_cache'): align_vmiddle_rect_cache=_rf_ctx.align_vmiddle_rect_cache
-        if hasattr(_rf_ctx,'bool_exclude_rect_cache'): bool_exclude_rect_cache=_rf_ctx.bool_exclude_rect_cache
-        if hasattr(_rf_ctx,'bool_intersect_rect_cache'): bool_intersect_rect_cache=_rf_ctx.bool_intersect_rect_cache
-        if hasattr(_rf_ctx,'bool_subtract_rect_cache'): bool_subtract_rect_cache=_rf_ctx.bool_subtract_rect_cache
-        if hasattr(_rf_ctx,'bool_union_rect_cache'): bool_union_rect_cache=_rf_ctx.bool_union_rect_cache
-        if hasattr(_rf_ctx,'bucket_hue_rect_cache'): bucket_hue_rect_cache=_rf_ctx.bucket_hue_rect_cache
-        if hasattr(_rf_ctx,'bucket_picker_h'): bucket_picker_h=_rf_ctx.bucket_picker_h
-        if hasattr(_rf_ctx,'bucket_picker_s'): bucket_picker_s=_rf_ctx.bucket_picker_s
-        if hasattr(_rf_ctx,'bucket_picker_v'): bucket_picker_v=_rf_ctx.bucket_picker_v
-        if hasattr(_rf_ctx,'bucket_sv_rect_cache'): bucket_sv_rect_cache=_rf_ctx.bucket_sv_rect_cache
-        if hasattr(_rf_ctx,'bucket_swatch_rects_cache'): bucket_swatch_rects_cache=_rf_ctx.bucket_swatch_rects_cache
-        if hasattr(_rf_ctx,'cap_next_rect_cache'): cap_next_rect_cache=_rf_ctx.cap_next_rect_cache
-        if hasattr(_rf_ctx,'cap_prev_rect_cache'): cap_prev_rect_cache=_rf_ctx.cap_prev_rect_cache
-        if hasattr(_rf_ctx,'cfg'): cfg=_rf_ctx.cfg
-        if hasattr(_rf_ctx,'clock'): clock=_rf_ctx.clock
-        if hasattr(_rf_ctx,'color_target'): color_target=_rf_ctx.color_target
-        if hasattr(_rf_ctx,'current_points'): current_points=_rf_ctx.current_points
-        if hasattr(_rf_ctx,'curve_cut_rect_cache'): curve_cut_rect_cache=_rf_ctx.curve_cut_rect_cache
-        if hasattr(_rf_ctx,'curve_hide_rect_cache'): curve_hide_rect_cache=_rf_ctx.curve_hide_rect_cache
-        if hasattr(_rf_ctx,'curve_join_rect_cache'): curve_join_rect_cache=_rf_ctx.curve_join_rect_cache
-        if hasattr(_rf_ctx,'curve_redraw_rect_cache'): curve_redraw_rect_cache=_rf_ctx.curve_redraw_rect_cache
-        if hasattr(_rf_ctx,'dash_next_rect_cache'): dash_next_rect_cache=_rf_ctx.dash_next_rect_cache
-        if hasattr(_rf_ctx,'dash_prev_rect_cache'): dash_prev_rect_cache=_rf_ctx.dash_prev_rect_cache
-        if hasattr(_rf_ctx,'displacement_add_rect_cache'): displacement_add_rect_cache=_rf_ctx.displacement_add_rect_cache
-        if hasattr(_rf_ctx,'displacement_affect_rects_cache'): displacement_affect_rects_cache=_rf_ctx.displacement_affect_rects_cache
-        if hasattr(_rf_ctx,'displacement_profile_rects_cache'): displacement_profile_rects_cache=_rf_ctx.displacement_profile_rects_cache
-        if hasattr(_rf_ctx,'distribute_h_rect_cache'): distribute_h_rect_cache=_rf_ctx.distribute_h_rect_cache
-        if hasattr(_rf_ctx,'distribute_v_rect_cache'): distribute_v_rect_cache=_rf_ctx.distribute_v_rect_cache
-        if hasattr(_rf_ctx,'draw_shape_rects_cache'): draw_shape_rects_cache=_rf_ctx.draw_shape_rects_cache
-        if hasattr(_rf_ctx,'draw_tool_bucket_rect_cache'): draw_tool_bucket_rect_cache=_rf_ctx.draw_tool_bucket_rect_cache
-        if hasattr(_rf_ctx,'draw_tool_cutter_rect_cache'): draw_tool_cutter_rect_cache=_rf_ctx.draw_tool_cutter_rect_cache
-        if hasattr(_rf_ctx,'draw_tool_eraser_rect_cache'): draw_tool_eraser_rect_cache=_rf_ctx.draw_tool_eraser_rect_cache
-        if hasattr(_rf_ctx,'draw_tool_next_rect_cache'): draw_tool_next_rect_cache=_rf_ctx.draw_tool_next_rect_cache
-        if hasattr(_rf_ctx,'draw_tool_pen_rect_cache'): draw_tool_pen_rect_cache=_rf_ctx.draw_tool_pen_rect_cache
-        if hasattr(_rf_ctx,'draw_tool_prev_rect_cache'): draw_tool_prev_rect_cache=_rf_ctx.draw_tool_prev_rect_cache
-        if hasattr(_rf_ctx,'drawing'): drawing=_rf_ctx.drawing
-        if hasattr(_rf_ctx,'elev_back_rect_cache'): elev_back_rect_cache=_rf_ctx.elev_back_rect_cache
-        if hasattr(_rf_ctx,'elev_backward_rect_cache'): elev_backward_rect_cache=_rf_ctx.elev_backward_rect_cache
-        if hasattr(_rf_ctx,'elev_forward_rect_cache'): elev_forward_rect_cache=_rf_ctx.elev_forward_rect_cache
-        if hasattr(_rf_ctx,'elev_front_rect_cache'): elev_front_rect_cache=_rf_ctx.elev_front_rect_cache
-        if hasattr(_rf_ctx,'export_dialog_rects'): export_dialog_rects=_rf_ctx.export_dialog_rects
-        if hasattr(_rf_ctx,'export_dpi'): export_dpi=_rf_ctx.export_dpi
-        if hasattr(_rf_ctx,'export_scale'): export_scale=_rf_ctx.export_scale
-        if hasattr(_rf_ctx,'eyedropper_rect_cache'): eyedropper_rect_cache=_rf_ctx.eyedropper_rect_cache
-        if hasattr(_rf_ctx,'fill_gradient_stop'): fill_gradient_stop=_rf_ctx.fill_gradient_stop
-        if hasattr(_rf_ctx,'fill_stop_add_rect_cache'): fill_stop_add_rect_cache=_rf_ctx.fill_stop_add_rect_cache
-        if hasattr(_rf_ctx,'fill_stop_pos_drag'): fill_stop_pos_drag=_rf_ctx.fill_stop_pos_drag
-        if hasattr(_rf_ctx,'fill_stop_pos_rect_cache'): fill_stop_pos_rect_cache=_rf_ctx.fill_stop_pos_rect_cache
-        if hasattr(_rf_ctx,'fill_stop_rects_cache'): fill_stop_rects_cache=_rf_ctx.fill_stop_rects_cache
-        if hasattr(_rf_ctx,'fill_stop_remove_rect_cache'): fill_stop_remove_rect_cache=_rf_ctx.fill_stop_remove_rect_cache
-        if hasattr(_rf_ctx,'fill_type_next_rect_cache'): fill_type_next_rect_cache=_rf_ctx.fill_type_next_rect_cache
-        if hasattr(_rf_ctx,'fill_type_prev_rect_cache'): fill_type_prev_rect_cache=_rf_ctx.fill_type_prev_rect_cache
-        if hasattr(_rf_ctx,'frame'): frame=_rf_ctx.frame
-        if hasattr(_rf_ctx,'guides'): guides=_rf_ctx.guides
-        if hasattr(_rf_ctx,'join_next_rect_cache'): join_next_rect_cache=_rf_ctx.join_next_rect_cache
-        if hasattr(_rf_ctx,'join_prev_rect_cache'): join_prev_rect_cache=_rf_ctx.join_prev_rect_cache
-        if hasattr(_rf_ctx,'marker_dropdown'): marker_dropdown=_rf_ctx.marker_dropdown
-        if hasattr(_rf_ctx,'marker_dropdown_item_rects'): marker_dropdown_item_rects=_rf_ctx.marker_dropdown_item_rects
-        if hasattr(_rf_ctx,'marker_dropdown_rect'): marker_dropdown_rect=_rf_ctx.marker_dropdown_rect
-        if hasattr(_rf_ctx,'marker_end_rect_cache'): marker_end_rect_cache=_rf_ctx.marker_end_rect_cache
-        if hasattr(_rf_ctx,'marker_start_rect_cache'): marker_start_rect_cache=_rf_ctx.marker_start_rect_cache
-        if hasattr(_rf_ctx,'menu_bar_rects'): menu_bar_rects=_rf_ctx.menu_bar_rects
-        if hasattr(_rf_ctx,'menu_item_rects'): menu_item_rects=_rf_ctx.menu_item_rects
-        if hasattr(_rf_ctx,'mirror_h_rect_cache'): mirror_h_rect_cache=_rf_ctx.mirror_h_rect_cache
-        if hasattr(_rf_ctx,'mirror_v_rect_cache'): mirror_v_rect_cache=_rf_ctx.mirror_v_rect_cache
-        if hasattr(_rf_ctx,'nodes_mode_next_rect_cache'): nodes_mode_next_rect_cache=_rf_ctx.nodes_mode_next_rect_cache
-        if hasattr(_rf_ctx,'nodes_mode_prev_rect_cache'): nodes_mode_prev_rect_cache=_rf_ctx.nodes_mode_prev_rect_cache
-        if hasattr(_rf_ctx,'obj_opacity_drag'): obj_opacity_drag=_rf_ctx.obj_opacity_drag
-        if hasattr(_rf_ctx,'obj_opacity_rect_cache'): obj_opacity_rect_cache=_rf_ctx.obj_opacity_rect_cache
-        if hasattr(_rf_ctx,'p'): p=_rf_ctx.p
-        if hasattr(_rf_ctx,'panel_collapsed'): panel_collapsed=_rf_ctx.panel_collapsed
-        if hasattr(_rf_ctx,'panel_scroll'): panel_scroll=_rf_ctx.panel_scroll
-        if hasattr(_rf_ctx,'panel_toggle_rect_cache'): panel_toggle_rect_cache=_rf_ctx.panel_toggle_rect_cache
-        if hasattr(_rf_ctx,'path_add_rect_cache'): path_add_rect_cache=_rf_ctx.path_add_rect_cache
-        if hasattr(_rf_ctx,'path_close_rect_cache'): path_close_rect_cache=_rf_ctx.path_close_rect_cache
-        if hasattr(_rf_ctx,'path_corner_rect_cache'): path_corner_rect_cache=_rf_ctx.path_corner_rect_cache
-        if hasattr(_rf_ctx,'path_delete_rect_cache'): path_delete_rect_cache=_rf_ctx.path_delete_rect_cache
-        if hasattr(_rf_ctx,'path_expand_rect_cache'): path_expand_rect_cache=_rf_ctx.path_expand_rect_cache
-        if hasattr(_rf_ctx,'path_reverse_rect_cache'): path_reverse_rect_cache=_rf_ctx.path_reverse_rect_cache
-        if hasattr(_rf_ctx,'path_smooth_rect_cache'): path_smooth_rect_cache=_rf_ctx.path_smooth_rect_cache
-        if hasattr(_rf_ctx,'pattern_size_minus_rect_cache'): pattern_size_minus_rect_cache=_rf_ctx.pattern_size_minus_rect_cache
-        if hasattr(_rf_ctx,'pattern_size_plus_rect_cache'): pattern_size_plus_rect_cache=_rf_ctx.pattern_size_plus_rect_cache
-        if hasattr(_rf_ctx,'pattern_type_rect_cache'): pattern_type_rect_cache=_rf_ctx.pattern_type_rect_cache
-        if hasattr(_rf_ctx,'picker_h'): picker_h=_rf_ctx.picker_h
-        if hasattr(_rf_ctx,'picker_s'): picker_s=_rf_ctx.picker_s
-        if hasattr(_rf_ctx,'picker_v'): picker_v=_rf_ctx.picker_v
-        if hasattr(_rf_ctx,'pivot_pos'): pivot_pos=_rf_ctx.pivot_pos
-        if hasattr(_rf_ctx,'primary_i'): primary_i=_rf_ctx.primary_i
-        if hasattr(_rf_ctx,'pts'): pts=_rf_ctx.pts
-        if hasattr(_rf_ctx,'r'): r=_rf_ctx.r
-        if hasattr(_rf_ctx,'rect'): rect=_rf_ctx.rect
-        if hasattr(_rf_ctx,'redrawing_curve'): redrawing_curve=_rf_ctx.redrawing_curve
-        if hasattr(_rf_ctx,'ref_clear_rect_cache'): ref_clear_rect_cache=_rf_ctx.ref_clear_rect_cache
-        if hasattr(_rf_ctx,'ref_load_rect_cache'): ref_load_rect_cache=_rf_ctx.ref_load_rect_cache
-        if hasattr(_rf_ctx,'ref_opacity_rect_cache'): ref_opacity_rect_cache=_rf_ctx.ref_opacity_rect_cache
-        if hasattr(_rf_ctx,'ref_vis_rect_cache'): ref_vis_rect_cache=_rf_ctx.ref_vis_rect_cache
-        if hasattr(_rf_ctx,'repeat_add_rect_cache'): repeat_add_rect_cache=_rf_ctx.repeat_add_rect_cache
-        if hasattr(_rf_ctx,'repeat_pick_curve_rect_cache'): repeat_pick_curve_rect_cache=_rf_ctx.repeat_pick_curve_rect_cache
-        if hasattr(_rf_ctx,'repeat_pick_mode'): repeat_pick_mode=_rf_ctx.repeat_pick_mode
-        if hasattr(_rf_ctx,'repeat_pick_target'): repeat_pick_target=_rf_ctx.repeat_pick_target
-        if hasattr(_rf_ctx,'running'): running=_rf_ctx.running
-        if hasattr(_rf_ctx,'s1'): s1=_rf_ctx.s1
-        if hasattr(_rf_ctx,'screen'): screen=_rf_ctx.screen
-        if hasattr(_rf_ctx,'selected_curve'): selected_curve=_rf_ctx.selected_curve
-        if hasattr(_rf_ctx,'selected_curves'): selected_curves=_rf_ctx.selected_curves
-        if hasattr(_rf_ctx,'selected_point'): selected_point=_rf_ctx.selected_point
-        if hasattr(_rf_ctx,'selected_strokes'): selected_strokes=_rf_ctx.selected_strokes
-        if hasattr(_rf_ctx,'selection_submode'): selection_submode=_rf_ctx.selection_submode
-        if hasattr(_rf_ctx,'shadow_blur_minus_rect_cache'): shadow_blur_minus_rect_cache=_rf_ctx.shadow_blur_minus_rect_cache
-        if hasattr(_rf_ctx,'shadow_blur_plus_rect_cache'): shadow_blur_plus_rect_cache=_rf_ctx.shadow_blur_plus_rect_cache
-        if hasattr(_rf_ctx,'shadow_toggle_rect_cache'): shadow_toggle_rect_cache=_rf_ctx.shadow_toggle_rect_cache
-        if hasattr(_rf_ctx,'shape_menu_anchor'): shape_menu_anchor=_rf_ctx.shape_menu_anchor
-        if hasattr(_rf_ctx,'shape_menu_item_rects'): shape_menu_item_rects=_rf_ctx.shape_menu_item_rects
-        if hasattr(_rf_ctx,'shape_menu_key'): shape_menu_key=_rf_ctx.shape_menu_key
-        if hasattr(_rf_ctx,'shape_menu_rect'): shape_menu_rect=_rf_ctx.shape_menu_rect
-        if hasattr(_rf_ctx,'shape_states'): shape_states=_rf_ctx.shape_states
-        if hasattr(_rf_ctx,'smart_snap_guides'): smart_snap_guides=_rf_ctx.smart_snap_guides
-        if hasattr(_rf_ctx,'snap_toggle_rect_cache'): snap_toggle_rect_cache=_rf_ctx.snap_toggle_rect_cache
-        if hasattr(_rf_ctx,'state'): state=_rf_ctx.state
-        if hasattr(_rf_ctx,'strokes'): strokes=_rf_ctx.strokes
-        if hasattr(_rf_ctx,'text_edit_rect_cache'): text_edit_rect_cache=_rf_ctx.text_edit_rect_cache
-        if hasattr(_rf_ctx,'text_entry'): text_entry=_rf_ctx.text_entry
-        if hasattr(_rf_ctx,'text_font_rect_cache'): text_font_rect_cache=_rf_ctx.text_font_rect_cache
-        if hasattr(_rf_ctx,'text_off_path_rect_cache'): text_off_path_rect_cache=_rf_ctx.text_off_path_rect_cache
-        if hasattr(_rf_ctx,'text_on_path_rect_cache'): text_on_path_rect_cache=_rf_ctx.text_on_path_rect_cache
-        if hasattr(_rf_ctx,'text_size_minus_rect_cache'): text_size_minus_rect_cache=_rf_ctx.text_size_minus_rect_cache
-        if hasattr(_rf_ctx,'text_size_plus_rect_cache'): text_size_plus_rect_cache=_rf_ctx.text_size_plus_rect_cache
-        if hasattr(_rf_ctx,'thickness_add_rect_cache'): thickness_add_rect_cache=_rf_ctx.thickness_add_rect_cache
-        if hasattr(_rf_ctx,'tool_mode'): tool_mode=_rf_ctx.tool_mode
-        if hasattr(_rf_ctx,'trace_algo_next_rect_cache'): trace_algo_next_rect_cache=_rf_ctx.trace_algo_next_rect_cache
-        if hasattr(_rf_ctx,'trace_algo_prev_rect_cache'): trace_algo_prev_rect_cache=_rf_ctx.trace_algo_prev_rect_cache
-        if hasattr(_rf_ctx,'wave_active_index'): wave_active_index=_rf_ctx.wave_active_index
-        if hasattr(_rf_ctx,'wave_add_rect_cache'): wave_add_rect_cache=_rf_ctx.wave_add_rect_cache
-        if hasattr(_rf_ctx,'wave_bake_rect_cache'): wave_bake_rect_cache=_rf_ctx.wave_bake_rect_cache
-        if hasattr(_rf_ctx,'wave_clamp_rect_cache'): wave_clamp_rect_cache=_rf_ctx.wave_clamp_rect_cache
-        if hasattr(_rf_ctx,'wave_clear_rect_cache'): wave_clear_rect_cache=_rf_ctx.wave_clear_rect_cache
-        if hasattr(_rf_ctx,'wave_custom_box_rect_cache'): wave_custom_box_rect_cache=_rf_ctx.wave_custom_box_rect_cache
-        if hasattr(_rf_ctx,'wave_custom_drag'): wave_custom_drag=_rf_ctx.wave_custom_drag
-        if hasattr(_rf_ctx,'wave_custom_draw'): wave_custom_draw=_rf_ctx.wave_custom_draw
-        if hasattr(_rf_ctx,'wave_custom_finished'): wave_custom_finished=_rf_ctx.wave_custom_finished
-        if hasattr(_rf_ctx,'wave_done_rect_cache'): wave_done_rect_cache=_rf_ctx.wave_done_rect_cache
-        if hasattr(_rf_ctx,'wave_formula_focus'): wave_formula_focus=_rf_ctx.wave_formula_focus
-        if hasattr(_rf_ctx,'wave_formula_rect_cache'): wave_formula_rect_cache=_rf_ctx.wave_formula_rect_cache
-        if hasattr(_rf_ctx,'wave_remove_rect_cache'): wave_remove_rect_cache=_rf_ctx.wave_remove_rect_cache
-        if hasattr(_rf_ctx,'wave_reverse_rect_cache'): wave_reverse_rect_cache=_rf_ctx.wave_reverse_rect_cache
-        if hasattr(_rf_ctx,'wave_row_rects_cache'): wave_row_rects_cache=_rf_ctx.wave_row_rects_cache
-        if hasattr(_rf_ctx,'wave_shape_next_rect_cache'): wave_shape_next_rect_cache=_rf_ctx.wave_shape_next_rect_cache
-        if hasattr(_rf_ctx,'wave_shape_prev_rect_cache'): wave_shape_prev_rect_cache=_rf_ctx.wave_shape_prev_rect_cache
-        if hasattr(_rf_ctx,'wave_slider_rects_cache'): wave_slider_rects_cache=_rf_ctx.wave_slider_rects_cache
-        if hasattr(_rf_ctx,'wave_smooth_rect_cache'): wave_smooth_rect_cache=_rf_ctx.wave_smooth_rect_cache
-        if hasattr(_rf_ctx,'wave_toggle_rect_cache'): wave_toggle_rect_cache=_rf_ctx.wave_toggle_rect_cache
-        if hasattr(_rf_ctx,'width_profile_next_rect_cache'): width_profile_next_rect_cache=_rf_ctx.width_profile_next_rect_cache
-        if hasattr(_rf_ctx,'width_profile_prev_rect_cache'): width_profile_prev_rect_cache=_rf_ctx.width_profile_prev_rect_cache
-        if hasattr(_rf_ctx,'workspace'): workspace=_rf_ctx.workspace
-        if hasattr(_rf_ctx,'xform_field_buffer'): xform_field_buffer=_rf_ctx.xform_field_buffer
-        if hasattr(_rf_ctx,'xform_field_focus'): xform_field_focus=_rf_ctx.xform_field_focus
-        if hasattr(_rf_ctx,'xform_h_rect_cache'): xform_h_rect_cache=_rf_ctx.xform_h_rect_cache
-        if hasattr(_rf_ctx,'xform_hm_rect_cache'): xform_hm_rect_cache=_rf_ctx.xform_hm_rect_cache
-        if hasattr(_rf_ctx,'xform_hp_rect_cache'): xform_hp_rect_cache=_rf_ctx.xform_hp_rect_cache
-        if hasattr(_rf_ctx,'xform_r_rect_cache'): xform_r_rect_cache=_rf_ctx.xform_r_rect_cache
-        if hasattr(_rf_ctx,'xform_rm_rect_cache'): xform_rm_rect_cache=_rf_ctx.xform_rm_rect_cache
-        if hasattr(_rf_ctx,'xform_rp_rect_cache'): xform_rp_rect_cache=_rf_ctx.xform_rp_rect_cache
-        if hasattr(_rf_ctx,'xform_w_rect_cache'): xform_w_rect_cache=_rf_ctx.xform_w_rect_cache
-        if hasattr(_rf_ctx,'xform_wm_rect_cache'): xform_wm_rect_cache=_rf_ctx.xform_wm_rect_cache
-        if hasattr(_rf_ctx,'xform_wp_rect_cache'): xform_wp_rect_cache=_rf_ctx.xform_wp_rect_cache
-        if hasattr(_rf_ctx,'xform_x_rect_cache'): xform_x_rect_cache=_rf_ctx.xform_x_rect_cache
-        if hasattr(_rf_ctx,'xform_xm_rect_cache'): xform_xm_rect_cache=_rf_ctx.xform_xm_rect_cache
-        if hasattr(_rf_ctx,'xform_xp_rect_cache'): xform_xp_rect_cache=_rf_ctx.xform_xp_rect_cache
-        if hasattr(_rf_ctx,'xform_y_rect_cache'): xform_y_rect_cache=_rf_ctx.xform_y_rect_cache
-        if hasattr(_rf_ctx,'xform_ym_rect_cache'): xform_ym_rect_cache=_rf_ctx.xform_ym_rect_cache
-        if hasattr(_rf_ctx,'xform_yp_rect_cache'): xform_yp_rect_cache=_rf_ctx.xform_yp_rect_cache
+        # Auto-sync all frame locals back (eliminates hardcoded render sync list).
+        _frame_loc = _sys._getframe().f_locals
+        _changed = False
+        for _k, _v in _rf_ctx.__dict__.items():
+            if _frame_loc.get(_k) is not _v:
+                _frame_loc[_k] = _v
+                _changed = True
+        if _changed:
+            try:
+                import ctypes as _ct
+                _ct.pythonapi.PyFrame_LocalsToFast(_ct.py_object(_sys._getframe()), _ct.c_int(0))
+            except Exception:
+                pass
+        try:
+            app_state.sync_from_locals(locals())
+        except Exception:
+            pass

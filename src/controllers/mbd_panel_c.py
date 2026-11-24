@@ -1,9 +1,6 @@
 """Panel click helpers (split for SRP)."""
 import copy, math, pygame
 import config as cfg
-from models import *
-from views import *
-from controllers.coordinates import *
 
 # _handle_panel_click_c
 
@@ -31,12 +28,16 @@ def _handle_panel_click_c(ctx, event):
             if ctx._c_primary_obj is None:
                 pass
             else:
-                from controllers.mbd_panel_c_parts import handle_c_tabs_filltype, handle_c_stops, handle_c_picker
-                if handle_c_tabs_filltype(ctx, event):
+                from controllers.panel_actions.color_fill import (
+                    handle_fill_tabs_and_type,
+                    handle_gradient_stops,
+                    handle_fill_picker,
+                )
+                if handle_fill_tabs_and_type(ctx, event):
                     pass
-                elif handle_c_stops(ctx, event):
+                elif handle_gradient_stops(ctx, event):
                     pass
-                elif handle_c_picker(ctx, event):
+                elif handle_fill_picker(ctx, event):
                     pass
     return None
     return "handled" if _matched else None

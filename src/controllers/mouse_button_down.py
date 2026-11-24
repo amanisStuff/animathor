@@ -83,20 +83,36 @@ def _handle_pre_menu(ctx, event):
         if _top_r.collidepoint(event.pos):
             ctx.guides = add_guide(ctx.guides, "x", ctx.to_canvas(event.pos)[0])
             ctx.guide_drag = {"axis": "x", "index": len(ctx.guides) - 1}
+            dm = getattr(ctx, 'drag_manager', None)
+            if dm is not None:
+                from controllers.drag.guide_session import GuideDragSession
+                dm.begin(GuideDragSession(), ctx, event)
             return 'continue'
         if _left_r.collidepoint(event.pos):
             ctx.guides = add_guide(ctx.guides, "y", ctx.to_canvas(event.pos)[1])
             ctx.guide_drag = {"axis": "y", "index": len(ctx.guides) - 1}
+            dm = getattr(ctx, 'drag_manager', None)
+            if dm is not None:
+                from controllers.drag.guide_session import GuideDragSession
+                dm.begin(GuideDragSession(), ctx, event)
             return 'continue'
         if ctx.in_canvas(event.pos):
             _gh = hit_guide(ctx.to_canvas(event.pos), ctx.guides,
                             5.0 / (float(getattr(cfg, "VIEW_ZOOM", 1.0)) or 1.0))
             if _gh is not None:
                 ctx.guide_drag = {"axis": ctx.guides[_gh]["axis"], "index": _gh}
+                dm = getattr(ctx, 'drag_manager', None)
+                if dm is not None:
+                    from controllers.drag.guide_session import GuideDragSession
+                    dm.begin(GuideDragSession(), ctx, event)
                 return 'continue'
     # space+LMB -> pan
     if ctx.space_panning and ctx.in_canvas(event.pos):
         ctx.pan_drag = {"start_mouse": event.pos, "start_pan": (getattr(cfg, "VIEW_PAN_X", 0.0), getattr(cfg, "VIEW_PAN_Y", 0.0))}
+        dm = getattr(ctx, 'drag_manager', None)
+        if dm is not None:
+            from controllers.drag.pan_session import PanDragSession
+            dm.begin(PanDragSession(), ctx, event)
         return 'continue'
     # Collapse/expand the right sidebar.
     if ctx.state.get("panel_toggle_rect", pygame.Rect(0, 0, 0, 0)).collidepoint(event.pos):

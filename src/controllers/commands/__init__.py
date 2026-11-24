@@ -1,0 +1,1 @@
+"""Semantic command registry for menu/shortcut/tool actions."""

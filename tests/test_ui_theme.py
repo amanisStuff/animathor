@@ -268,7 +268,13 @@ class TestSharedControlPrimitives(unittest.TestCase):
         panel = self._read(self.PANEL)
         views_dir = os.path.join(_ROOT, "src", "views")
         extra = ""
-        for name in ("panel_modes.py", "panel_select.py", "panel_select_parts.py", "panel_select_parts_b.py", "panel_select_parts_b2.py", "panel_select_parts_c.py", "panel_select_parts_c2.py", "panel_styles.py", "panel_effects.py"):
+        for name in (
+            "panel_modes.py", "panel_select.py", "panel_select_parts.py", "panel_select_parts_b.py",
+            "panel_select_parts_b2.py", "panel_select_parts_c.py", "panel_select_parts_c2.py",
+            "panel_styles.py", "panel_effects.py",
+            "panel_domain_selection.py", "panel_domain_style.py", "panel_domain_effects.py",
+            "panel_domain_style_effects.py", "panel_domain_color.py", "panel_domain_color_detail.py",
+        ):
             p = os.path.join(views_dir, name)
             if os.path.exists(p):
                 extra += "\n" + self._read(p)
@@ -315,10 +321,11 @@ class TestMenuBar(unittest.TestCase):
         from views import menu as menu_view
         ctrl_dir = os.path.join(_ROOT, "src", "controllers")
         source = ""
-        for fn in os.listdir(ctrl_dir):
-            if fn.endswith(".py"):
-                with open(os.path.join(ctrl_dir, fn), encoding="utf-8") as handle:
-                    source += "\n" + handle.read()
+        for dirpath, _, files in os.walk(ctrl_dir):
+            for fn in files:
+                if fn.endswith(".py"):
+                    with open(os.path.join(dirpath, fn), encoding="utf-8") as handle:
+                        source += "\n" + handle.read()
         self.assertIn("def run_menu_action(", source)
         for key in (i[0] for m in menu_view.MENUS for i in m[2] if i):
             self.assertIn(f'"{key}"', source, f"no action for menu item {key}")
@@ -326,10 +333,11 @@ class TestMenuBar(unittest.TestCase):
     def test_keyboard_and_menu_share_one_action_path(self):
         ctrl_dir = os.path.join(_ROOT, "src", "controllers")
         source = ""
-        for fn in os.listdir(ctrl_dir):
-            if fn.endswith(".py"):
-                with open(os.path.join(ctrl_dir, fn), encoding="utf-8") as handle:
-                    source += "\n" + handle.read()
+        for dirpath, _, files in os.walk(ctrl_dir):
+            for fn in files:
+                if fn.endswith(".py"):
+                    with open(os.path.join(dirpath, fn), encoding="utf-8") as handle:
+                        source += "\n" + handle.read()
         self.assertGreaterEqual(source.count("run_menu_action("), 25)
         self.assertNotIn('menu_open == "file"', source)
         self.assertNotIn("menu_bar_rect =", source)
