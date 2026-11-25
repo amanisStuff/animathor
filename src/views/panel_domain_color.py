@@ -146,7 +146,8 @@ def render_color_section(screen, fonts, mouse_pos, state, x, y, _button, _queue_
     state["width_slider"].value = int(round(clamp(eff_sw, state["width_slider"].min_v, state["width_slider"].max_v)))
     state["width_slider"].draw(screen)
     y += 20
-    algo_label = next((lbl for k, lbl in TRACE_ALGORITHMS if k == stroke.get("algorithm", "fit")), stroke.get("algorithm", "fit"))
+    _algo = stroke.get("algorithm", "fit") if stroke else "fit"
+    algo_label = next((lbl for k, lbl in TRACE_ALGORITHMS if k == _algo), _algo)
     if sel_count == 1:
         screen.blit(font_small.render(f"Tracing: {algo_label}", True, MUTED_COLOR), (x, y)); y += 20
     else:

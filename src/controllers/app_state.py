@@ -33,6 +33,8 @@ class DocumentState:
     symbols: dict = field(default_factory=dict)
     document_path: str | None = None
     clipboard_strokes: list = field(default_factory=list)
+    reference_image: Any = None
+    reference_error: Any = None
     undo_stack: list = field(default_factory=list)
     redo_stack: list = field(default_factory=list)
     max_undo: int = 100
@@ -136,6 +138,14 @@ class UiCacheState:
     picker_h: Any = None
     picker_s: Any = None
     picker_v: Any = None
+    picker_drag_sv: bool = False
+    picker_drag_hue: bool = False
+    picker_drag_alpha: bool = False
+    color_target: str = "stroke"
+    fill_gradient_stop: int = 0
+    fill_stop_pos_drag: bool = False
+    obj_opacity_drag: bool = False
+    bucket_picker_drag: Any = None
     align_bottom_rect_cache: Any = None
     align_hcenter_rect_cache: Any = None
     align_left_rect_cache: Any = None
@@ -211,7 +221,7 @@ class UiCacheState:
     shadow_blur_plus_rect_cache: Any = None
     shadow_toggle_rect_cache: Any = None
     snap_toggle_rect_cache: Any = None
-    swatch_rects_cache: Any = None
+    swatch_rects_cache: dict = field(default_factory=dict)
     text_edit_rect_cache: Any = None
     text_font_rect_cache: Any = None
     text_off_path_rect_cache: Any = None

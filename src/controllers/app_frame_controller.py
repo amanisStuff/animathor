@@ -39,30 +39,20 @@ def _write_back(frame):
         pass
 
 
-def _build_ctx(frame, loc):
-    """Build handler ctx with typed ``AppState`` as the authoritative snapshot.
-
-    Legacy frame locals are captured into ``AppState`` first, then typed fields
-    override ctx values at dispatch, so handlers always see typed-owned state.
-    """
-    app_state = loc.get('app_state')
-    if app_state is not None and hasattr(app_state, 'to_locals_dict'):
-        try:
-            # Typed state is authoritative: do NOT seed it from legacy locals
-            # here. main() captures its direct local mutations once at frame
-            # start; handlers refresh typed state after dispatch.
-            return _types.SimpleNamespace(
-                **{**frame.f_globals, **loc, **app_state.to_locals_dict()}
-            )
-        except Exception:
-            pass
-    return _types.SimpleNamespace(**{**frame.f_globals, **loc})
-
-
 def process_event_frame(frame_locals=None):
     frame = sys._getframe(1)
     loc = frame.f_locals if frame_locals is None else frame_locals
-    ctx = _build_ctx(frame, loc)
+    # Typed AppState is passed directly into the dispatch context; no separate
+    # context-builder helper is needed.
+    from controllers.dispatch_context import DispatchContext
+    app_state = loc.get('app_state')
+    fields = {**frame.f_globals, **loc}
+    if app_state is not None and hasattr(app_state, 'to_locals_dict'):
+        try:
+            fields.update(app_state.to_locals_dict())
+        except Exception:
+            pass
+    ctx = DispatchContext(app_state, fields)
     from controllers.event_loop import process_events as _pe
     _pe(ctx)
     if _sync_back(ctx, loc):
@@ -79,7 +69,15 @@ def process_event_frame(frame_locals=None):
 def render_frame_frame(frame_locals=None):
     frame = sys._getframe(1)
     loc = frame.f_locals if frame_locals is None else frame_locals
-    ctx = _build_ctx(frame, loc)
+    from controllers.dispatch_context import DispatchContext
+    app_state = loc.get('app_state')
+    fields = {**frame.f_globals, **loc}
+    if app_state is not None and hasattr(app_state, 'to_locals_dict'):
+        try:
+            fields.update(app_state.to_locals_dict())
+        except Exception:
+            pass
+    ctx = DispatchContext(app_state, fields)
     from controllers.render_frame import render_frame as _rf
     _rf(ctx)
     if _sync_back(ctx, loc):
@@ -229,6 +227,18 @@ def init_ui_caches(frame_locals=None):
         updates["bucket_picker_h"], updates["bucket_picker_s"], updates["bucket_picker_v"] = _rgb2hsv(*updates["bucket_fill_color"])
     _bs = loc.get("BUCKET_SWATCHES") or frame.f_globals.get("BUCKET_SWATCHES") or []
     updates["bucket_swatch_rects_cache"] = [R(0,0,0,0) for _ in _bs]
+    _ss = loc.get('STROKE_SWATCHES') or frame.f_globals.get('STROKE_SWATCHES') or []
+    updates["swatch_rects_cache"] = {
+        "stroke": [R(0,0,0,0) for _ in _ss],
+        "fill": [R(0,0,0,0) for _ in _ss],
+    }
     loc.update(updates)
+    # Seed typed UI state directly: legacy locals no longer exist for these
+    # caches, so AppState must be populated at initialization time.
+    _app_state = loc.get('app_state')
+    if _app_state is not None and hasattr(_app_state, 'ui'):
+        for _k, _v in updates.items():
+            if hasattr(_app_state.ui, _k):
+                setattr(_app_state.ui, _k, _v)
     if frame_locals is None:
         _write_back(frame)

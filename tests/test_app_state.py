@@ -6,7 +6,7 @@ import unittest
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
 
-from controllers.app_frame_controller import _build_ctx  # noqa: E402
+from controllers.dispatch_context import DispatchContext  # noqa: E402
 from controllers.app_state import AppState  # noqa: E402
 
 
@@ -92,7 +92,8 @@ class TestAppStateSync(unittest.TestCase):
         st.tools.tool_mode = "select"  # typed-owned change
         frame = types.SimpleNamespace(f_globals={})
         loc = {"app_state": st, "tool_mode": "draw"}
-        ctx = _build_ctx(frame, loc)
+        fields = {**frame.f_globals, **loc, **st.to_locals_dict()}
+        ctx = DispatchContext(st, fields)
         self.assertEqual(ctx.tool_mode, "select")
 
     def test_narrow_sync_does_not_clobber_typed_fields(self):
@@ -136,6 +137,31 @@ class TestAppStateSync(unittest.TestCase):
         fields = set(AppState()._SYNC_FIELDS)
         self.assertEqual(locals_rect - fields, set(),
                          "rect-cache locals missing from typed AppState")
+
+    def test_command_context_covers_menu_action_fields(self):
+        import os
+        import re
+        import dataclasses
+        from controllers.commands.context import CommandContext
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        path = os.path.join(root, "src", "controllers", "app_controller.py")
+        with open(path, encoding="utf-8") as handle:
+            src = handle.read()
+        start = src.index("s = CommandContext(")
+        end = src.index("result = _menu_dispatch.run_menu_action", start)
+        used = set(re.findall(r"^\s+([a-z_][A-Za-z0-9_]*)\s*=", src[start:end], re.M))
+        fields = {f.name for f in dataclasses.fields(CommandContext)}
+        self.assertEqual(used - fields, set(),
+                         "run_menu_action kwargs missing from CommandContext")
+
+    def test_dispatch_context_writes_typed_state(self):
+        from controllers.dispatch_context import DispatchContext
+        st = AppState()
+        ctx = DispatchContext(st, {"tool_mode": "draw", "service_value": 1})
+        ctx.tool_mode = "select"
+        self.assertEqual(st.tools.tool_mode, "select")
+        ctx.service_value = 2
+        self.assertEqual(ctx.service_value, 2)
 
 
 if __name__ == "__main__":

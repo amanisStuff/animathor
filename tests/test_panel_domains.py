@@ -46,6 +46,14 @@ class TestPanelDomainDispatch(unittest.TestCase):
 class TestPanelRects(unittest.TestCase):
     """Shared typed rect contract between view producers and domain hit handlers."""
 
+    def test_ui_frame_output_typed(self):
+        from views.panel_state import UiFrameOutput
+        alpha = object()
+        out = UiFrameOutput.from_state(
+            {"alpha_rect": alpha, "panel_width": 400, "panel_height": 300})
+        self.assertIs(out.rects.get("alpha_rect"), alpha)
+        self.assertEqual((out.width, out.height), (400, 300))
+
     def test_get_set(self):
         r = PanelRects()
         r.set("stroke_swatch_rects", [1, 2, 3])

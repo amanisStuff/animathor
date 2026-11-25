@@ -1,6 +1,9 @@
-"""Selection interaction commits: transform toggle, marquee finalize."""
+"""Selection interaction commits: transform toggle, marquee finalize.
 
-from models import rects_intersect, expand_group_selection
+Marquee core is a typed contract; the ctx-based functions are compat wrappers.
+"""
+
+from models import rects_intersect, expand_group_selection  # noqa: F401
 
 
 def commit_transform_toggle(ctx, event):
@@ -9,22 +12,38 @@ def commit_transform_toggle(ctx, event):
     return TransformDragSession().end(ctx, event)
 
 
-def commit_marquee(ctx, event):
-    """Finalize marquee selection if active."""
-    if ctx.marquee_select is None or ctx.tool_mode != "selection":
+def commit_marquee_typed(drag, selection, document, tools, normalize_rect, stroke_bbox):
+    """Finalize marquee selection using typed substates."""
+    marquee = drag.marquee_select
+    if marquee is None or tools.tool_mode != "selection":
         return None
-    r = ctx.normalize_rect(ctx.marquee_select["start"], ctx.marquee_select.get("current", ctx.marquee_select["start"]))
+    r = normalize_rect(marquee["start"], marquee.get("current", marquee["start"]))
     if abs(r[2] - r[0]) >= 3 or abs(r[3] - r[1]) >= 3:
-        picked = {i for i, st in enumerate(ctx.strokes) if rects_intersect(r, ctx.stroke_bbox(st))}
-        picked = expand_group_selection(ctx.strokes, picked)
-        if ctx.marquee_select.get("add"):
-            ctx.selected_strokes |= picked
+        picked = {i for i, st in enumerate(document.strokes) if rects_intersect(r, stroke_bbox(st))}
+        picked = expand_group_selection(document.strokes, picked)
+        if marquee.get("add"):
+            selection.selected_strokes |= picked
         else:
-            ctx.selected_strokes = picked
-    elif not ctx.marquee_select.get("add"):
-        ctx.selected_strokes.clear()
-    ctx.marquee_select = None
+            selection.selected_strokes = picked
+    elif not marquee.get("add"):
+        selection.selected_strokes.clear()
+    drag.marquee_select = None
     return 'handled'
+
+
+def commit_marquee(ctx, event):
+    """Compat wrapper: extract typed substates from the dispatch context."""
+    app_state = getattr(ctx, "_app_state", None)
+    if app_state is None:
+        return None
+    result = commit_marquee_typed(
+        app_state.drag, app_state.selection, app_state.document, app_state.tools,
+        ctx.normalize_rect, ctx.stroke_bbox,
+    )
+    if result == 'handled':
+        ctx.marquee_select = app_state.drag.marquee_select
+        ctx.selected_strokes = app_state.selection.selected_strokes
+    return result
 
 
 def commit_transform_toggle_and_marquee(ctx, event):

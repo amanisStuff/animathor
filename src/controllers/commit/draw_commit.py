@@ -1,109 +1,126 @@
-"""Draw/eraser mouse-up commit."""
+"""Draw/eraser mouse-up commit.
+
+Core logic is a typed contract over AppState substates with explicit services;
+``commit_draw`` is a compat wrapper for extracted ctx-based callers.
+"""
 
 import pygame
 from models import finalize_drawing_points, shape_from_doodle, stroke_to_beziers  # noqa: F401
 
 
-def commit_draw(ctx, event):
-    if ctx.drawing and ctx.tool_mode == "draw" and ctx.draw_tool == "pen":
-        ctx.drawing = False
-        ctx.cpos = ctx.clamp_to_canvas(event.pos)
-        ctx.shift_held = bool(pygame.key.get_mods() & pygame.KMOD_SHIFT)
-        ctx.keys = pygame.key.get_pressed()
-        straight_line = bool(ctx.keys[pygame.K_LSHIFT] or ctx.keys[pygame.K_RSHIFT]) if ctx.keys else False
-        ctx.current_points = finalize_drawing_points(ctx.current_points, ctx.cpos, ctx.strokes, ctx.snap_radius(), ctx.shift_held, straight_line)
-        if len(ctx.current_points) >= 2:
-            raw = list(ctx.current_points)
-            shape_segs = None
-            shape_raw = None
-            if ctx.draw_shape != "freehand":
+def commit_draw_typed(drag, document, selection, tools, event,
+                      clamp_to_canvas, snap_radius, push_undo, new_stroke,
+                      merge_connected_strokes, close_path_if_needed):
+    """Convert a freehand/shape gesture into committed document strokes."""
+    if drag.drawing and tools.tool_mode == "draw" and tools.draw_tool == "pen":
+        drag.drawing = False
+        cpos = clamp_to_canvas(event.pos)
+        shift_held = bool(pygame.key.get_mods() & pygame.KMOD_SHIFT)
+        keys = pygame.key.get_pressed()
+        straight_line = bool(keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]) if keys else False
+        points = finalize_drawing_points(
+            drag.current_points, cpos, document.strokes, snap_radius(),
+            shift_held, straight_line)
+        if len(points) >= 2:
+            raw = list(points)
+            shape_segs = shape_raw = None
+            if tools.draw_shape != "freehand":
                 shape_segs, shape_raw = shape_from_doodle(
-                    ctx.current_points, ctx.draw_shape,
-                    variant=ctx.triangle_variant if ctx.draw_shape == "triangle" else None,
-                    corner_radius=ctx.corner_radius if ctx.draw_shape in ("rect", "square") else None,
-                    segments=ctx.ellipse_segments if ctx.draw_shape in ("ellipse", "circle") else None,
-                    constrain=ctx.line_constrain if ctx.draw_shape == "line" else False,
-                    sides=ctx.polygon_sides if ctx.draw_shape == "polygon" else None,
-                    star_points=ctx.star_points if ctx.draw_shape == "star" else None,
-                    star_inner_ratio=ctx.star_inner_ratio if ctx.draw_shape == "star" else None,
+                    points, tools.draw_shape,
+                    variant=tools.triangle_variant if tools.draw_shape == "triangle" else None,
+                    corner_radius=tools.corner_radius if tools.draw_shape in ("rect", "square") else None,
+                    segments=tools.ellipse_segments if tools.draw_shape in ("ellipse", "circle") else None,
+                    constrain=tools.line_constrain if tools.draw_shape == "line" else False,
+                    sides=tools.polygon_sides if tools.draw_shape == "polygon" else None,
+                    star_points=tools.star_points if tools.draw_shape == "star" else None,
+                    star_inner_ratio=tools.star_inner_ratio if tools.draw_shape == "star" else None,
                 )
             if shape_segs:
-                # Create a collection of connected curves/strokes (one per edge/segment) when possible
-                ctx.push_undo()
-                ctx.algo_name = f"shape:{ctx.draw_shape}"
-                base_raw = shape_raw if shape_raw is not None else list(ctx.current_points)
+                push_undo()
+                algo_name = f"shape:{tools.draw_shape}"
                 new_strokes = []
                 for seg in shape_segs:
-                    ctx.st = ctx.new_stroke([seg], algorithm=ctx.algo_name)
-                    ctx.comp = {
+                    st = new_stroke([seg], algorithm=algo_name)
+                    st["components"] = [{
                         "raw_points": [tuple(seg[0]), tuple(seg[3])],
-                        "draw_max_points": int(ctx.max_points_per_curve),
-                        "algorithm": ctx.algo_name,
+                        "draw_max_points": int(tools.max_points_per_curve),
+                        "algorithm": algo_name,
                         "segs": [seg],
-                    }
-                    ctx.st["components"] = [ctx.comp]
-                    new_strokes.append(ctx.st)
+                    }]
+                    new_strokes.append(st)
                 if new_strokes:
-                    # connect edges together so they form one shape with sharp corners at joins
                     shape_stroke = new_strokes[0]
                     for extra in new_strokes[1:]:
-                        shape_stroke = ctx.merge_connected_strokes([shape_stroke, extra])[0]
-                    shape_stroke = ctx._close_path_if_needed(shape_stroke)
-                    if ctx.draw_shape == "line" and ctx.line_arrow:
+                        shape_stroke = merge_connected_strokes([shape_stroke, extra])[0]
+                    shape_stroke = close_path_if_needed(shape_stroke)
+                    if tools.draw_shape == "line" and tools.line_arrow:
                         shape_stroke["arrow_end"] = True
-                    ctx.strokes.append(shape_stroke)
-                    ctx.strokes = ctx.merge_connected_strokes(ctx.strokes)
-                    if (ctx.draw_shape == "line" and ctx.line_arrow and ctx.strokes
-                            and not any(isinstance(ctx.s, dict) and ctx.s.get("arrow_end")
-                                        for ctx.s in ctx.strokes)):
-                        # merging rebuilt the stroke dict; keep the arrowhead
-                        ctx.strokes[-1]["arrow_end"] = True
-                ctx.selected_strokes.clear(); ctx.selected_point = None; ctx.selected_curve = None; ctx.selected_curves.clear(); ctx.redrawing_curve = None
+                    document.strokes.append(shape_stroke)
+                    document.strokes = merge_connected_strokes(document.strokes)
+                    if (tools.draw_shape == "line" and tools.line_arrow and document.strokes
+                            and not any(isinstance(s, dict) and s.get("arrow_end")
+                                        for s in document.strokes)):
+                        document.strokes[-1]["arrow_end"] = True
             elif straight_line:
-                ctx.push_undo()
-                ctx.p0 = tuple(ctx.current_points[0])
-                ctx.p3 = tuple(ctx.current_points[-1])
-                ctx.c1 = (ctx.p0[0] + (ctx.p3[0] - ctx.p0[0]) / 3.0, ctx.p0[1] + (ctx.p3[1] - ctx.p0[1]) / 3.0)
-                ctx.c2 = (ctx.p0[0] + 2.0 * (ctx.p3[0] - ctx.p0[0]) / 3.0, ctx.p0[1] + 2.0 * (ctx.p3[1] - ctx.p0[1]) / 3.0)
-                beziers = [(ctx.p0, ctx.c1, ctx.c2, ctx.p3)]
-                raw = [ctx.p0, ctx.p3]
-                ctx.algo_name = ctx.trace_algorithm
-                ctx.st = ctx.new_stroke(beziers, algorithm=ctx.algo_name)
-                ctx.comp = {
-                    "raw_points": [tuple(ctx.p) for ctx.p in raw],
-                    "draw_max_points": int(ctx.max_points_per_curve),
-                    "algorithm": ctx.algo_name,
+                push_undo()
+                p0 = tuple(points[0]); p3 = tuple(points[-1])
+                c1 = (p0[0] + (p3[0] - p0[0]) / 3.0, p0[1] + (p3[1] - p0[1]) / 3.0)
+                c2 = (p0[0] + 2.0 * (p3[0] - p0[0]) / 3.0, p0[1] + 2.0 * (p3[1] - p0[1]) / 3.0)
+                beziers = [(p0, c1, c2, p3)]
+                raw = [p0, p3]
+                st = new_stroke(beziers, algorithm=tools.trace_algorithm)
+                st["components"] = [{
+                    "raw_points": [tuple(p) for p in raw],
+                    "draw_max_points": int(tools.max_points_per_curve),
+                    "algorithm": tools.trace_algorithm,
                     "segs": list(beziers),
-                }
-                ctx.st["components"] = [ctx.comp]
-                ctx.st = ctx._close_path_if_needed(ctx.st)
-                ctx.strokes.append(ctx.st)
-                ctx.strokes = ctx.merge_connected_strokes(ctx.strokes)
-                ctx.selected_strokes.clear(); ctx.selected_point = None; ctx.selected_curve = None; ctx.selected_curves.clear(); ctx.redrawing_curve = None
+                }]
+                st = close_path_if_needed(st)
+                document.strokes.append(st)
+                document.strokes = merge_connected_strokes(document.strokes)
             else:
                 beziers = stroke_to_beziers(
-                    ctx.current_points, simplify_epsilon=2.5, tension=0.0,
-                    max_points=ctx.max_points_per_curve, algorithm=ctx.trace_algorithm,
-                )
-                ctx.algo_name = ctx.trace_algorithm
+                    points, simplify_epsilon=2.5, tension=0.0,
+                    max_points=tools.max_points_per_curve, algorithm=tools.trace_algorithm)
                 if beziers:
-                    ctx.push_undo()
-                    ctx.st = ctx.new_stroke(beziers, algorithm=ctx.algo_name)
-                    ctx.comp = {
-                        "raw_points": [tuple(ctx.p) for ctx.p in raw],
-                        "draw_max_points": int(ctx.max_points_per_curve),
-                        "algorithm": ctx.algo_name,
+                    push_undo()
+                    st = new_stroke(beziers, algorithm=tools.trace_algorithm)
+                    st["components"] = [{
+                        "raw_points": [tuple(p) for p in raw],
+                        "draw_max_points": int(tools.max_points_per_curve),
+                        "algorithm": tools.trace_algorithm,
                         "segs": list(beziers),
-                    }
-                    ctx.st["components"] = [ctx.comp]
-                    ctx.st = ctx._close_path_if_needed(ctx.st)
-                    ctx.strokes.append(ctx.st)
-                    ctx.strokes = ctx.merge_connected_strokes(ctx.strokes)
-                    ctx.selected_strokes.clear(); ctx.selected_point = None; ctx.selected_curve = None; ctx.selected_curves.clear(); ctx.redrawing_curve = None
-        ctx.current_points = []
+                    }]
+                    st = close_path_if_needed(st)
+                    document.strokes.append(st)
+                    document.strokes = merge_connected_strokes(document.strokes)
+            selection.selected_strokes.clear()
+            selection.selected_point = None
+            selection.selected_curve = None
+            selection.selected_curves.clear()
+            drag.redrawing_curve = None
+        drag.current_points = []
         return 'handled'
-    if ctx.drawing and ctx.tool_mode == "draw" and ctx.draw_tool == "eraser":
-        ctx.drawing = False
-        ctx.current_points = []
+    if drag.drawing and tools.tool_mode == "draw" and tools.draw_tool == "eraser":
+        drag.drawing = False
+        drag.current_points = []
         return 'handled'
     return None
+
+
+def commit_draw(ctx, event):
+    """Compat wrapper: extract typed substates from the dispatch context."""
+    app_state = getattr(ctx, "_app_state", None)
+    if app_state is None:
+        return None
+    result = commit_draw_typed(
+        app_state.drag, app_state.document, app_state.selection, app_state.tools,
+        event, ctx.clamp_to_canvas, ctx.snap_radius, ctx.push_undo,
+        ctx.new_stroke, ctx.merge_connected_strokes, ctx._close_path_if_needed,
+    )
+    if result == 'handled':
+        ctx.drawing = app_state.drag.drawing
+        ctx.current_points = app_state.drag.current_points
+        ctx.strokes = app_state.document.strokes
+        ctx.selected_strokes = app_state.selection.selected_strokes
+    return result
