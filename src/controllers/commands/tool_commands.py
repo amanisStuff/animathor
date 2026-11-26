@@ -55,5 +55,6 @@ def _menu_tools(ctx, key):
         ctx.curve_cut_mode = False
     elif key == CMD.SHORTCUTS:
         ctx.help_open = not ctx.help_open
+    else:
+        return False
     return True
-    return False

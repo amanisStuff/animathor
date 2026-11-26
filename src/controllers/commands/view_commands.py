@@ -20,25 +20,33 @@ def dispatch_view_commands(ctx, key):
                 ctx.cfg.VIEW_PAN_Y = (vh - bh * ctx.cfg.VIEW_ZOOM) / 2 - bb[1] * ctx.cfg.VIEW_ZOOM
         else:
             ctx.cfg.VIEW_ZOOM = 1.0; ctx.cfg.VIEW_PAN_X = 0.0; ctx.cfg.VIEW_PAN_Y = 0.0
+        return True
     elif key == CMD.ACTUAL_SIZE:
         ctx.cfg.VIEW_ZOOM = 1.0; ctx.cfg.VIEW_PAN_X = 0.0; ctx.cfg.VIEW_PAN_Y = 0.0
+        return True
     elif key == CMD.TOGGLE_PANEL:
         ctx.panel_collapsed = not ctx.panel_collapsed
         ctx.state["panel_collapsed"] = ctx.panel_collapsed
         ctx.relayout()
+        return True
     elif key == CMD.TOGGLE_SNAP:
         ctx.snap_enabled = not ctx.snap_enabled
+        return True
     elif key == CMD.TOGGLE_GRID:
         ctx.cfg.SHOW_GRID = not getattr(ctx.cfg, "SHOW_GRID", False)
         ctx.state["show_grid"] = ctx.cfg.SHOW_GRID
+        return True
     elif key == CMD.TOGGLE_RULERS:
         ctx.cfg.SHOW_RULERS = not getattr(ctx.cfg, "SHOW_RULERS", False)
         ctx.state["show_rulers"] = ctx.cfg.SHOW_RULERS
+        return True
     elif key == CMD.TOGGLE_GRID_SNAP:
         ctx.cfg.SNAP_TO_GRID = not getattr(ctx.cfg, "SNAP_TO_GRID", False)
         ctx.state["snap_to_grid"] = ctx.cfg.SNAP_TO_GRID
+        return True
     elif key == CMD.CLEAR_GUIDES:
         guides = []
+        return True
     return False
 
 
@@ -51,6 +59,7 @@ def dispatch_artboard_commands(ctx, key):
             w, h = 800.0, 600.0
         ctx.artboards.append({"name": f"Artboard {len(ctx.artboards)+1}", "x": 0.0, "y": 0.0, "w": max(1.0, w), "h": max(1.0, h)})
         ctx.active_artboard = len(ctx.artboards) - 1
+        return True
     elif key == CMD.ARTBOARD_FIT_SELECTION:
         sel = [i for i in sorted(ctx.selected_strokes) if 0 <= i < len(ctx.strokes)]
         bb = ctx.combined_bbox(ctx.strokes, sel) if sel else None
@@ -67,6 +76,7 @@ def dispatch_artboard_commands(ctx, key):
             else:
                 ctx.artboards.append(ab)
                 ctx.active_artboard = len(ctx.artboards) - 1
+        return True
     elif key == CMD.ARTBOARD_REMOVE:
         if 0 <= ctx.active_artboard < len(ctx.artboards):
             ctx.artboards.pop(ctx.active_artboard)
@@ -74,11 +84,13 @@ def dispatch_artboard_commands(ctx, key):
                 ctx.active_artboard = -1
             else:
                 ctx.active_artboard = min(ctx.active_artboard, len(ctx.artboards) - 1)
+        return True
     elif key == CMD.ARTBOARD_NEXT:
         if ctx.artboards:
             ctx.active_artboard = (ctx.active_artboard + 1) % len(ctx.artboards)
         else:
             ctx.active_artboard = -1
+        return True
     return False
 
 
@@ -104,6 +116,7 @@ def dispatch_symbol_commands(ctx, key):
                 ctx.strokes[i]["symbol_id"] = sid
                 ctx.strokes[i]["symbol_is_master"] = True
                 ctx.strokes[i]["symbol_instance_id"] = inst_id
+        return True
     elif key == CMD.SYMBOL_INSERT:
         # Choose symbol: from selection if present, else most recent/any available.
         sid = None
@@ -147,6 +160,7 @@ def dispatch_symbol_commands(ctx, key):
             if new_indices:
                 ctx.selected_strokes = set(new_indices)
                 ctx.selected_point = None; ctx.selected_curve = None; ctx.selected_curves.clear()
+        return True
     elif key == CMD.SYMBOL_UPDATE:
         # Update definition from master ctx.strokes of target symbol and propagate to instances.
         target_sid = None
@@ -206,6 +220,7 @@ def dispatch_symbol_commands(ctx, key):
                 # keep selection reasonable
                 ctx.selected_strokes = set(master_idx) if master_idx else set()
                 ctx.selected_point = None; ctx.selected_curve = None; ctx.selected_curves.clear()
+        return True
     elif key == CMD.SYMBOL_DETACH:
         sel = [i for i in sorted(ctx.selected_strokes) if 0 <= i < len(ctx.strokes)]
         if sel:
@@ -215,6 +230,7 @@ def dispatch_symbol_commands(ctx, key):
                     ctx.strokes[i].pop("symbol_id", None)
                     ctx.strokes[i].pop("symbol_is_master", None)
                     ctx.strokes[i].pop("symbol_instance_id", None)
+        return True
     return False
 
 
@@ -225,6 +241,7 @@ def dispatch_shape_state_commands(ctx, key):
             ctx.push_undo()
             sid, _sc = ctx._capture_shape_state(ctx.strokes, sel, ctx.shape_states, ctx._shape_state_counter)
             ctx._shape_state_counter = _sc
+        return True
     elif key == CMD.SHAPE_STATE_INSERT:
         ctx.push_undo()
         new_indices, _sc = ctx._insert_shape_state(ctx.strokes, ctx.shape_states, ctx._shape_state_counter, sorted(ctx.selected_strokes))
@@ -232,6 +249,7 @@ def dispatch_shape_state_commands(ctx, key):
         if new_indices:
             ctx.selected_strokes = set(new_indices)
             ctx.selected_point = None; ctx.selected_curve = None; ctx.selected_curves.clear(); ctx.redrawing_curve = None
+        return True
     elif key == CMD.SHAPE_STATE_DELETE:
         sid = None
         for i in sorted(ctx.selected_strokes):
@@ -243,17 +261,13 @@ def dispatch_shape_state_commands(ctx, key):
         if sid and sid in ctx.shape_states:
             ctx.push_undo()
             ctx._delete_shape_state(ctx.shape_states, sid, ctx.strokes)
+        return True
     return False
 
 
 def _menu_view(ctx, key):
-
     for handler in (dispatch_view_commands, dispatch_artboard_commands,
-
                     dispatch_symbol_commands, dispatch_shape_state_commands):
-
         if handler(ctx, key):
-
             return True
-
-    return True
+    return False
