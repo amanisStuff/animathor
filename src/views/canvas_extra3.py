@@ -122,6 +122,20 @@ def _draw_selection_overlays(ctx, strokes, sel_set, edit_mode, selection_submode
             try: ctx.set_dash([])
             except Exception: pass
 
+def _draw_redraw_preview(ctx, points, stroke_width=3.0):
+    """Draw the in-progress redraw polyline on top of the faded template."""
+    pts = [tuple(p) for p in (points or [])]
+    if len(pts) < 2:
+        return
+    ctx.new_path()
+    ctx.move_to(pts[0][0], pts[0][1])
+    for pt in pts[1:]:
+        ctx.line_to(pt[0], pt[1])
+    ctx.set_source_rgba(*EDITOR_ACCENT, 0.95)
+    ctx.set_line_width(max(3.0, float(stroke_width) + 1.0))
+    ctx.stroke()
+
+
 def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, selected_index=None, selected_indices=None, edit_mode=False, selection_submode="transform", selected_curve=None, selected_curves=None, snap_kind="connect", redrawing_curve=None, ref_img=None, view_zoom=None, view_pan=None, pivot_pos=None, for_export=False, transform_handle_mode="scale", gradient_edit_info=None, export_scale=1.0, guides=None, smart_guides=None, bezier_pen=None, artboards=None, active_artboard=-1):
 
     # Backward compat: selected_index (single) or selected_indices (collection)
@@ -351,6 +365,14 @@ def draw_scene(cairo_surface, strokes, active_stroke=None, snap_point=None, sele
             pass
 
     _draw_selection_overlays(ctx, strokes, sel_set, edit_mode, selection_submode, selected_curve, selected_curves, transform_handle_mode, pivot_pos)
+
+    # The in-progress redraw path must sit above both the faded template and
+    # the selection overlay, otherwise it is hidden while dragging in Curve mode.
+    if not for_export and redrawing_curve is not None:
+        try:
+            _draw_redraw_preview(ctx, active_stroke)
+        except Exception:
+            pass
 
     _draw_gradient_edit_handles(ctx, edit_mode, gradient_edit_info)
 
