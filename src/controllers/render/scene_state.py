@@ -7,8 +7,16 @@ from models import combined_obb, grid_positions, normalize_rect, ruler_ticks  # 
 from views import BORDER_WIDTH, CANVAS_BACKDROP, CUT_COLOR, CUT_HANDLE_RADIUS, EDITOR_LINE_WIDTH_BOLD, PANEL_BORDER, SELECTION_BORDER, SELECTION_FILL, SURFACE, draw_bottom_shape_toolbar, draw_export_dialog, draw_left_toolbar, draw_marker_dropdown, draw_menu_bar, draw_panel, draw_panel_toggle, draw_scene, draw_shape_context_menu, draw_shortcuts_overlay, surface_to_pygame  # noqa: F401
 
 
+def canvas_surface_for_context(ctx):
+    """Return the live Cairo surface, preferring the relayout-owned holder."""
+    holder = getattr(ctx, "cairo_surface_holder", None)
+    surface = getattr(holder, "surface", None) if holder is not None else None
+    return surface if surface is not None else ctx.cairo_surface
+
+
 def render_scene(ctx):
     # Draw scene (Cairo) and blit at canvas offset
+    canvas_surface = canvas_surface_for_context(ctx)
     ctx.active = ctx.current_points if (ctx.drawing and ctx.tool_mode == "draw") else (ctx.redrawing_curve.get("points") if ctx.redrawing_curve else None)
     # While placing text, render the typed buffer as a live editable outline.
     render_strokes = ctx.strokes
@@ -77,7 +85,7 @@ def render_scene(ctx):
             except Exception:
                 pass
     draw_scene(
-        ctx.cairo_surface, render_strokes, ctx.active, snap_point=ctx.hover_snap,
+        canvas_surface, render_strokes, ctx.active, snap_point=ctx.hover_snap,
         selected_indices=ctx.selected_strokes, edit_mode=(ctx.tool_mode == "selection"),
         selection_submode=ctx.selection_submode, selected_curve=ctx.selected_curve,
         selected_curves=set(ctx.selected_curves),

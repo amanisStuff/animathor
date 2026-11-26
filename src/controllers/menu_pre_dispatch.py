@@ -118,6 +118,9 @@ def _handle_pre_menu(ctx, event):
         ctx.panel_collapsed = not ctx.panel_collapsed
         ctx.state["panel_collapsed"] = ctx.panel_collapsed
         ctx.relayout()
+        _holder = getattr(ctx, "cairo_surface_holder", None)
+        if _holder is not None:
+            ctx.cairo_surface = _holder.surface
         return 'continue'
     if ctx.wave_formula_focus and not ctx.state.get("wave_formula_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
         ctx.wave_formula_focus = False

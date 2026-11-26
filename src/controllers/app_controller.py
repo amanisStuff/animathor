@@ -2,6 +2,7 @@
 
 import math
 import copy
+import types
 
 import pygame
 
@@ -61,6 +62,10 @@ def main():
     clock = pygame.time.Clock()
 
     cairo_surface = make_cairo_surface(cfg.CANVAS_W, cfg.canvas_viewport_height())
+    # Shared holder survives the ctx/local sync boundary. relayout() mutates the
+    # holder, so every frame renders into the current canvas even when a stale
+    # flat `cairo_surface` field is copied back by _sync_back().
+    cairo_surface_holder = types.SimpleNamespace(surface=cairo_surface)
     panel_collapsed = False  # right sidebar hidden -> canvas grows to the window edge
 
     def relayout():
@@ -71,6 +76,7 @@ def main():
         cfg.CANVAS_W = max(200, cfg.WIDTH - LEFT_BAR_W - panel_w)
         cfg.PANEL_X = LEFT_BAR_W + cfg.CANVAS_W
         cairo_surface = make_cairo_surface(cfg.CANVAS_W, cfg.canvas_viewport_height())
+        cairo_surface_holder.surface = cairo_surface
         # Phase 1 (semantic split plan): typed viewport state is the source of
         # truth for this layout group; cfg module attrs remain live mirrors for
         # legacy readers until the full typed-state migration completes.
@@ -80,6 +86,7 @@ def main():
         app_state.viewport.canvas_w = cfg.CANVAS_W
         app_state.viewport.panel_x = cfg.PANEL_X
         app_state.viewport.panel_collapsed = panel_collapsed
+        return cairo_surface
 
     strokes = []
     undo_stack = []
@@ -118,7 +125,7 @@ def main():
         ruler_font = font_small
 
     btn_undo = Button((8, TOP_BAR_H + 8, 40, 40), "")
-    btn_redo = Button((8, TOP_BAR_H + 52, 40, 40), "")
+    btn_redo = Button((8, TOP_BAR_H + 56, 40, 40), "")
     btn_draw = Button((8, TOP_BAR_H + 104, 40, 40), "")
     btn_select = Button((8, TOP_BAR_H + 152, 40, 40), "")
     btn_boost = Button((0, 0, PANEL_W - 40, 34), "Boost limit")
