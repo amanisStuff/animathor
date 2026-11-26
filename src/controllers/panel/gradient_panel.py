@@ -8,6 +8,16 @@ is a compat wrapper for the extracted ctx-based caller.
 def gradient_panel_hit(tools, selection, document, ui, state, event, ctx,
                        stroke_components, handlers):
     """Dispatch gradient/fill handlers for an active stroke selection."""
+    if tools.tool_mode == "selection" and not selection.selected_strokes:
+        # The empty-selection view still publishes a Fill tab. Keep it usable
+        # so switching the target does not require selecting a shape first.
+        fill_tab = state.get("tab_fill_rect")
+        if fill_tab is not None and getattr(
+                fill_tab, "collidepoint", lambda _pos: False)(event.pos):
+            ui.color_target = "fill"
+            state["color_target"] = "fill"
+            ctx.color_target = "fill"
+            return None
     if (tools.tool_mode == "selection" and selection.selected_strokes
             and selection.selection_submode == "transform"):
         comp_target = None
@@ -57,11 +67,14 @@ def _handle_panel_click_c(ctx, event):
         app_state.document.strokes = getattr(ctx, "strokes", [])
         app_state.ui.color_target = getattr(ctx, "color_target", "stroke")
     from controllers.panel.gradient_stops import (
-        gradient_stops_hit,
         handle_fill_tabs_and_type, handle_gradient_stops, handle_fill_picker,
     )
-    gradient_stops_hit(
+    # Use the typed domain entry point so the fill-picker bridge attrs
+    # (``_c_primary_obj``, ``_c_sel_list``, ...) are published before the
+    # ctx-based handlers run. Calling ``gradient_stops_hit`` directly skipped
+    # that step and made fill/swatch clicks no-ops.
+    gradient_panel_hit(
         app_state.tools, app_state.selection, app_state.document, app_state.ui,
-        ctx.state, event, ctx,
+        ctx.state, event, ctx, getattr(ctx, "_stroke_components", None),
         (handle_fill_tabs_and_type, handle_gradient_stops, handle_fill_picker),
     )

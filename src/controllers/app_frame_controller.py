@@ -53,13 +53,21 @@ def process_event_frame(frame_locals=None):
         except Exception:
             pass
     ctx = DispatchContext(app_state, fields)
+    # Event handlers may mutate typed state directly through DispatchContext.
+    # The legacy _sync_all boundary then restores a stale snapshot of the
+    # flattened `ctx` fields, so only fields actually rebound by handlers may be
+    # mirrored back into typed state. Otherwise those stale fields would undo
+    # the typed mutation and make panel controls appear unresponsive.
+    ctx_snapshot = dict(ctx.__dict__)
     from controllers.event_loop import process_events as _pe
     _pe(ctx)
+    changed_field_names = [k for k, v in ctx.__dict__.items()
+                           if k not in ctx_snapshot or ctx_snapshot[k] is not v]
     if _sync_back(ctx, loc):
         _app_state = loc.get('app_state')
         if _app_state is not None and hasattr(_app_state, 'sync_from_locals'):
             try:
-                _app_state.sync_from_locals(loc)
+                _app_state.sync_from_locals(loc, fields=changed_field_names)
             except Exception:
                 pass
         if frame_locals is None:

@@ -50,10 +50,30 @@ def wave_slider_drag_move(ctx, event):
 
 
 
+def _read_picker_hsv(ctx):
+    """Read the current HSV picker values from state with ctx fallbacks."""
+    values = []
+    for key in ("picker_h", "picker_s", "picker_v"):
+        value = ctx.state.get(key)
+        if value is None:
+            value = getattr(ctx, key, 0.0)
+        values.append(float(value or 0.0))
+    return values
+
+
+def _write_picker_hsv(ctx, picker_h, picker_s, picker_v):
+    """Publish picker values to both the render state and typed dispatch ctx."""
+    for key, value in (("picker_h", picker_h), ("picker_s", picker_s),
+                       ("picker_v", picker_v)):
+        ctx.state[key] = value
+        setattr(ctx, key, value)
+
+
 def color_picker_drag_move(ctx, event):
 
     if (ctx.picker_drag_sv or ctx.picker_drag_hue or ctx.picker_drag_alpha) and ctx.selected_strokes and (ctx.selection_submode == "transform" or (ctx.selection_submode == "curve" and ctx.selected_curve)):
-        color_target = ctx.state.get("color_target", color_target)
+        picker_h, picker_s, picker_v = _read_picker_hsv(ctx)
+        color_target = ctx.state.get("color_target", getattr(ctx, "color_target", "stroke"))
         sel_list = sorted(ctx.selected_strokes)
         comp_style_target = None
         if ctx.selection_submode == "curve" and ctx.selected_curve and len(ctx.selected_strokes) == 1 and ctx.selected_curve[0] in ctx.selected_strokes:
@@ -83,16 +103,16 @@ def color_picker_drag_move(ctx, event):
                             alpha = ctx.color_alpha(ctx.strokes[si].get("stroke_color"), 1.0)
                             ctx.strokes[si]["stroke_color"] = (col[0], col[1], col[2], alpha)
                         else:
-                            fg = ctx.get_fill_gradient(ctx.strokes[si]) if 'get_fill_gradient' in globals() else None
+                            fg = ctx.get_fill_gradient(ctx.strokes[si]) if callable(getattr(ctx, 'get_fill_gradient', None)) else None
                             if fg is not None:
                                 stop_i = int(ctx.state.get("fill_gradient_stop", 0) or 0)
-                                alpha = ctx.color_alpha(ctx.get_gradient_stop_color(fg, stop_i) if 'get_gradient_stop_color' in globals() else (0,0,0,1), 1.0)
-                                ctx.strokes[si]["fill_gradient"] = ctx.set_gradient_stop_color(fg, stop_i, (col[0], col[1], col[2], alpha)) if 'set_gradient_stop_color' in globals() else fg
+                                alpha = ctx.color_alpha(ctx.get_gradient_stop_color(fg, stop_i) if callable(getattr(ctx, 'get_gradient_stop_color', None)) else (0,0,0,1), 1.0)
+                                ctx.strokes[si]["fill_gradient"] = ctx.set_gradient_stop_color(fg, stop_i, (col[0], col[1], col[2], alpha)) if callable(getattr(ctx, 'set_gradient_stop_color', None)) else fg
                             else:
                                 alpha = ctx.color_alpha(ctx.strokes[si].get("fill_color"), 1.0)
                                 ctx.strokes[si]["fill_color"] = (col[0], col[1], col[2], alpha)
                                 ctx.strokes[si]["fill_gradient"] = None
-            ctx.state["picker_h"] = picker_h; ctx.state["picker_s"] = picker_s; ctx.state["picker_v"] = picker_v
+            _write_picker_hsv(ctx, picker_h, picker_s, picker_v)
         elif ctx.picker_drag_hue:
             hr = ctx.state["hue_rect"]
             picker_h = ctx.clamp((event.pos[0] - hr.x) / max(1, hr.w - 1), 0.0, 1.0) * 360.0
@@ -110,16 +130,16 @@ def color_picker_drag_move(ctx, event):
                             alpha = ctx.color_alpha(ctx.strokes[si].get("stroke_color"), 1.0)
                             ctx.strokes[si]["stroke_color"] = (col[0], col[1], col[2], alpha)
                         else:
-                            fg = ctx.get_fill_gradient(ctx.strokes[si]) if 'get_fill_gradient' in globals() else None
+                            fg = ctx.get_fill_gradient(ctx.strokes[si]) if callable(getattr(ctx, 'get_fill_gradient', None)) else None
                             if fg is not None:
                                 stop_i = int(ctx.state.get("fill_gradient_stop", 0) or 0)
-                                alpha = ctx.color_alpha(ctx.get_gradient_stop_color(fg, stop_i) if 'get_gradient_stop_color' in globals() else (0,0,0,1), 1.0)
-                                ctx.strokes[si]["fill_gradient"] = ctx.set_gradient_stop_color(fg, stop_i, (col[0], col[1], col[2], alpha)) if 'set_gradient_stop_color' in globals() else fg
+                                alpha = ctx.color_alpha(ctx.get_gradient_stop_color(fg, stop_i) if callable(getattr(ctx, 'get_gradient_stop_color', None)) else (0,0,0,1), 1.0)
+                                ctx.strokes[si]["fill_gradient"] = ctx.set_gradient_stop_color(fg, stop_i, (col[0], col[1], col[2], alpha)) if callable(getattr(ctx, 'set_gradient_stop_color', None)) else fg
                             else:
                                 alpha = ctx.color_alpha(ctx.strokes[si].get("fill_color"), 1.0)
                                 ctx.strokes[si]["fill_color"] = (col[0], col[1], col[2], alpha)
                                 ctx.strokes[si]["fill_gradient"] = None
-            ctx.state["picker_h"] = picker_h; ctx.state["picker_s"] = picker_s; ctx.state["picker_v"] = picker_v
+            _write_picker_hsv(ctx, picker_h, picker_s, picker_v)
         elif ctx.picker_drag_alpha:
             ar = ctx.state.get("alpha_rect", pygame.Rect(0,0,0,0))
             new_alpha = ctx.clamp((event.pos[0] - ar.x) / max(1, ar.w - 1), 0.0, 1.0)
@@ -135,11 +155,11 @@ def color_picker_drag_move(ctx, event):
                         if color_target == "stroke":
                             ctx.strokes[si]["stroke_color"] = ctx.set_color_alpha(ctx.strokes[si].get("stroke_color", (0.1,0.1,0.15,1.0)), new_alpha)
                         else:
-                            fg = ctx.get_fill_gradient(ctx.strokes[si]) if 'get_fill_gradient' in globals() else None
+                            fg = ctx.get_fill_gradient(ctx.strokes[si]) if callable(getattr(ctx, 'get_fill_gradient', None)) else None
                             if fg is not None:
                                 stop_i = int(ctx.state.get("fill_gradient_stop", 0) or 0)
-                                cstop = ctx.get_gradient_stop_color(fg, stop_i) if 'get_gradient_stop_color' in globals() else (0,0,0,1)
-                                ctx.strokes[si]["fill_gradient"] = ctx.set_gradient_stop_color(fg, stop_i, (cstop[0], cstop[1], cstop[2], new_alpha)) if 'set_gradient_stop_color' in globals() else fg
+                                cstop = ctx.get_gradient_stop_color(fg, stop_i) if callable(getattr(ctx, 'get_gradient_stop_color', None)) else (0,0,0,1)
+                                ctx.strokes[si]["fill_gradient"] = ctx.set_gradient_stop_color(fg, stop_i, (cstop[0], cstop[1], cstop[2], new_alpha)) if callable(getattr(ctx, 'set_gradient_stop_color', None)) else fg
                             elif ctx.strokes[si].get("fill_color") is not None:
                                 ctx.strokes[si]["fill_color"] = ctx.set_color_alpha(ctx.strokes[si].get("fill_color"), new_alpha)
 
@@ -147,6 +167,7 @@ def color_picker_drag_move(ctx, event):
 
 def gradient_stop_drag_move(ctx, event):
 
+    color_target = ctx.state.get("color_target", getattr(ctx, "color_target", "stroke"))
     if ctx.fill_stop_pos_drag and ctx.selected_strokes and (ctx.selection_submode == "transform" or (ctx.selection_submode == "curve" and ctx.selected_curve and color_target == "fill")):
         pr = ctx.state.get("fill_stop_pos_rect", pygame.Rect(0, 0, 0, 0))
         if pr.w > 1:
@@ -158,23 +179,23 @@ def gradient_stop_drag_move(ctx, event):
         sel_list = sorted(set(int(x) for x in (ctx.selected_strokes or [])))
         primary_si = sel_list[0] if sel_list else -1
         primary_obj = ctx.strokes[primary_si] if (0 <= primary_si < len(ctx.strokes)) else None
-        if primary_obj is not None and 'set_gradient_stop_pos' in globals():
+        if primary_obj is not None and callable(getattr(ctx, 'set_gradient_stop_pos', None)):
             for si in sel_list:
                 if 0 <= si < len(ctx.strokes):
-                    sfg = ctx.get_fill_gradient(ctx.strokes[si]) if 'get_fill_gradient' in globals() else None
+                    sfg = ctx.get_fill_gradient(ctx.strokes[si]) if callable(getattr(ctx, 'get_fill_gradient', None)) else None
                     if sfg is not None:
-                        sidx = ctx.clamp_gradient_stop_index(sfg, cur_stop_i) if 'clamp_gradient_stop_index' in globals() else cur_stop_i
+                        sidx = ctx.clamp_gradient_stop_index(sfg, cur_stop_i) if callable(getattr(ctx, 'clamp_gradient_stop_index', None)) else cur_stop_i
                         ng, _ni = ctx.set_gradient_stop_pos(sfg, sidx, rel)
                         ctx.strokes[si]["fill_gradient"] = ng
                         ctx.strokes[si]["fill_color"] = None
-            pfg2 = ctx.get_fill_gradient(primary_obj) if 'get_fill_gradient' in globals() else None
+            pfg2 = ctx.get_fill_gradient(primary_obj) if callable(getattr(ctx, 'get_fill_gradient', None)) else None
             if pfg2 is not None:
-                sidx = ctx.clamp_gradient_stop_index(pfg2, cur_stop_i) if 'clamp_gradient_stop_index' in globals() else cur_stop_i
+                sidx = ctx.clamp_gradient_stop_index(pfg2, cur_stop_i) if callable(getattr(ctx, 'clamp_gradient_stop_index', None)) else cur_stop_i
                 _ngp, ni = ctx.set_gradient_stop_pos(pfg2, sidx, rel)
                 ctx.state["fill_gradient_stop"] = ni
-                fc = ctx.get_gradient_stop_color(_ngp, ni) if 'get_gradient_stop_color' in globals() else (1.0, 1.0, 1.0, 1.0)
+                fc = ctx.get_gradient_stop_color(_ngp, ni) if callable(getattr(ctx, 'get_gradient_stop_color', None)) else (1.0, 1.0, 1.0, 1.0)
                 picker_h, picker_s, picker_v = ctx.rgb_to_hsv(*fc)
-                ctx.state["picker_h"] = picker_h; ctx.state["picker_s"] = picker_s; ctx.state["picker_v"] = picker_v
+                _write_picker_hsv(ctx, picker_h, picker_s, picker_v)
 
 
 

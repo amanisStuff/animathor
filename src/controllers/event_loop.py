@@ -4,20 +4,55 @@ import config as cfg
 from models import set_point_width  # noqa: F401
 
 
-def _sync_all(ctx, src):
-    """Sync all attributes from handler ctx back to event ctx.
+def _typed_snapshot(ctx):
+    """Capture typed substate values so direct typed writes are not lost."""
+    app_state = getattr(ctx, "_app_state", None)
+    if app_state is None or not hasattr(app_state, "_substates"):
+        return None
+    values = {}
+    for substate in app_state._substates(app_state):
+        for name in substate.__dataclass_fields__:
+            values[name] = getattr(substate, name)
+    return values
 
-    Replaces hardcoded per-handler sync field lists. This keeps the extraction
-    boundary behavior-preserving while eliminating sync-plumbing maintenance.
+
+def _values_equal(a, b):
+    try:
+        return bool(a == b)
+    except Exception:
+        return a is b
+
+
+def _sync_all(ctx, src, typed_before=None):
+    """Sync handler attrs back to the event context.
+
+    Handler bags are plain ``SimpleNamespace`` snapshots. When a typed handler
+    writes directly to an ``AppState`` substate (for example
+    ``ui.obj_opacity_drag = True``), the stale flat field in the bag must not
+    overwrite that live typed value; otherwise UI drag sessions never activate.
+    Typed fields changed during the handler are therefore preserved, while
+    ordinary flat rebindings still flow through ``DispatchContext.__setattr__``
+    so both the context and typed state stay in agreement.
     """
-    ctx.__dict__.update(src.__dict__)
+    typed_after = _typed_snapshot(ctx) if typed_before is not None else None
+    if typed_after is not None and typed_before is not None:
+        for name, value in typed_after.items():
+            if name not in typed_before or not _values_equal(value, typed_before[name]):
+                ctx.__dict__[name] = value
+    for name, value in src.__dict__.items():
+        if (typed_after is not None and typed_before is not None
+                and name in typed_before and name in typed_after
+                and not _values_equal(typed_after[name], typed_before[name])):
+            continue
+        setattr(ctx, name, value)
 
 
 def _call_handler(ctx, handler_fn):
     import types as _types
+    typed_before = _typed_snapshot(ctx)
     ex = _types.SimpleNamespace(**ctx.__dict__)
     result = handler_fn(ex, ctx.event)
-    _sync_all(ctx, ex)
+    _sync_all(ctx, ex, typed_before)
     return result
 
 
@@ -52,6 +87,11 @@ def process_events(ctx):
             cfg.WIDTH = ctx.new_w
             cfg.HEIGHT = ctx.new_h
             ctx.relayout()
+            # relayout() owns the real surface; refresh the flat mirror too so
+            # the post-event sync cannot restore the pre-resize surface.
+            _holder = getattr(ctx, "cairo_surface_holder", None)
+            if _holder is not None:
+                ctx.cairo_surface = _holder.surface
 
         if ctx.event.type == pygame.MOUSEWHEEL:
             _mx, _my = pygame.mouse.get_pos()
@@ -171,10 +211,11 @@ def process_events(ctx):
                 if dm.modal_motion(BezierPenSession(), ctx, ctx.event):
                     continue
             import types as _types
+            _typed_before = _typed_snapshot(ctx)
             _mm_ctx = _types.SimpleNamespace(**ctx.__dict__)
             from controllers.mouse_motion import handle_mousemotion as _hmm
             _hmm(_mm_ctx, ctx.event)
-            _sync_all(ctx, _mm_ctx)
+            _sync_all(ctx, _mm_ctx, _typed_before)
 
         elif ctx.event.type == pygame.MOUSEBUTTONUP and ctx.event.button == 2:
             dm = getattr(ctx, 'drag_manager', None)

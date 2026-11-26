@@ -41,6 +41,12 @@ def color_target_hit(ui, selection, document, state, event, was_hit,
             ctx.color_target = ui.color_target
             if primary_obj is not None:
                 from controllers.panel.fill_picker import fill_picker_hit
+                # ``tools`` is part of the typed panel boundary even though the
+                # current fill-picker handlers only consume it through ctx.
+                tools = getattr(ctx, "tools", None)
+                if tools is None:
+                    app_state = getattr(ctx, "_app_state", None)
+                    tools = getattr(app_state, "tools", None)
                 fill_picker_hit(
                     tools, document, selection, ui, state, event, ctx, handlers,
                 )

@@ -37,7 +37,7 @@ def fill_picker_part1_typed(ui, state, document, event, comp_target,
     elif primary_obj is not None and state["tab_fill_rect"].collidepoint(event.pos) and comp_target is None:
         ui.color_target = "fill"
         state["color_target"] = ui.color_target
-        fg = get_fill_gradient(primary_obj) if 'get_fill_gradient' in globals_map else (primary_obj.get("fill_gradient") if isinstance(primary_obj.get("fill_gradient"), dict) and primary_obj.get("fill_gradient", {}).get("type") in ("linear","radial") else None)
+        fg = get_fill_gradient(primary_obj) if callable(get_fill_gradient) else (primary_obj.get("fill_gradient") if isinstance(primary_obj.get("fill_gradient"), dict) and primary_obj.get("fill_gradient", {}).get("type") in ("linear","radial") else None)
         if fg is not None:
             stop_i = int(state.get("fill_gradient_stop", 0) or 0)
             fc = get_gradient_stop_color(fg, stop_i) if 'get_gradient_stop_color' in globals_map else (1.0, 1.0, 1.0, 1.0)
@@ -56,7 +56,7 @@ def fill_picker_part1_typed(ui, state, document, event, comp_target,
     ):
         _fdir = -1 if rects.get("fill_type_prev_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos) else 1
         _fmodes = ["solid", "linear", "radial", "conic", "spiral", "diamond", "square", "mesh", "pattern"]
-        _pfg_cur = get_fill_gradient(primary_obj) if 'get_fill_gradient' in globals_map else (primary_obj.get("fill_gradient") if isinstance(primary_obj.get("fill_gradient"), dict) else None)
+        _pfg_cur = get_fill_gradient(primary_obj) if callable(get_fill_gradient) else (primary_obj.get("fill_gradient") if isinstance(primary_obj.get("fill_gradient"), dict) else None)
         _ppat_cur = get_fill_pattern(primary_obj) if 'get_fill_pattern' in globals_map else primary_obj.get("fill_pattern")
         if _ppat_cur is not None:
             _cur_fill_mode = "pattern"
@@ -75,7 +75,7 @@ def fill_picker_part1_typed(ui, state, document, event, comp_target,
             for si in sel_list:
                 if 0 <= si < len(document.strokes):
                     st = document.strokes[si]
-                    fg = get_fill_gradient(st) if 'get_fill_gradient' in globals_map else (st.get("fill_gradient") if isinstance(st.get("fill_gradient"), dict) else None)
+                    fg = get_fill_gradient(st) if callable(get_fill_gradient) else (st.get("fill_gradient") if isinstance(st.get("fill_gradient"), dict) else None)
                     if ftype == "solid":
                         if fg is not None:
                             si_clamped = clamp_gradient_stop_index(fg, cur_stop_i) if 'clamp_gradient_stop_index' in globals_map else max(0, min(cur_stop_i, max(0, len(fg.get("stops") or []) - 1)))
@@ -98,11 +98,11 @@ def fill_picker_part1_typed(ui, state, document, event, comp_target,
                                 if ftype == "mesh" and 'default_mesh_gradient' in globals_map:
                                     st["fill_gradient"] = default_mesh_gradient(base, c1m)
                                 elif ftype == "linear" and 'default_linear_gradient' in globals_map:
-                                    st["fill_gradient"] = default_linear_gradient(base, c1m, 0.0)
+                                    st["fill_gradient"] = globals_map["default_linear_gradient"](base, c1m, 0.0)
                                 elif ftype == "radial" and 'default_radial_gradient' in globals_map:
-                                    st["fill_gradient"] = default_radial_gradient((1.0, 1.0, 1.0, float(base[3])), base)
+                                    st["fill_gradient"] = globals_map["default_radial_gradient"]((1.0, 1.0, 1.0, float(base[3])), base)
                                 elif 'default_shaped_gradient' in globals_map:
-                                    st["fill_gradient"] = default_shaped_gradient(ftype, (1.0, 1.0, 1.0, float(base[3])), base)
+                                    st["fill_gradient"] = globals_map["default_shaped_gradient"](ftype, (1.0, 1.0, 1.0, float(base[3])), base)
                                 else:
                                     st["fill_gradient"] = {"type": ftype, "center": [0.5, 0.5], "radii": [0.5, 0.5], "angle": 0.0, "stops": [{"pos": 0.0, "color": list(base)}, {"pos": 1.0, "color": list(c1m)}]}
                             else:
@@ -121,7 +121,7 @@ def fill_picker_part1_typed(ui, state, document, event, comp_target,
                                         ng["turns"] = 2.0
                                 if 'normalize_gradient' in globals_map:
                                     try:
-                                        ng = normalize_gradient(ng)
+                                        ng = globals_map["normalize_gradient"](ng)
                                     except Exception:
                                         pass
                                 st["fill_gradient"] = ng
@@ -132,11 +132,11 @@ def fill_picker_part1_typed(ui, state, document, event, comp_target,
                             if ftype == "mesh" and 'default_mesh_gradient' in globals_map:
                                 st["fill_gradient"] = default_mesh_gradient(c0, c1)
                             elif ftype == "linear" and 'default_linear_gradient' in globals_map:
-                                st["fill_gradient"] = default_linear_gradient(c0, c1, 0.0)
+                                st["fill_gradient"] = globals_map["default_linear_gradient"](c0, c1, 0.0)
                             elif ftype == "radial" and 'default_radial_gradient' in globals_map:
-                                st["fill_gradient"] = default_radial_gradient((1.0, 1.0, 1.0, float(c0[3])), c0)
+                                st["fill_gradient"] = globals_map["default_radial_gradient"]((1.0, 1.0, 1.0, float(c0[3])), c0)
                             elif 'default_shaped_gradient' in globals_map:
-                                st["fill_gradient"] = default_shaped_gradient(ftype, (1.0, 1.0, 1.0, float(c0[3])), c0)
+                                st["fill_gradient"] = globals_map["default_shaped_gradient"](ftype, (1.0, 1.0, 1.0, float(c0[3])), c0)
                             else:
                                 st["fill_gradient"] = {"type": ftype, "center": [0.5, 0.5], "radii": [0.5, 0.5], "angle": 0.0, "stops": [{"pos": 0.0, "color": list(c0)}, {"pos": 1.0, "color": list(c1)}]}
                         st["fill_color"] = None
@@ -147,7 +147,7 @@ def fill_picker_part1_typed(ui, state, document, event, comp_target,
                         st["fill_pattern"] = pat
                         st["fill_color"] = None
                         st["fill_gradient"] = None
-            pfg = get_fill_gradient(primary_obj) if 'get_fill_gradient' in globals_map else (primary_obj.get("fill_gradient") if isinstance(primary_obj.get("fill_gradient"), dict) else None)
+            pfg = get_fill_gradient(primary_obj) if callable(get_fill_gradient) else (primary_obj.get("fill_gradient") if isinstance(primary_obj.get("fill_gradient"), dict) else None)
             if pfg is not None:
                 state["fill_gradient_stop"] = clamp_gradient_stop_index(pfg, cur_stop_i) if 'clamp_gradient_stop_index' in globals_map else max(0, min(cur_stop_i, max(0, len(pfg.get("stops") or []) - 1)))
                 fc = get_gradient_stop_color(pfg, int(state.get("fill_gradient_stop", 0) or 0)) if 'get_gradient_stop_color' in globals_map else (1.0, 1.0, 1.0, 1.0)

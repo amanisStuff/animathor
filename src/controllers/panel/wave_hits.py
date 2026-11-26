@@ -2,10 +2,14 @@
 import copy, math, pygame
 import config as cfg
 
+from models.geometry import clamp as _default_clamp
+from models.strokes import _stroke_components as _default_stroke_components
 from models.waves import (
     WAVE_SHAPE_LABELS,
+    _get_distortion_style as _default_get_distortion_style,
     _get_distortion_styles,
     _remove_distortion_style,
+    _set_distortion_style as _default_set_distortion_style,
     default_displacement_params,
     default_repeat_params,
     default_thickness_params,
@@ -19,7 +23,42 @@ from models.waves_extra import (
 )
 
 
+def _wave_hit_context(ctx):
+    """Resolve typed state and services for the extracted wave-hit handlers.
+
+    The old ``ctx``-based bodies used bare locals for values that now live on
+    ``AppState`` substates. Keeping that resolution in one place lets these
+    handlers work with the live typed dispatch context and with legacy ctx
+    callers without rebuilding their logic.
+    """
+    app_state = getattr(ctx, "_app_state", None)
+    if app_state is None:
+        from controllers.app_state import AppState
+        app_state = AppState()
+        app_state.tools.tool_mode = getattr(ctx, "tool_mode", "draw")
+        app_state.selection.selected_strokes = getattr(ctx, "selected_strokes", set())
+        app_state.selection.selected_curve = getattr(ctx, "selected_curve", None)
+        app_state.selection.selection_submode = getattr(ctx, "selection_submode", "transform")
+        app_state.document.strokes = getattr(ctx, "strokes", [])
+        app_state.ui.color_target = getattr(ctx, "color_target", "stroke")
+        app_state.ui.wave_formula_focus = getattr(ctx, "wave_formula_focus", False)
+    state = getattr(ctx, "state", {})
+    return (
+        app_state.selection,
+        app_state.document,
+        app_state.ui,
+        state,
+        getattr(ctx, "_stroke_components", _default_stroke_components),
+        getattr(ctx, "_get_distortion_style", _default_get_distortion_style),
+        getattr(ctx, "_set_distortion_style", _default_set_distortion_style),
+        int(state.get("wave_active_index", 0) or 0),
+        getattr(ctx, "clamp", _default_clamp),
+    )
+
+
 def _b3_wave_hits(ctx, event, _w_hit):
+    (selection, document, ui, state, stroke_components,
+     get_distortion_style, set_distortion_style, wi, _clamp) = _wave_hit_context(ctx)
     if not _w_hit:
         for key, r in (state.get("displacement_affect_rects") or {}).items():
             if r.collidepoint(event.pos):
@@ -126,6 +165,10 @@ def _b3_wave_hits(ctx, event, _w_hit):
     # Pick curve as repeat pattern
     pick_r = state.get("repeat_pick_curve_rect", pygame.Rect(0, 0, 0, 0))
     if (not _w_hit) and pick_r.w > 0 and pick_r.h > 0 and pick_r.collidepoint(event.pos):
+        if selection.selected_curve:
+            si, comp_i = selection.selected_curve
+        else:
+            si, comp_i = getattr(ctx, "si", None), getattr(ctx, "comp_i", None)
         if state.get("repeat_pick_mode"):
             state["repeat_pick_mode"] = False
             state["repeat_pick_target"] = None
@@ -161,6 +204,8 @@ def _b3_wave_hits(ctx, event, _w_hit):
 
 
 def _b3_wave_sliders(ctx, event, _w_hit):
+    (selection, document, ui, state, stroke_components,
+     get_distortion_style, set_distortion_style, wi, _clamp) = _wave_hit_context(ctx)
     if not _w_hit:
         for key, (r, lo, hi) in (state.get("wave_slider_rects") or {}).items():
             if r.collidepoint(event.pos):
@@ -171,7 +216,7 @@ def _b3_wave_sliders(ctx, event, _w_hit):
                         comps[comp_i] = dict(comps[comp_i])
                         w = get_distortion_style(comps[comp_i], wi)
                         ctx.t = (event.pos[0] - r.x) / max(1, r.w - 1)
-                        ctx.val = lo + ctx.clamp(ctx.t, 0.0, 1.0) * (hi - lo)
+                        ctx.val = lo + _clamp(ctx.t, 0.0, 1.0) * (hi - lo)
                         if key in ("amplitude", "noise", "phase", "seed", "amount", "location", "handle_rotate", "handle_length"):
                             ctx.val = float(int(round(ctx.val)))
                         elif key in ("frequency", "noise_scale"):

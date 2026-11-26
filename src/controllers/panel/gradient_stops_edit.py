@@ -28,13 +28,13 @@ def gradient_stops_typed(ui, state, document, event, comp_target, primary_obj,
         cur_stop_i = int(state.get("fill_gradient_stop", 0) or 0)
         for si in sel_list:
             if 0 <= si < len(document.strokes):
-                fg = get_fill_gradient(document.strokes[si]) if 'get_fill_gradient' in globals_map else None
+                fg = get_fill_gradient(document.strokes[si]) if callable(get_fill_gradient) else None
                 if fg is not None and 'add_gradient_stop' in globals_map:
                     si_clamped = clamp_gradient_stop_index(fg, cur_stop_i) if 'clamp_gradient_stop_index' in globals_map else cur_stop_i
                     ng, ni = add_gradient_stop(fg, si_clamped)
                     document.strokes[si]["fill_gradient"] = ng
                     document.strokes[si]["fill_color"] = None
-        pfg = get_fill_gradient(primary_obj) if 'get_fill_gradient' in globals_map else (primary_obj.get("fill_gradient") if isinstance(primary_obj.get("fill_gradient"), dict) else None)
+        pfg = get_fill_gradient(primary_obj) if callable(get_fill_gradient) else (primary_obj.get("fill_gradient") if isinstance(primary_obj.get("fill_gradient"), dict) else None)
         if pfg is not None:
             ni = min((clamp_gradient_stop_index(pfg, cur_stop_i) if 'clamp_gradient_stop_index' in globals_map else cur_stop_i) + 1, max(0, len(pfg.get("stops") or []) - 1))
             state["fill_gradient_stop"] = ni
@@ -45,13 +45,13 @@ def gradient_stops_typed(ui, state, document, event, comp_target, primary_obj,
         cur_stop_i = int(state.get("fill_gradient_stop", 0) or 0)
         for si in sel_list:
             if 0 <= si < len(document.strokes):
-                fg = get_fill_gradient(document.strokes[si]) if 'get_fill_gradient' in globals_map else None
+                fg = get_fill_gradient(document.strokes[si]) if callable(get_fill_gradient) else None
                 if fg is not None and 'remove_gradient_stop' in globals_map:
                     si_clamped = clamp_gradient_stop_index(fg, cur_stop_i) if 'clamp_gradient_stop_index' in globals_map else cur_stop_i
                     ng, ni = remove_gradient_stop(fg, si_clamped)
                     document.strokes[si]["fill_gradient"] = ng
                     document.strokes[si]["fill_color"] = None
-        pfg = get_fill_gradient(primary_obj) if 'get_fill_gradient' in globals_map else (primary_obj.get("fill_gradient") if isinstance(primary_obj.get("fill_gradient"), dict) else None)
+        pfg = get_fill_gradient(primary_obj) if callable(get_fill_gradient) else (primary_obj.get("fill_gradient") if isinstance(primary_obj.get("fill_gradient"), dict) else None)
         if pfg is not None:
             ni = clamp_gradient_stop_index(pfg, cur_stop_i) if 'clamp_gradient_stop_index' in globals_map else max(0, min(cur_stop_i, max(0, len(pfg.get("stops") or []) - 1)))
             state["fill_gradient_stop"] = ni
@@ -59,7 +59,7 @@ def gradient_stops_typed(ui, state, document, event, comp_target, primary_obj,
             ui.picker_h, ui.picker_s, ui.picker_v = rgb_to_hsv(*fc)
             state["picker_h"] = ui.picker_h; state["picker_s"] = ui.picker_s; state["picker_v"] = ui.picker_v
     elif ui.color_target == "fill" and comp_target is None and state.get("fill_stop_pos_rect", pygame.Rect(0, 0, 0, 0)).collidepoint(event.pos):
-        fg = get_fill_gradient(primary_obj) if 'get_fill_gradient' in globals_map else (primary_obj.get("fill_gradient") if isinstance(primary_obj.get("fill_gradient"), dict) else None)
+        fg = get_fill_gradient(primary_obj) if callable(get_fill_gradient) else (primary_obj.get("fill_gradient") if isinstance(primary_obj.get("fill_gradient"), dict) else None)
         if fg is not None:
             cur_stop_i = int(state.get("fill_gradient_stop", 0) or 0)
             pr = state.get("fill_stop_pos_rect", pygame.Rect(0, 0, 0, 0))
@@ -87,13 +87,13 @@ def gradient_stops_typed(ui, state, document, event, comp_target, primary_obj,
             if 'set_gradient_stop_pos' in globals_map:
                 for si in sel_list:
                     if 0 <= si < len(document.strokes):
-                        sfg = get_fill_gradient(document.strokes[si]) if 'get_fill_gradient' in globals_map else None
+                        sfg = get_fill_gradient(document.strokes[si]) if callable(get_fill_gradient) else None
                         if sfg is not None:
                             sidx = clamp_gradient_stop_index(sfg, cur_stop_i) if 'clamp_gradient_stop_index' in globals_map else cur_stop_i
                             ng, _ni = set_gradient_stop_pos(sfg, sidx, rel)
                             document.strokes[si]["fill_gradient"] = ng
                             document.strokes[si]["fill_color"] = None
-                pfg2 = get_fill_gradient(primary_obj) if 'get_fill_gradient' in globals_map else None
+                pfg2 = get_fill_gradient(primary_obj) if callable(get_fill_gradient) else None
                 if pfg2 is not None:
                     sidx = clamp_gradient_stop_index(pfg2, cur_stop_i) if 'clamp_gradient_stop_index' in globals_map else cur_stop_i
                     _ngp, ni = set_gradient_stop_pos(pfg2, sidx, rel)

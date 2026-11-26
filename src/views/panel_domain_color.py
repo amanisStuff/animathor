@@ -66,12 +66,21 @@ PATH_KEYS = ("path_close_rect", "path_reverse_rect", "path_add_rect",
 APPEAR_KEYS = ("obj_opacity_rect", "shadow_toggle_rect", "shadow_blur_minus_rect", "shadow_blur_plus_rect")
 
 
-def render_no_selection_state(screen, font_small, state, x, y):
+def render_no_selection_state(screen, font_small, state, x, y, _button=None):
     """Explicit-contract render for empty selection state."""
     info = font_small.render("Select a stroke", True, MUTED_COLOR)
     screen.blit(info, (x, y)); y += 28
+    # Keep the Fill tab clickable without a selection: the user can switch the
+    # color target to fill mode even though there is no shape to fill yet.
+    tab_w = (PANEL_W - 40 - MIN_ELEMENT_SPACING) // 2
+    tab_fill = pygame.Rect(x, y, tab_w, 26)
+    publish_rect(state, "tab_fill_rect", tab_fill)
+    if _button is not None:
+        _button(tab_fill, "Fill", active=state.get("color_target") == "fill")
+    # Reserve the tab's row before the caller draws help text; otherwise the
+    # help lines are rendered on top of the tab.
+    y += 26 + MIN_ELEMENT_SPACING
     publish_rect(state, "tab_stroke_rect", pygame.Rect(0,0,0,0))
-    publish_rect(state, "tab_fill_rect", pygame.Rect(0,0,0,0))
     publish_rect(state, "sv_rect", pygame.Rect(0,0,0,0))
     publish_rect(state, "hue_rect", pygame.Rect(0,0,0,0))
     publish_rect(state, "nofill_rect", pygame.Rect(0,0,0,0))
@@ -85,7 +94,7 @@ def render_no_selection_state(screen, font_small, state, x, y):
 def _part_c(c):
     """Compat ctx-bag wrapper; core logic lives in render_no_selection_state."""
     if c.sel_count == 0:
-        c.y = render_no_selection_state(c.screen, c.fonts[1], c.state, c.x, c.y)
+        c.y = render_no_selection_state(c.screen, c.fonts[1], c.state, c.x, c.y, getattr(c, "_button", None))
         return
     _part_c2(c)
 
@@ -151,7 +160,7 @@ def render_color_section(screen, fonts, mouse_pos, state, x, y, _button, _queue_
     if sel_count == 1:
         screen.blit(font_small.render(f"Tracing: {algo_label}", True, MUTED_COLOR), (x, y)); y += 20
     else:
-        y += 4
+        y += MIN_ELEMENT_SPACING
 
     # Width profile / taper (variable width along path), shape-level.
     for _k in ("width_profile_prev_rect", "width_profile_next_rect"):
@@ -171,16 +180,16 @@ def render_color_section(screen, fonts, mouse_pos, state, x, y, _button, _queue_
         screen.blit(font_small.render("Width profile", True, MUTED_COLOR), (x, y + 4))
         btn_w = 28
         vx = x + 92
-        vw = PANEL_W - 40 - 92 - btn_w * 2 - 8
+        vw = PANEL_W - 40 - 92 - btn_w * 2 - MIN_ELEMENT_SPACING * 2
         pr = pygame.Rect(vx, y, btn_w, 24)
-        vr = pygame.Rect(vx + btn_w + 4, y, vw, 24)
-        nr = pygame.Rect(vr.right + 4, y, btn_w, 24)
+        vr = pygame.Rect(vx + btn_w + MIN_ELEMENT_SPACING, y, vw, 24)
+        nr = pygame.Rect(vr.right + MIN_ELEMENT_SPACING, y, btn_w, 24)
         publish_rect(state, "width_profile_prev_rect", pr)
         publish_rect(state, "width_profile_next_rect", nr)
         _button(pr, "<", font_=font_small)
         _button(vr, labels.get(cur_prof, str(cur_prof)))
         _button(nr, ">", font_=font_small)
-        y += 28
+        y += 24 + MIN_ELEMENT_SPACING
     else:
         publish_rect(state, "width_profile_prev_rect", pygame.Rect(0, 0, 0, 0))
         publish_rect(state, "width_profile_next_rect", pygame.Rect(0, 0, 0, 0))
@@ -199,15 +208,15 @@ def render_color_section(screen, fonts, mouse_pos, state, x, y, _button, _queue_
             screen.blit(font_small.render(label, True, MUTED_COLOR), (x, y + 4))
             btn_w = 28
             vx = x + 52
-            vw = PANEL_W - 40 - 52 - btn_w * 2 - 8
+            vw = PANEL_W - 40 - 52 - btn_w * 2 - MIN_ELEMENT_SPACING * 2
             pr = pygame.Rect(vx, y, btn_w, 24)
-            vr = pygame.Rect(vx + btn_w + 4, y, vw, 24)
-            nr = pygame.Rect(vr.right + 4, y, btn_w, 24)
+            vr = pygame.Rect(vx + btn_w + MIN_ELEMENT_SPACING, y, vw, 24)
+            nr = pygame.Rect(vr.right + MIN_ELEMENT_SPACING, y, btn_w, 24)
             state[prev_key] = pr; state[next_key] = nr
             _button(pr, "<", font_=font_small)
             _button(vr, value)
             _button(nr, ">", font_=font_small)
-            y += 28
+            y += 24 + MIN_ELEMENT_SPACING
         _style_stepper("Cap", str(cap_now).title(), "cap_prev_rect", "cap_next_rect")
         _style_stepper("Join", str(join_now).title(), "join_prev_rect", "join_next_rect")
         _style_stepper("Dash", str(dash_now).title(), "dash_prev_rect", "dash_next_rect")
@@ -225,7 +234,7 @@ def render_color_section(screen, fonts, mouse_pos, state, x, y, _button, _queue_
     if shape_style_enabled and stroke is not None:
         _mk = get_markers(stroke) if 'get_markers' in globals() else {"start": "none", "end": "none"}
         screen.blit(font_small.render("Markers", True, TEXT_COLOR), (x, y)); y += 18
-        _mgap = 4
+        _mgap = MIN_ELEMENT_SPACING
         _mbw = (PANEL_W - 40 - _mgap) // 2
         _sr = pygame.Rect(x, y, _mbw, 24)
         _er = pygame.Rect(x + _mbw + _mgap, y, _mbw, 24)
@@ -237,7 +246,7 @@ def render_color_section(screen, fonts, mouse_pos, state, x, y, _button, _queue_
                 active=open_start, show_caret=True)
         _button(_er, "End: " + str(_mk["end"]).replace("_", " ").title(),
                 active=open_end, show_caret=True)
-        y += 28
+        y += 24 + MIN_ELEMENT_SPACING
         if stroke_is_closed(stroke):
             hint = font_small.render("Closed paths have no marker ends", True, MUTED_COLOR)
             screen.blit(hint, (x, y)); y += 18
@@ -277,18 +286,21 @@ def render_color_section(screen, fonts, mouse_pos, state, x, y, _button, _queue_
         publish_rect(state, "shadow_toggle_rect", sh_r)
         _button(sh_r, "Shadow: ON" if sh_on else "Shadow: OFF", active=sh_on)
         _queue_tip(sh_r, None, "Toggle drop shadow")
-        y += 28
+        y += 24 + MIN_ELEMENT_SPACING
         if sh_on:
             blur_val = int(round(float(_app["shadow"].get("blur", 4.0))))
             screen.blit(font_small.render(f"Shadow blur {blur_val}px", True, MUTED_COLOR),
                         (x, y)); y += 16
-            bmw = (PANEL_W - 40 - 6) // 2
+            bmw = (PANEL_W - 40 - MIN_ELEMENT_SPACING) // 2
             minus_r = pygame.Rect(x, y, bmw, 22)
-            plus_r = pygame.Rect(x + bmw + 6, y, bmw, 22)
+            plus_r = pygame.Rect(x + bmw + MIN_ELEMENT_SPACING, y, bmw, 22)
             publish_rect(state, "shadow_blur_minus_rect", minus_r)
             publish_rect(state, "shadow_blur_plus_rect", plus_r)
             _button(minus_r, "- Blur")
             _button(plus_r, "+ Blur")
+            # Reserve the stepper row: the next section draws its "Color" header
+            # at y, which otherwise lands on top of these two buttons.
+            y += 22 + MIN_ELEMENT_SPACING
     else:
         for _k in APPEAR_KEYS:
             state[_k] = pygame.Rect(0, 0, 0, 0)
@@ -375,16 +387,16 @@ def render_color_picker_section(screen, fonts, mouse_pos, state, x, y, _button, 
     # --- Modern color picker ---
     screen.blit(font.render("Color", True, TEXT_COLOR if (stroke_color_enabled or fill_enabled) else MUTED_COLOR), (x, y)); y += 22
     # target tabs
-    tab_w = (PANEL_W - 40 - 8) // 2
+    tab_w = (PANEL_W - 40 - MIN_ELEMENT_SPACING) // 2
     tab_stroke = pygame.Rect(x, y, tab_w, 26)
-    tab_fill = pygame.Rect(x + tab_w + 8, y, tab_w, 26)
+    tab_fill = pygame.Rect(x + tab_w + MIN_ELEMENT_SPACING, y, tab_w, 26)
     publish_rect(state, "tab_stroke_rect", tab_stroke if stroke_color_enabled else pygame.Rect(0,0,0,0))
     publish_rect(state, "tab_fill_rect", tab_fill if fill_enabled else pygame.Rect(0,0,0,0))
     for rect, label, key in ((tab_stroke, "Stroke", "stroke"), (tab_fill, "Fill", "fill")):
             enabled_tab = stroke_color_enabled if key == "stroke" else fill_enabled
             active = (color_target == key) and enabled_tab
             _button(rect, label, active=active, enabled=enabled_tab)
-    y += 32
+    y += 26 + MIN_ELEMENT_SPACING
 
     # current color for target
     fill_grad = None

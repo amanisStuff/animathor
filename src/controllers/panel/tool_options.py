@@ -46,8 +46,6 @@ def tool_options_typed(tools, selection, document, drag, ui, state, event,
         slider.value = tools.max_points_per_curve
     elif tools.tool_mode == "draw":
         _matched = True
-    elif tools.tool_mode == "draw":
-        _matched = True
         handled_draw_panel = reference_image_click(
             rects, state, document, ui, event,
             pick_reference_image_path, load_reference_image, clamp)
@@ -161,7 +159,7 @@ def tool_options_typed(tools, selection, document, drag, ui, state, event,
                 document.strokes.append(new_st)
                 selection.selected_strokes = {len(document.strokes) - 1}
                 selection.selected_point = None; selection.selected_curve = None; selection.selected_curves.clear(); drag.transform_drag = None; drag.drag_last = None; drag.pending_transform_toggle = None
-    return None
+    return 'continue' if _matched else None
 
 
 def _handle_panel_click_a_p1(ctx, event):

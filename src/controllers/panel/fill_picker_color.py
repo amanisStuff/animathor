@@ -34,7 +34,7 @@ def fill_picker_part3_typed(ui, state, document, event, comp_target,
                 state["fill_gradient_stop"] = int(skey)
             except Exception:
                 state["fill_gradient_stop"] = 0
-            fg = get_fill_gradient(primary_obj) if 'get_fill_gradient' in globals_map else None
+            fg = get_fill_gradient(primary_obj) if callable(get_fill_gradient) else None
             if fg is not None:
                 si_clamped = clamp_gradient_stop_index(fg, int(state.get("fill_gradient_stop", 0) or 0)) if 'clamp_gradient_stop_index' in globals_map else int(state.get("fill_gradient_stop", 0) or 0)
                 state["fill_gradient_stop"] = si_clamped
@@ -60,7 +60,7 @@ def fill_picker_part3_typed(ui, state, document, event, comp_target,
                         alpha = color_alpha(document.strokes[si].get("stroke_color"), 1.0)
                         document.strokes[si]["stroke_color"] = (col[0], col[1], col[2], alpha)
                     else:
-                        fg = get_fill_gradient(document.strokes[si]) if 'get_fill_gradient' in globals_map else None
+                        fg = get_fill_gradient(document.strokes[si]) if callable(get_fill_gradient) else None
                         if fg is not None:
                             stop_i = int(state.get("fill_gradient_stop", 0) or 0)
                             alpha = color_alpha(get_gradient_stop_color(fg, stop_i) if 'get_gradient_stop_color' in globals_map else (0,0,0,1), 1.0)
@@ -89,7 +89,7 @@ def fill_picker_part3_typed(ui, state, document, event, comp_target,
                         alpha = color_alpha(document.strokes[si].get("stroke_color"), 1.0)
                         document.strokes[si]["stroke_color"] = (col[0], col[1], col[2], alpha)
                     else:
-                        fg = get_fill_gradient(document.strokes[si]) if 'get_fill_gradient' in globals_map else None
+                        fg = get_fill_gradient(document.strokes[si]) if callable(get_fill_gradient) else None
                         if fg is not None:
                             stop_i = int(state.get("fill_gradient_stop", 0) or 0)
                             alpha = color_alpha(get_gradient_stop_color(fg, stop_i) if 'get_gradient_stop_color' in globals_map else (0,0,0,1), 1.0)
@@ -115,7 +115,7 @@ def fill_picker_part3_typed(ui, state, document, event, comp_target,
                     if ui.color_target == "stroke":
                         document.strokes[si]["stroke_color"] = set_color_alpha(document.strokes[si].get("stroke_color", (0.1,0.1,0.15,1.0)), new_alpha)
                     else:
-                        fg = get_fill_gradient(document.strokes[si]) if 'get_fill_gradient' in globals_map else None
+                        fg = get_fill_gradient(document.strokes[si]) if callable(get_fill_gradient) else None
                         if fg is not None:
                             stop_i = int(state.get("fill_gradient_stop", 0) or 0)
                             cstop = get_gradient_stop_color(fg, stop_i) if 'get_gradient_stop_color' in globals_map else (0,0,0,1)
@@ -143,7 +143,7 @@ def fill_picker_part3_typed(ui, state, document, event, comp_target,
                                 alpha = color_alpha(document.strokes[si].get("stroke_color"), 1.0)
                                 document.strokes[si]["stroke_color"] = (col[0], col[1], col[2], alpha)
                             else:
-                                fg = get_fill_gradient(document.strokes[si]) if 'get_fill_gradient' in globals_map else None
+                                fg = get_fill_gradient(document.strokes[si]) if callable(get_fill_gradient) else None
                                 if fg is not None:
                                     stop_i = int(state.get("fill_gradient_stop", 0) or 0)
                                     alpha = color_alpha(get_gradient_stop_color(fg, stop_i) if 'get_gradient_stop_color' in globals_map else (0,0,0,1), 1.0)

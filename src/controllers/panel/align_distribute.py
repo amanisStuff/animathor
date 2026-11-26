@@ -64,7 +64,7 @@ def align_distribute_typed(tools, selection, document, drag, ui, state, event,
                 shadow = dict(shadow)
                 shadow["blur"] = max(0.0, min(64.0, float(shadow.get("blur", 4.0)) + step))
                 document.strokes[si] = set_appearance(document.strokes[si], shadow=shadow)
-    elif tools.tool_mode == "selection" and tools.selection_submode == "nodes" and any(
+    elif tools.tool_mode == "selection" and selection.selection_submode == "nodes" and any(
         state.get(k, pygame.Rect(0,0,0,0)).collidepoint(event.pos)
         for k in ("path_close_rect", "path_reverse_rect", "path_add_rect",
                   "path_delete_rect", "path_smooth_rect", "path_corner_rect",
@@ -115,7 +115,7 @@ def align_distribute_typed(tools, selection, document, drag, ui, state, event,
         tools.eyedropper_pick = not tools.eyedropper_pick
         state["eyedropper_pick"] = tools.eyedropper_pick
         drag.cutting = False; drag.cut_points = []
-    elif tools.tool_mode == "selection" and tools.selection_submode == "curve" and state.get("curve_join_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
+    elif tools.tool_mode == "selection" and selection.selection_submode == "curve" and state.get("curve_join_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
         _matched = True
         if len(selection.selected_curves) >= 2:
             by_stroke = {}
@@ -144,14 +144,14 @@ def align_distribute_typed(tools, selection, document, drag, ui, state, event,
                 selection.selected_strokes = {si for si, _ in selection.selected_curves}
         selection.selected_point = None; drag.transform_drag = None; drag.drag_last = None
         tools.eyedropper_pick = False
-    elif tools.tool_mode == "selection" and tools.selection_submode == "curve" and state.get("curve_cut_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
+    elif tools.tool_mode == "selection" and selection.selection_submode == "curve" and state.get("curve_cut_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
         _matched = True
         tools.curve_cut_mode = not tools.curve_cut_mode
         state["curve_cut_mode"] = tools.curve_cut_mode
         drag.cutting = False; drag.cut_points = []
         selection.selected_point = None; drag.transform_drag = None; drag.drag_last = None
         tools.eyedropper_pick = False
-    elif tools.tool_mode == "selection" and tools.selection_submode == "curve" and state.get("curve_redraw_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
+    elif tools.tool_mode == "selection" and selection.selection_submode == "curve" and state.get("curve_redraw_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
         _matched = True
         if selection.selected_curve and selection.selected_curve[0] in selection.selected_strokes:
             si, comp_i = selection.selected_curve
