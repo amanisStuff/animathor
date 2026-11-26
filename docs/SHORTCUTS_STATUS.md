@@ -57,17 +57,16 @@
 
 | Modifier behavior | Conventional | Status | Notes in this app |
 |---|---|---:|---|
-| `Shift` — constrain aspect / 45°/90° | Lock ratio, orthogonal move, add to selection | **Partial** | `Shift` held while drawing/dragging now constrains to a **straight line** (replacing former `V`-hold). `Shift` is also used in selection/snap flows; not a full, uniform "constrain to 45°/90° + aspect-lock + add-to-selection" across all transforms. |
+| `Shift` — constrain aspect / 45°/90° | Lock ratio, orthogonal move, add to selection | **Partial** | `Shift` held while drawing/dragging now constrains to a **straight line** (replacing former `V`-hold), and makes numeric-field scrubbing 5× coarser. `Shift` is also used in selection/snap flows; not a full, uniform "constrain to 45°/90° + aspect-lock + add-to-selection" across all transforms. |
 | `Alt` — duplicate on drag / transform from center / subtract selection | `Alt+Drag` dup, center-scale, subtract | **Partial** | `Alt` is used with the **reference image** interactions; not a general "duplicate object on drag", "scale from center", or "subtract from selection" modifier. |
-| `Ctrl/Cmd` — override / bypass snap | Direct-select override or disable snapping while dragging | **Partial** | `Ctrl` used for file/edit/view shortcuts and combos; no general "temporarily disable snapping while dragging" or direct-selection override modifier. |
+| `Ctrl/Cmd` — override / bypass snap | Direct-select override or disable snapping while dragging | **Partial** | `Ctrl`/`Cmd` used for file/edit/view shortcuts and combos, and makes numeric-field scrubbing 10× finer; no general "temporarily disable snapping while dragging" or direct-selection override modifier. |
 
 ## 5. Expected UI & Workspace Interactions
 
 | Interaction | Conventional | Status | Notes in this app |
 |---|---|---:|---|
-| Scrubby sliders | Drag numeric labels (↔) to adjust; `Shift`=coarse, `Alt`=fine | **Not implemented** | `Slider` widgets (`src/views/widgets.py`) are handle/track drag sliders only — no label-drag scrubbing, no Shift/Alt precision modifiers. |
+| Scrubby sliders | Drag numeric labels (↔) to adjust; `Shift`=coarse, `Alt`=fine | **Implemented (Ctrl/Cmd instead of Alt)** | All numeric parameters now use `DragField` / `draw_drag_field()` (`src/views/widgets.py`): press to start a scrub from the current value (no click-to-jump), then drag horizontally across the field width to cover the range. `Ctrl`/`Cmd` = 10× finer, `Shift` = 5× coarser. The legacy `Slider` is a `DragField` subclass. Double-click a field to type an exact value: digits/`.`/`-` edit, `Enter` commits (clamped/stepped), `Escape` cancels; opacity fields take percentages (`35` → 35%). |
 | Math in input fields | Evaluate expressions (e.g. `1920/2`, `+24px`) | **Not implemented** | No general numeric property fields with arithmetic; wave formula field evaluates wave expressions only. |
-| Context-sensitive properties panel | Inspector updates per selection | **Implemented** | Right panel is context-sensitive (draw settings, selection/curve/wave properties update with the active tool/selection). |
 | Non-destructive layer/node stack | Reorder, eye/lock toggles, right-click mask/group | **Partial** | Per-curve **wave distortion styles** remain a non-destructive, stackable modifier system (enable/reorder/remove, base geometry preserved). No general layers panel with drag-reorder, visibility (eye)/lock icons per stroke, or right-click mask/group. |
 | Spring-loaded tools | Hold key to temporarily activate, release to return | **Partial** | `Space` is spring-loaded for **temporary pan**; `Shift`-hold constrains straight drawing. Not spring-loaded switching between primary tools. |
 | Customizable keymaps & discoverability | Tooltips show shortcuts; remappable presets | **Partial** | Toolbar buttons now show **hover tooltips with shortcuts** (`Undo Ctrl+Z`, `Redo Ctrl+Y/Ctrl+Shift+Z`, `Draw/Brush B`, `Move/Select V`). No full remappable keymap/preferences UI and no tooltips across all controls. |
@@ -76,9 +75,9 @@
 
 | Status | Count (approx.) |
 |---|---:|
-| **Implemented** | 22 (undo/redo, cut/copy/paste, duplicate, select-all, Esc-deselect, save/save-as/open, export PNG, V/B/E/F tool keys, S snapping, `[`/`]`, space-pan, MMB pan, wheel-zoom-at-cursor, fit/100%, context panel, toolbar shortcut tooltips) |
+| **Implemented** | 23 (undo/redo, cut/copy/paste, duplicate, select-all, Esc-deselect, save/save-as/open, export PNG, V/B/E/F tool keys, S snapping, `[`/`]`, space-pan, MMB pan, wheel-zoom-at-cursor, fit/100%, context panel, toolbar shortcut tooltips, scrubby numeric fields) |
 | **Partial** | 9 (`Ctrl+Shift+V` absent, bare-`C` rebound, zoom-step keys, Shift/Alt/Ctrl modifier semantics, non-destructive wave stack vs full layers, spring-loaded pan/shift, tooltip coverage/remapping) |
-| **Not implemented** | ~13 (paste-in-place, group/ungroup, command palette, P/T/I/crop tools, hide-UI, rulers/guides, scrubby sliders, math-in-inputs, full layer panel, key remapping) |
+| **Not implemented** | ~12 (paste-in-place, group/ungroup, command palette, P/T/I/crop tools, hide-UI, rulers/guides, math-in-inputs, full layer panel, key remapping) |
 | **N/A** | 1 (3D R/S/G) |
 
 ## Recently implemented (this pass)
@@ -92,4 +91,4 @@
 - **Bottom toolbar tools & collapsible sidebar:** the bottom bar is `DRAW_SHAPES` + `BOTTOM_TOOLS` (`src/config.py`) — Eraser and Fill appear after a divider; selecting either sets `draw_tool`, while selecting a shape resets `draw_tool` to pen. The right panel leads with a **Tool options** heading and the Pen/Eraser/Fill row; the option groups below it are filtered by the active `draw_tool` (pen → points/curve, boost, tracing; fill → fill color picker; eraser → usage hint), then snapping and reference controls. The sidebar collapses via the chevron tab drawn by `draw_panel_toggle` (`src/views/panel.py`); `relayout()` in `src/controllers/app_controller.py` recomputes `cfg.CANVAS_W`/`PANEL_X` and recreates the cairo surface, and is reused on `VIDEORESIZE`.
 - **Fill color:** `bucket_fill_color` (default `(0.45, 0.72, 1.0)`) is chosen in the panel with an HSV square + hue bar + `BUCKET_SWATCHES` presets, or from the right-click Fill popup swatches (`bucket_color_<i>` items). `bucket_pick`/`set_bucket_color` keep the picker and this frame's `state` in sync; new fills are always opaque.
 
-**Remaining high-value gaps:** paste-in-place, group/ungroup, command palette, hide-UI (`Tab`), rulers/guides, scrubby sliders with math-in-fields, uniform modifier semantics (snap-bypass/center-scale/duplicate-drag), general layer stack UI, and full key-remapping/preferences.
+- **Draggable numeric fields:** `DragField` / `draw_drag_field()` (`src/views/widgets.py`) and `scrub_value()` (`src/models/interaction.py`) replace track-and-knob sliders for panel numeric parameters. A click keeps the current value; horizontal drag scrubs relative to the click over the field width. `Ctrl`/`Cmd` = 10× finer, `Shift` = 5× coarser. `Slider` remains as a compatible `DragField` subclass with a `track` alias. Double-click opens an inline editor (`src/controllers/numeric_field_edit.py`); typing replaces the value, `Enter` commits with clamping/stepping, `Escape` cancels, and clicking elsewhere commits first. See `docs/STYLE_GUIDE.md#draggable-numeric-fields`.

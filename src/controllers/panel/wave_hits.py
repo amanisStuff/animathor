@@ -215,18 +215,17 @@ def _b3_wave_sliders(ctx, event, _w_hit):
                     if 0 <= comp_i < len(comps):
                         comps[comp_i] = dict(comps[comp_i])
                         w = get_distortion_style(comps[comp_i], wi)
-                        ctx.t = (event.pos[0] - r.x) / max(1, r.w - 1)
-                        ctx.val = lo + _clamp(ctx.t, 0.0, 1.0) * (hi - lo)
-                        if key in ("amplitude", "noise", "phase", "seed", "amount", "location", "handle_rotate", "handle_length"):
-                            ctx.val = float(int(round(ctx.val)))
-                        elif key in ("frequency", "noise_scale"):
-                            ctx.val = float(ctx.val)
-                        else:
-                            ctx.val = float(ctx.val)
+                        # Draggable field: keep the current value on click; the
+                        # mouse-motion handler scrubs it from this start point.
+                        ctx.val = float(w.get(key, lo) or 0.0)
                         w[key] = ctx.val
                         set_distortion_style(comps[comp_i], w, wi)
                         document.strokes[si]["components"] = comps
-                        ctx.wave_slider_drag = {"key": key, "rect": r, "lo": lo, "hi": hi, "si": si, "comp_i": comp_i, "wi": wi}
+                        ctx.wave_slider_drag = {
+                            "key": key, "rect": r, "lo": lo, "hi": hi,
+                            "si": si, "comp_i": comp_i, "wi": wi,
+                            "start_x": event.pos[0], "start_value": ctx.val,
+                        }
                 _w_hit = True
                 break
     if not _w_hit and any(

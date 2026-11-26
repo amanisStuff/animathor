@@ -135,6 +135,9 @@ class UiCacheState:
     text_entry: Any = None
     xform_field_focus: Any = None
     xform_field_buffer: str = ""
+    # Double-click numeric entry for draggable panel fields (DragField).
+    drag_field_edit: Any = None
+    drag_field_last_click: Any = None
     picker_h: Any = None
     picker_s: Any = None
     picker_v: Any = None

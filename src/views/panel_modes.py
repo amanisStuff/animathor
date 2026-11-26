@@ -17,8 +17,8 @@ for _n in dir(_dep):
     globals().setdefault(_n, getattr(_dep, _n))
 from views.icons import BUTTON_TIPS, draw_icon, draw_tooltip  # noqa: E402
 from views.widgets import (  # noqa: E402
-    draw_button, draw_card, draw_color_swatch as draw_swatch, draw_hue_cursor,
-    draw_picker_cursor, draw_slider_knob, draw_toggle, draw_track,
+    draw_button, draw_card, draw_color_swatch as draw_swatch, draw_drag_field,
+    draw_hue_cursor, draw_picker_cursor, draw_toggle,
     to_screen_rgb,
 )
 
@@ -142,16 +142,19 @@ def _draw_panel_draw_mode(screen, fonts, mouse_pos, state, x, y, _button, _queue
             y += 8
         else:
             # Points control (freehand fitting)
-            label = font.render("Points / curve", True, TEXT_COLOR)
-            screen.blit(label, (x, y)); y += 24
+            screen.blit(font.render("Points / curve", True, TEXT_COLOR), (x, y)); y += 24
             limit = state["BOOST_MAX_POINTS"] if state["boost_points"] else state["NORMAL_MAX_POINTS"]
-            val = font_title.render(str(state["max_points"]), True, ACCENT)
-            screen.blit(val, (x, y - 2))
             hint = font_small.render(f"(2 - {limit})", True, MUTED_COLOR)
-            screen.blit(hint, (x + val.get_width() + 10, y + 4)); y += 32
-            state["slider"].track.topleft = (x, y)
-            state["slider"].track.width = PANEL_W - 40
-            state["slider"].draw(screen); y += 24
+            screen.blit(hint, (x, y)); y += 18 + MIN_ELEMENT_SPACING
+            pts_field = state["slider"]
+            pts_field.track.topleft = (x, y)
+            pts_field.track.width = PANEL_W - 40
+            pts_field.value = state["max_points"]
+            pts_field.max_v = limit
+            pts_field.label = "Points"
+            pts_field.enabled = True
+            pts_field.draw(screen, font_small, mouse_pos)
+            y += DRAG_FIELD_H + MIN_ELEMENT_SPACING
             b = state["buttons"]["boost"]
             b.rect.topleft = (x, y)
             b.label = "Boost: ON" if state["boost_points"] else "Boost limit"
@@ -187,17 +190,17 @@ def _draw_panel_draw_mode(screen, fonts, mouse_pos, state, x, y, _button, _queue
         # Optional gap: 0 keeps the stroke connected at the new node.
         screen.blit(font.render("Gap", True, TEXT_COLOR), (x, y)); y += 24
         gap_val = int(state.get("cut_gap", 0) or 0)
-        val = font_title.render(f"{gap_val} px", True, ACCENT)
-        screen.blit(val, (x, y - 2))
         hint = font_small.render("(0 = stays connected)", True, MUTED_COLOR)
-        screen.blit(hint, (x + val.get_width() + 10, y + 4)); y += 30
+        screen.blit(hint, (x, y)); y += 18 + MIN_ELEMENT_SPACING
         _gap_slider = state.get("cut_gap_slider")
         if _gap_slider is not None:
             _gap_slider.track.topleft = (x, y)
             _gap_slider.track.width = PANEL_W - 40
             _gap_slider.value = gap_val
-            _gap_slider.draw(screen)
-        y += 26
+            _gap_slider.label = "Gap"
+            _gap_slider.enabled = True
+            _gap_slider.draw(screen, font_small, mouse_pos)
+            y += DRAG_FIELD_H + MIN_ELEMENT_SPACING
     else:
         screen.blit(font_small.render("Click an enclosed area to fill it.", True, MUTED_COLOR), (x, y)); y += 24
 
@@ -321,13 +324,31 @@ def _draw_panel_draw_mode(screen, fonts, mouse_pos, state, x, y, _button, _queue
         for word in str(err).split():
             trial = (line + " " + word).strip()
             if line and font_small.size(trial)[0] > PANEL_W - 40:
+            draw_drag_field(
+                screen, bar, opacity, 0.0, 1.0,
+                f"{int(round(opacity * 100))}%", font_small,
+                mouse_pos=mouse_pos, label="Opacity",
+            )
+            y += DRAG_FIELD_H + MIN_ELEMENT_SPACING
+        else:
+            state["ref_opacity_rect"] = pygame.Rect(0, 0, 0, 0)
+            screen.blit(font_small.render("No reference image", True, MUTED_COLOR), (x, y)); y += 18
+        err = state.get("reference_error")
+        if err:
+            # Word-wrap the error so it stays inside the panel.
+            line = ""
+            for word in str(err).split():
+                trial = (line + " " + word).strip()
+                if line and font_small.size(trial)[0] > PANEL_W - 40:
+                    screen.blit(font_small.render(line, True, TEXT_DANGER), (x, y)); y += 16
+                    line = word
+                else:
+                    line = trial
+            if line:
                 screen.blit(font_small.render(line, True, TEXT_DANGER), (x, y)); y += 16
-                line = word
-            else:
-                line = trial
-        if line:
-            screen.blit(font_small.render(line, True, TEXT_DANGER), (x, y)); y += 16
-    y += 4
+    else:
+        for key in ("ref_load_rect", "ref_vis_rect", "ref_clear_rect", "ref_opacity_rect"):
+            state[key] = pygame.Rect(0, 0, 0, 0)
 
     y += 4
 

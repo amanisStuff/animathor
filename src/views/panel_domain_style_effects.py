@@ -11,8 +11,8 @@ from models.waves import WAVE_SHAPE_LABELS
 from models.waves_extra import _wave_icon_polyline
 from views.icons import BUTTON_TIPS, draw_icon, draw_tooltip  # noqa: E402
 from views.widgets import (  # noqa: E402
-    draw_button, draw_card, draw_color_swatch as draw_swatch, draw_hue_cursor,
-    draw_picker_cursor, draw_slider_knob, draw_toggle, draw_track,
+    draw_button, draw_card, draw_color_swatch as draw_swatch, draw_drag_field,
+    draw_hue_cursor, draw_picker_cursor, draw_toggle,
     to_screen_rgb,
 )
 
@@ -61,25 +61,15 @@ def draw_style_slider(screen, font_small, state, x, y, label, key, val, lo, hi,
     caller's ``y`` used to draw sliders at a stale position, placing them on
     top of the style header/buttons and leaving later controls too high.
     """
-    col = TEXT_COLOR if enabled_sl else MUTED_COLOR
-    screen.blit(font_small.render(label, True, col), (x, y))
-    txt = fmt(val) if fmt else str(val)
-    vt = font_small.render(txt, True, ACCENT if enabled_sl else MUTED_COLOR)
-    screen.blit(vt, (x + PANEL_W - 40 - vt.get_width(), y))
-    y += 18
-    track = pygame.Rect(x, y, PANEL_W - 40, 6)
-    if hi == lo:
-        tx = track.x
-    else:
-        tx = int(track.x + (clamp(val, lo, hi) - lo) / (hi - lo) * track.w)
-    draw_track(screen, track, filled_to=tx, enabled=enabled_sl)
-    draw_slider_knob(screen, tx, track.centery, enabled=enabled_sl)
+    field = pygame.Rect(x, y, PANEL_W - 40, DRAG_FIELD_H)
+    draw_drag_field(
+        screen, field, val, lo, hi,
+        fmt(val) if fmt else str(val), font_small,
+        enabled=enabled_sl, label=label,
+    )
     if enabled_sl:
-        hit = track.inflate(0, 16)
-        state.setdefault("wave_slider_rects", {})[key] = (hit, lo, hi)
-    # Hit box overhangs the track by 8px; 12px after the track leaves
-    # MIN_ELEMENT_SPACING between consecutive hit boxes.
-    return y + MIN_ELEMENT_SPACING + 4
+        state.setdefault("wave_slider_rects", {})[key] = (field, lo, hi)
+    return field.bottom + MIN_ELEMENT_SPACING
 
 
 def _local_style_slider(screen, font_small, state, x, y_holder):
@@ -198,7 +188,7 @@ def render_repeat_section(screen, font_small, state, x, y, _button, _style_slide
     _slider("Amplitude (%)", "amplitude", float(active_style.get("amplitude", 8.0)), 0.0, 100.0, fmt=lambda v: f"{v:.1f}")
     _slider("Frequency", "frequency", float(active_style.get("frequency", 0.25)), 0.01, 5.0, fmt=lambda v: f"{v:.2f}")
     _slider("Phase (deg)", "phase", float(active_style.get("phase", 0.0)), 0.0, 360.0, fmt=lambda v: f"{v:.0f}")
-    y = _yh["y"] + MIN_ELEMENT_SPACING + 2  # last hit box overhangs the track
+    y = _yh["y"]  # each drag field already reserves its own 8px gap
     rev_rect = pygame.Rect(x, y, (PANEL_W - 40 - MIN_ELEMENT_SPACING) // 2, 24)
     clamp_rect = pygame.Rect(rev_rect.right + MIN_ELEMENT_SPACING, y,
                              PANEL_W - 40 - rev_rect.w - MIN_ELEMENT_SPACING, 24)
@@ -267,7 +257,7 @@ def render_thickness_section(screen, font_small, state, x, y, _button, _style_sl
     _yh = {"y": y}
     _slider = _local_style_slider(screen, font_small, state, x, _yh)
     _slider("Amplitude (%)", "amplitude", float(active_style.get("amplitude", 8.0)), 0.0, 100.0, fmt=lambda v: f"{v:.1f}")
-    y = _yh["y"] + MIN_ELEMENT_SPACING + 2  # last hit box overhangs the track
+    y = _yh["y"]  # each drag field already reserves its own 8px gap
     rev_rect = pygame.Rect(x, y, (PANEL_W - 40 - MIN_ELEMENT_SPACING) // 2, 24)
     clamp_rect = pygame.Rect(rev_rect.right + MIN_ELEMENT_SPACING, y,
                              PANEL_W - 40 - rev_rect.w - MIN_ELEMENT_SPACING, 24)
@@ -407,7 +397,7 @@ def render_wave_section(screen, fonts, state, x, y, _button, _queue_tip, _style_
             _slider("Noise", "noise", noise_v, 0.0, 100.0, fmt=lambda v: str(int(round(v))))
             _slider("Noise scale", "noise_scale", nscale_v, 0.2, 10.0, fmt=lambda v: f"{v:.1f}")
             _slider("Seed", "seed", seed_v, 0.0, 999.0, fmt=lambda v: str(int(round(v))))
-    y = _yh["y"] + MIN_ELEMENT_SPACING + 2  # last hit box overhangs the track
+    y = _yh["y"]  # each drag field already reserves its own 8px gap
     # Reverse toggle: invert the wave (-f(x))
     rev = bool(wave.get("reverse"))
     rev_rect = pygame.Rect(x, y, PANEL_W - 40, 22)

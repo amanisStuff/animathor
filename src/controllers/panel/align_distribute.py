@@ -29,12 +29,15 @@ def align_distribute_typed(tools, selection, document, drag, ui, state, event,
     elif tools.tool_mode == "selection" and selection.selected_strokes and state.get(
         "obj_opacity_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
         _matched = True
+        # Drag field: remember the current value; mouse motion scrubs from here.
         bar = state["obj_opacity_rect"]
-        opacity = clamp((event.pos[0] - bar.x) / max(1, bar.w - 1), 0.0, 1.0)
-        push_undo()
+        start_opacity = 0.5
         for si in sorted(selection.selected_strokes):
             if 0 <= si < len(document.strokes) and isinstance(document.strokes[si], dict):
-                document.strokes[si] = set_appearance(document.strokes[si], opacity=opacity)
+                start_opacity = get_appearance(document.strokes[si])["opacity"]
+                break
+        state["obj_opacity_drag_start"] = (event.pos[0], clamp(start_opacity, 0.0, 1.0))
+        push_undo()
         ui.obj_opacity_drag = True
         state["obj_opacity_drag"] = True
     elif tools.tool_mode == "selection" and selection.selected_strokes and any(

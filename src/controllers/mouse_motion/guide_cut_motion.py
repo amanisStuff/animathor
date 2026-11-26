@@ -1,6 +1,19 @@
 """guide cut motion."""
 import copy, math, pygame
 import config as cfg
+from models.interaction import scrub_value
+from views.widgets import drag_modifiers
+
+
+def _scrub_opacity(ctx, key, bar, fallback_value, event):
+    """Scrub an opacity field from its click snapshot (legacy fallback included)."""
+    start = ctx.state.get(key)
+    if not isinstance(start, (tuple, list)) or len(start) != 2:
+        start = (bar.x, ctx.clamp(fallback_value, 0.0, 1.0))
+        ctx.state[key] = start
+    fine, coarse = drag_modifiers(event)
+    return scrub_value(start[1], 0.0, 1.0, bar.w,
+                       start[0], event.pos[0], fine=fine, coarse=coarse)
 
 
 def mm_part1(ctx, event):
@@ -29,11 +42,13 @@ def mm_part1(ctx, event):
     if ctx.ref_opacity_drag and ctx.reference_image is not None:
         bar = ctx.state.get("ref_opacity_rect", pygame.Rect(0,0,0,0))
         if bar.w > 0:
-            ctx.reference_image["opacity"] = ctx.clamp((event.pos[0] - bar.x) / max(1, bar.w - 1), 0.0, 1.0)
+            ctx.reference_image["opacity"] = _scrub_opacity(
+                ctx, "ref_opacity_drag_start", bar,
+                float(ctx.reference_image.get("opacity", 0.5)), event)
     elif ctx.obj_opacity_drag and ctx.selected_strokes:
         bar = ctx.state.get("obj_opacity_rect", pygame.Rect(0,0,0,0))
         if bar.w > 0:
-            opacity = ctx.clamp((event.pos[0] - bar.x) / max(1, bar.w - 1), 0.0, 1.0)
+            opacity = _scrub_opacity(ctx, "obj_opacity_drag_start", bar, 0.5, event)
             for si in sorted(ctx.selected_strokes):
                 if 0 <= si < len(ctx.strokes) and isinstance(ctx.strokes[si], dict):
                     ctx.strokes[si] = ctx.set_appearance(ctx.strokes[si], opacity=opacity)

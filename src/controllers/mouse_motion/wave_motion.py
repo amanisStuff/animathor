@@ -1,6 +1,8 @@
 """wave motion."""
 import copy, math, pygame
 import config as cfg
+from models.interaction import scrub_value
+from views.widgets import drag_modifiers
 
 
 def wave_custom_drag_move(ctx, event):
@@ -36,14 +38,13 @@ def wave_slider_drag_move(ctx, event):
             comps = ctx._stroke_components(ctx.strokes[si])
             comps[comp_i] = dict(comps[comp_i])
             w = ctx._get_distortion_style(comps[comp_i], wi)
-            t = (event.pos[0] - r.x) / max(1, r.w - 1)
-            val = lo + ctx.clamp(t, 0.0, 1.0) * (hi - lo)
-            if key in ("amplitude", "noise", "phase", "seed", "amount", "location", "handle_rotate", "handle_length"):
-                val = float(int(round(val)))
-            elif key in ("frequency", "noise_scale"):
-                val = float(val)
-            else:
-                val = float(val)
+            start_x = d.get("start_x", r.x)
+            start_value = d.get("start_value", float(w.get(key, lo) or 0.0))
+            integer = key in ("amplitude", "noise", "phase", "seed", "amount",
+                              "location", "handle_rotate", "handle_length")
+            fine, coarse = drag_modifiers(event)
+            val = scrub_value(start_value, lo, hi, r.w, start_x, event.pos[0],
+                              step=1.0 if integer else None, fine=fine, coarse=coarse)
             w[key] = val
             ctx._set_distortion_style(comps[comp_i], w, wi)
             ctx.strokes[si]["components"] = comps
@@ -142,7 +143,15 @@ def color_picker_drag_move(ctx, event):
             _write_picker_hsv(ctx, picker_h, picker_s, picker_v)
         elif ctx.picker_drag_alpha:
             ar = ctx.state.get("alpha_rect", pygame.Rect(0,0,0,0))
-            new_alpha = ctx.clamp((event.pos[0] - ar.x) / max(1, ar.w - 1), 0.0, 1.0)
+            start = ctx.state.get("alpha_drag_start")
+            if start is not None:
+                fine, coarse = drag_modifiers(event)
+                new_alpha = scrub_value(start[1], 0.0, 1.0, ar.w,
+                                        start[0], event.pos[0],
+                                        fine=fine, coarse=coarse)
+            else:
+                # Legacy callers that start a drag without a start snapshot.
+                new_alpha = ctx.clamp((event.pos[0] - ar.x) / max(1, ar.w - 1), 0.0, 1.0)
             if comp_style_target is not None:
                 si, ci = comp_style_target
                 if 0 <= si < len(ctx.strokes):

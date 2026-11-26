@@ -10,8 +10,8 @@ from controllers.coordinates import clamp
 from models.geometry import color_alpha, color_rgb, color_rgba
 from views.icons import BUTTON_TIPS, draw_icon, draw_tooltip  # noqa: E402
 from views.widgets import (  # noqa: E402
-    draw_button, draw_card, draw_color_swatch as draw_swatch, draw_hue_cursor,
-    draw_picker_cursor, draw_slider_knob, draw_toggle, draw_track,
+    draw_button, draw_card, draw_color_swatch as draw_swatch, draw_drag_field,
+    draw_hue_cursor, draw_picker_cursor, draw_toggle,
     to_screen_rgb,
 )
 
@@ -308,27 +308,15 @@ def render_color_tail_section(
     show_alpha = (color_target == "stroke") or (cur_color is not None)
     publish_rect(state, "alpha_rect", pygame.Rect(0, 0, 0, 0))
     if show_alpha:
-        cur_alpha = color_alpha(cur_color, 1.0)
-        screen.blit(font_small.render(f"Opacity {int(round(cur_alpha * 100))}%", True, TEXT_COLOR), (x, y))
-        y += 16
-        alpha_h = 12
-        alpha_rect = pygame.Rect(x, y, sv_w, alpha_h)
+        cur_alpha = clamp(color_alpha(cur_color, 1.0), 0.0, 1.0)
+        alpha_rect = pygame.Rect(x, y, sv_w, DRAG_FIELD_H)
         publish_rect(state, "alpha_rect", alpha_rect)
-        # simple gradient bar from transparent to current rgb
-        base_rgb = color_rgb(display_color, (1.0, 1.0, 1.0))
-        for ix in range(sv_w):
-            a = ix / max(1, sv_w - 1)
-            # blend over a light checker-like background approximation
-            bgv = 235 if (ix // 6) % 2 == 0 else 210
-            r = int((base_rgb[0] * a + (bgv / 255.0) * (1 - a)) * 255)
-            g = int((base_rgb[1] * a + (bgv / 255.0) * (1 - a)) * 255)
-            b = int((base_rgb[2] * a + (bgv / 255.0) * (1 - a)) * 255)
-            pygame.draw.line(screen, (r, g, b), (alpha_rect.x + ix, alpha_rect.y), (alpha_rect.x + ix, alpha_rect.y + alpha_h - 1))
-        pygame.draw.rect(screen, BUTTON_BORDER, alpha_rect, 1, border_radius=RADIUS_SM)
-        ax = alpha_rect.x + int(clamp(cur_alpha, 0.0, 1.0) * (sv_w - 1))
-        pygame.draw.rect(screen, SURFACE, (ax - 3, alpha_rect.y - 2, 6, alpha_h + 4), 2, border_radius=RADIUS_XS)
-        pygame.draw.rect(screen, HANDLE_OUTLINE, (ax - 3, alpha_rect.y - 2, 6, alpha_h + 4), 1, border_radius=RADIUS_XS)
-        y += alpha_h + 8
+        draw_drag_field(
+            screen, alpha_rect, cur_alpha, 0.0, 1.0,
+            f"{int(round(cur_alpha * 100))}%", font_small,
+            mouse_pos=mouse_pos, label="Opacity",
+        )
+        y += DRAG_FIELD_H + MIN_ELEMENT_SPACING
     else:
         y += 2
 

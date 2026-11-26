@@ -81,7 +81,15 @@ class TestSliderDragSync(unittest.TestCase):
         self.assertTrue(ctx.obj_opacity_drag)
         self.assertTrue(ui_drag_active(ctx))
 
-    def test_ui_drag_motion_updates_the_opacity_slider(self):
+    def test_real_opacity_click_does_not_jump_the_value(self):
+        ctx, app_state, state = self._make_opacity_ctx()
+        _call_handler(ctx, _handle_panel_click_a_p3)
+
+        stroke = app_state.document.strokes[0]
+        self.assertEqual(get_appearance(stroke)["opacity"], 1.0)
+        self.assertEqual(state["obj_opacity_drag_start"], (150, 1.0))
+
+    def test_ui_drag_motion_scrubs_opacity_from_click_position(self):
         ctx, app_state, _state = self._make_opacity_ctx()
         _call_handler(ctx, _handle_panel_click_a_p3)
 
@@ -89,11 +97,11 @@ class TestSliderDragSync(unittest.TestCase):
         session.begin(ctx, types.SimpleNamespace(pos=(150, 105)))
         self.assertTrue(session._active)
 
-        session.move(ctx, types.SimpleNamespace(pos=(200, 105)))
+        session.move(ctx, types.SimpleNamespace(pos=(100, 105)))
 
         stroke = app_state.document.strokes[0]
-        expected = clamp((200 - OPACITY_RECT.x) / max(1, OPACITY_RECT.w - 1), 0.0, 1.0)
-        self.assertAlmostEqual(get_appearance(stroke)["opacity"], expected, places=4)
+        # 50px left across a 200px field => 0.25 below the click's 1.0 value.
+        self.assertAlmostEqual(get_appearance(stroke)["opacity"], 0.75, places=4)
 
 
 class TestEmptySelectionLayout(unittest.TestCase):

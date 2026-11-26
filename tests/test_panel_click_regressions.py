@@ -41,7 +41,7 @@ class _Slider:
         self.min_v = 0
         self.max_v = 50
 
-    def draw(self, _screen):
+    def draw(self, _screen, *_args, **_kwargs):
         pass
 
 

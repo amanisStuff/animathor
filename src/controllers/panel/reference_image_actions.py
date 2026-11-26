@@ -23,8 +23,9 @@ def reference_image_click(rects, state, document, ui, event,
             document.reference_error = None
             return True
         elif document.reference_image and rects.get("ref_opacity_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
-            bar = state["ref_opacity_rect"]
-            document.reference_image["opacity"] = clamp((event.pos[0] - bar.x) / max(1, bar.w - 1), 0.0, 1.0)
+            # Drag field: the click starts the scrub without jumping the value.
+            start_opacity = clamp(document.reference_image.get("opacity", 0.5), 0.0, 1.0)
+            state["ref_opacity_drag_start"] = (event.pos[0], start_opacity)
             ui.ref_opacity_drag = True
             return True
         return False

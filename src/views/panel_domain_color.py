@@ -17,8 +17,8 @@ from models.pattern import get_fill_pattern
 from models.strokes import WIDTH_PROFILES, _effective_component_style, _segment_endpoint_widths, get_point_width
 from views.icons import BUTTON_TIPS, draw_icon, draw_tooltip  # noqa: E402
 from views.widgets import (  # noqa: E402
-    draw_button, draw_card, draw_color_swatch as draw_swatch, draw_hue_cursor,
-    draw_picker_cursor, draw_slider_knob, draw_toggle, draw_track,
+    draw_button, draw_card, draw_color_swatch as draw_swatch, draw_drag_field,
+    draw_hue_cursor, draw_picker_cursor, draw_toggle,
     to_screen_rgb,
 )
 
@@ -146,15 +146,15 @@ def render_color_section(screen, fonts, mouse_pos, state, x, y, _button, _queue_
         eff_sw = float(pw)
     state["point_style_target"] = point_style_target if point_width_enabled else None
 
-    # Stroke width
-    screen.blit(font.render("Stroke width", True, TEXT_COLOR if width_enabled else MUTED_COLOR), (x, y)); y += 22
-    wv = font_title.render(str(int(round(eff_sw))), True, ACCENT if width_enabled else MUTED_COLOR)
-    screen.blit(wv, (x, y - 2)); y += 30
-    state["width_slider"].track.topleft = (x, y)
-    state["width_slider"].track.width = PANEL_W - 40
-    state["width_slider"].value = int(round(clamp(eff_sw, state["width_slider"].min_v, state["width_slider"].max_v)))
-    state["width_slider"].draw(screen)
-    y += 20
+    # Stroke width: drag the field horizontally to scrub the value.
+    wslider = state["width_slider"]
+    wslider.track.topleft = (x, y)
+    wslider.track.width = PANEL_W - 40
+    wslider.value = int(round(clamp(eff_sw, wslider.min_v, wslider.max_v)))
+    wslider.label = "Stroke width"
+    wslider.enabled = width_enabled
+    wslider.draw(screen, font_small, mouse_pos)
+    y += DRAG_FIELD_H + MIN_ELEMENT_SPACING
     _algo = stroke.get("algorithm", "fit") if stroke else "fit"
     algo_label = next((lbl for k, lbl in TRACE_ALGORITHMS if k == _algo), _algo)
     if sel_count == 1:
@@ -268,18 +268,15 @@ def render_color_section(screen, fonts, mouse_pos, state, x, y, _button, _queue_
         y += 16
         op_h = 12
         op_rect = pygame.Rect(x, y, PANEL_W - 40, op_h)
+        # Object opacity: draggable numeric field, not a click-to-jump bar.
+        op_rect = pygame.Rect(x, y, PANEL_W - 40, DRAG_FIELD_H)
         publish_rect(state, "obj_opacity_rect", op_rect)
-        pygame.draw.rect(screen, BUTTON_BORDER, op_rect, 1, border_radius=RADIUS_SM)
-        fill_w = int(op_rect.w * clamp(_app["opacity"], 0.0, 1.0))
-        if fill_w > 0:
-            pygame.draw.rect(screen, ACCENT,
-                             pygame.Rect(op_rect.x, op_rect.y, fill_w, op_h),
-                             border_radius=RADIUS_XS)
-        knock = op_rect.x + fill_w
-        pygame.draw.rect(screen, HANDLE_OUTLINE,
-                         pygame.Rect(knock - 2, op_rect.y - 2, 4, op_h + 4), 1,
-                         border_radius=RADIUS_XS)
-        y += op_h + 8
+        draw_drag_field(
+            screen, op_rect, clamp(_app["opacity"], 0.0, 1.0), 0.0, 1.0,
+            f"{int(round(_app['opacity'] * 100))}%", font_small,
+            mouse_pos=mouse_pos, label="Opacity",
+        )
+        y += DRAG_FIELD_H + MIN_ELEMENT_SPACING
         # Drop shadow toggle + blur stepper.
         sh_on = _app["shadow"] is not None
         sh_r = pygame.Rect(x, y, PANEL_W - 40, 24)

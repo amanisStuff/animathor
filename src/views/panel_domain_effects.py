@@ -12,8 +12,8 @@ from models.waves import WAVE_SHAPE_LABEL_DICT, _component_styles, _get_distorti
 from models.waves_extra import _distortion_style_preview_polyline
 from views.icons import BUTTON_TIPS, draw_icon, draw_tooltip  # noqa: E402
 from views.widgets import (  # noqa: E402
-    draw_button, draw_card, draw_color_swatch as draw_swatch, draw_hue_cursor,
-    draw_picker_cursor, draw_slider_knob, draw_toggle, draw_track,
+    draw_button, draw_card, draw_color_swatch as draw_swatch, draw_drag_field,
+    draw_hue_cursor, draw_picker_cursor, draw_toggle,
     to_screen_rgb,
 )
 
@@ -105,17 +105,17 @@ def _part_b2b_main(c):
                 # Optional gap: 0 keeps the stroke connected at the new node.
                 screen.blit(font.render("Gap", True, TEXT_COLOR), (x, y)); y += 24
                 gap_val = int(state.get("cut_gap", 0) or 0)
-                val = font_title.render(f"{gap_val} px", True, ACCENT)
-                screen.blit(val, (x, y - 2))
                 hint = font_small.render("(0 = stays connected)", True, MUTED_COLOR)
-                screen.blit(hint, (x + val.get_width() + 10, y + 4)); y += 30
+                screen.blit(hint, (x, y)); y += 18 + MIN_ELEMENT_SPACING
                 _gap_slider = state.get("cut_gap_slider")
                 if _gap_slider is not None:
                     _gap_slider.track.topleft = (x, y)
                     _gap_slider.track.width = PANEL_W - 40
                     _gap_slider.value = gap_val
-                    _gap_slider.draw(screen)
-                y += 26
+                    _gap_slider.label = "Gap"
+                    _gap_slider.enabled = True
+                    _gap_slider.draw(screen, font_small, mouse_pos)
+                    y += DRAG_FIELD_H + MIN_ELEMENT_SPACING
             else:
                 _gap_slider = state.get("cut_gap_slider")
                 if _gap_slider is not None:
@@ -266,25 +266,15 @@ def _part_b2b_main(c):
                 # ---- parameters (contextual) ----
                 def _style_slider(label, key, val, lo, hi, fmt=None, enabled_sl=True):
                     nonlocal y
-                    col = TEXT_COLOR if enabled_sl else MUTED_COLOR
-                    screen.blit(font_small.render(label, True, col), (x, y))
-                    txt = fmt(val) if fmt else str(val)
-                    vt = font_small.render(txt, True, ACCENT if enabled_sl else MUTED_COLOR)
-                    screen.blit(vt, (x + PANEL_W - 40 - vt.get_width(), y))
-                    y += 18
-                    track = pygame.Rect(x, y, PANEL_W - 40, 6)
-                    if hi == lo:
-                        tx = track.x
-                    else:
-                        tx = int(track.x + (clamp(val, lo, hi) - lo) / (hi - lo) * track.w)
-                    draw_track(screen, track, filled_to=tx, enabled=enabled_sl)
-                    draw_slider_knob(screen, tx, track.centery, enabled=enabled_sl)
+                    field = pygame.Rect(x, y, PANEL_W - 40, DRAG_FIELD_H)
+                    draw_drag_field(
+                        screen, field, val, lo, hi,
+                        fmt(val) if fmt else str(val), font_small,
+                        enabled=enabled_sl, label=label,
+                    )
                     if enabled_sl:
-                        hit = track.inflate(0, 16)
-                        state.setdefault("wave_slider_rects", {})[key] = (hit, lo, hi)
-                    # Hit box overhangs the track by 8px; 12px after the track
-                    # leaves MIN_ELEMENT_SPACING between consecutive hit boxes.
-                    y += MIN_ELEMENT_SPACING + 4
+                        state.setdefault("wave_slider_rects", {})[key] = (field, lo, hi)
+                    y = field.bottom + MIN_ELEMENT_SPACING
                 c._style_slider = _style_slider
 
                 if style_type == "displacement":

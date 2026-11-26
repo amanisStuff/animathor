@@ -101,27 +101,17 @@ def fill_picker_part3_typed(ui, state, document, event, comp_target,
         state["picker_drag_hue"] = True
         state["picker_h"] = ui.picker_h; state["picker_s"] = ui.picker_s; state["picker_v"] = ui.picker_v
     elif primary_obj is not None and rects.get("alpha_rect", pygame.Rect(0,0,0,0)).collidepoint(event.pos):
-        ar = state["alpha_rect"]
-        new_alpha = clamp((event.pos[0] - ar.x) / max(1, ar.w - 1), 0.0, 1.0)
+        # Drag field: the click only starts the scrub; motion changes the value.
+        start_alpha = 1.0
         if comp_target is not None:
             si, ci = comp_target
             if 0 <= si < len(document.strokes):
                 cur_sc, _ = _effective_component_style(document.strokes[si], ci)
-                base = color_rgb(cur_sc, (0.1,0.1,0.15))
-                set_comp_stroke_color(si, ci, base, new_alpha)
-        else:
-            for si in sel_list:
-                if 0 <= si < len(document.strokes):
-                    if ui.color_target == "stroke":
-                        document.strokes[si]["stroke_color"] = set_color_alpha(document.strokes[si].get("stroke_color", (0.1,0.1,0.15,1.0)), new_alpha)
-                    else:
-                        fg = get_fill_gradient(document.strokes[si]) if callable(get_fill_gradient) else None
-                        if fg is not None:
-                            stop_i = int(state.get("fill_gradient_stop", 0) or 0)
-                            cstop = get_gradient_stop_color(fg, stop_i) if 'get_gradient_stop_color' in globals_map else (0,0,0,1)
-                            document.strokes[si]["fill_gradient"] = set_gradient_stop_color(fg, stop_i, (cstop[0], cstop[1], cstop[2], new_alpha)) if 'set_gradient_stop_color' in globals_map else fg
-                        elif document.strokes[si].get("fill_color") is not None:
-                            document.strokes[si]["fill_color"] = set_color_alpha(document.strokes[si].get("fill_color"), new_alpha)
+                start_alpha = color_alpha(cur_sc, 1.0)
+        elif sel_list and 0 <= sel_list[0] < len(document.strokes):
+            key = "stroke_color" if ui.color_target == "stroke" else "fill_color"
+            start_alpha = color_alpha(document.strokes[sel_list[0]].get(key), 1.0)
+        state["alpha_drag_start"] = (event.pos[0], clamp(start_alpha, 0.0, 1.0))
         ui.picker_drag_alpha = True
         state["picker_drag_alpha"] = True
     elif primary_obj is not None:

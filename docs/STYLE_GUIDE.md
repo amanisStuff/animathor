@@ -11,14 +11,14 @@ outside this rule.
 
 Use `config.MIN_ELEMENT_SPACING` (currently `8`) for every inter-element gap.
 Do not write literal `2`, `4` or `6` gaps between buttons, swatches, steppers,
-rows, cards, sliders or panels. Small tokens such as `SPACE_XS`/`SPACE_SM` are
-for padding *inside* one element (label inset, icon inset, card padding), not
-for separating two elements.
+rows, cards, draggable numeric fields or panels. Small tokens such as
+`SPACE_XS`/`SPACE_SM` are for padding *inside* one element (label inset, icon
+inset, card padding), not for separating two elements.
 
 ### What counts as an element
 
-- A button, toggle, swatch, slider track/hit area, input, tab, card or dropdown
-  item with its own hit rectangle.
+- A button, toggle, swatch, draggable numeric field, input, tab, card or
+  dropdown item with its own hit rectangle.
 - A group of controls that is presented as a single composite control (for
   example a `< value >` stepper, a marker row with inline toggle/remove, or a
   single row in a menu/list) counts as one element. Its children may sit inside
@@ -60,8 +60,35 @@ published `*_rect` / `*_rects` hit area in a rendered view state.
 4. Prefer wrapping to a new row over compressing a gap. Never shrink a gap to
    make more swatches fit; the panel scrolls.
 
+## Draggable numeric fields
+
+Numeric parameters use `DragField` / `draw_drag_field()` (`src/views/widgets.py`)
+instead of a track-and-knob slider. The whole field is the hit target: pressing
+starts a scrub from the *current* value (a click never jumps), and horizontal
+motion maps the drag distance across the field width to the parameter range.
+`Ctrl`/`Cmd` is ten times finer, `Shift` is five times coarser; integer fields
+quantise to whole steps. `scrub_value()` in `src/models/interaction.py` owns the
+shared math, and `views.widgets.drag_modifiers()` reads the modifier flags.
+
+Double-clicking a field opens an inline numeric editor
+(`src/controllers/numeric_field_edit.py`): the first click still scrubs, while a
+second click on the same field within 400 ms and 8 px enters text mode. Typing a
+digit, `.` or `-` replaces the current value; `Backspace` edits the buffer,
+`Enter` commits (clamped to the field range and stepped for integer fields) and
+`Escape` cancels. Opacity fields accept percentages, so `35` means `0.35`.
+Clicking another control commits first; the editor is modal, so global shortcuts
+never fire while typing. The caret overlay is clipped to the published field
+rect and adds no new hit target.
+
+The legacy `Slider` constructor remains as a `DragField` subclass so existing
+callers and tests keep working; `slider.track` is an alias of `slider.rect`.
+Fields are `DRAG_FIELD_H` tall and publish their real rectangle, so the 8px
+contract is measured against the field itself rather than an inflated hit box.
+
 ## Enforcement
 
+- `tests/test_numeric_field_edit.py` covers double-click detection, typed
+  buffers, commit/cancel, clamping, percent scaling and the caret overlay.
 - `tests/test_ui_spacing.py` unit-tests the validator and renders every panel
   state, asserting zero spacing violations.
 - `tests/test_panel_control_overlaps.py` guards against overlapping draws.

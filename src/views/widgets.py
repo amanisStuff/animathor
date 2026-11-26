@@ -8,6 +8,7 @@ radii and spacing come from :mod:`config` theme tokens.
 import pygame
 
 from config import *
+from models.interaction import scrub_value
 from views.icons import draw_icon
 
 
@@ -124,11 +125,93 @@ def to_screen_rgb(color, default=(0.0, 0.0, 0.0)):
 
 
 def draw_slider_knob(screen, cx, cy, enabled=True):
-    """Draw the slider knob at the shared radius with one fixed colour scheme."""
+    """Legacy slider knob helper, kept for callers outside the draggable fields."""
     pygame.draw.circle(screen, SURFACE if enabled else BORDER_SUBTLE,
                        (cx, cy), SLIDER_KNOB_RADIUS)
     pygame.draw.circle(screen, PRIMARY if enabled else DISABLED, (cx, cy),
                        SLIDER_KNOB_RADIUS, width=BORDER_WIDTH_ACTIVE)
+
+
+def drag_modifiers(event=None):
+    """Return ``(fine, coarse)`` for a drag event (Ctrl = fine, Shift = coarse)."""
+    mod = getattr(event, "mod", None)
+    if mod is None:
+        mod = pygame.key.get_mods()
+    return (bool(mod & (pygame.KMOD_CTRL | pygame.KMOD_META)),
+            bool(mod & pygame.KMOD_SHIFT))
+
+
+def draw_drag_field(screen, rect, value, min_v, max_v, text, font,
+                    active=False, enabled=True, mouse_pos=None, label=None):
+    """Draw a Blender/Krita style draggable numeric field.
+
+    The whole field is the hit target: its value comes from horizontal drag
+    distance, not from the click position. A soft fill shows the position in
+    range and the value is rendered as a numeric label inside the field.
+    """
+    rect = pygame.Rect(rect)
+    if rect.w <= 0 or rect.h <= 0:
+        return
+    hover = enabled and mouse_pos is not None and rect.collidepoint(mouse_pos)
+    pygame.draw.rect(screen, SURFACE_SUNKEN if enabled else SURFACE_DISABLED,
+                     rect, border_radius=RADIUS_MD)
+    if enabled and max_v > min_v:
+        t = clamp((float(value) - min_v) / (max_v - min_v), 0.0, 1.0)
+        fill_w = int(rect.w * t)
+        if fill_w > 1:
+            pygame.draw.rect(screen, ACTIVE_BG,
+                             pygame.Rect(rect.x, rect.y, fill_w, rect.h),
+                             border_radius=RADIUS_MD)
+    border = PRIMARY if (active or hover) and enabled else BUTTON_BORDER
+    pygame.draw.rect(screen, border, rect,
+                     width=BORDER_WIDTH_ACTIVE if active else BORDER_WIDTH,
+                     border_radius=RADIUS_MD)
+    vs = font.render(str(text), True,
+                     PRIMARY if (enabled and active) else TEXT_DISABLED if not enabled else TEXT_PRIMARY)
+    screen.blit(vs, vs.get_rect(right=rect.right - SPACE_SM, centery=rect.centery))
+    if label:
+        ls = font.render(label, True, TEXT_SECONDARY if enabled else TEXT_DISABLED)
+        max_w = max(0, rect.w - vs.get_width() - SPACE_SM * 3)
+        while ls.get_width() > max_w and label:
+            label = label[:-1]
+            ls = font.render(label, True, TEXT_SECONDARY if enabled else TEXT_DISABLED)
+        if ls.get_width() <= max_w:
+            screen.blit(ls, (rect.x + SPACE_SM, rect.centery - ls.get_height() // 2))
+
+
+def draw_numeric_field_edit(screen, rect, value, lo, hi, buffer, suffix, font,
+                            label=None):
+    """Draw the active inline editor over a draggable numeric field.
+
+    The field keeps its normal appearance with an active border; the typed
+    buffer replaces the value label and a blinking caret marks the insertion
+    point. Drawing is clipped to the published field rect so the 8px spacing
+    contract is unchanged.
+    """
+    rect = pygame.Rect(rect)
+    if rect.w <= 0 or rect.h <= 0:
+        return
+    draw_drag_field(screen, rect, value, lo, hi, "", font, active=True)
+    text = str(buffer) + str(suffix or "")
+    if (pygame.time.get_ticks() // 500) % 2 == 0:
+        text += "|"
+    surface = font.render(text, True, PRIMARY)
+    old_clip = screen.get_clip()
+    screen.set_clip(rect)
+    try:
+        screen.blit(surface, surface.get_rect(
+            right=rect.right - SPACE_SM, centery=rect.centery))
+        if label:
+            label_surface = font.render(label, True, TEXT_SECONDARY)
+            max_w = max(0, rect.w - surface.get_width() - SPACE_SM * 3)
+            while label_surface.get_width() > max_w and label:
+                label = label[:-1]
+                label_surface = font.render(label, True, TEXT_SECONDARY)
+            if label_surface.get_width() <= max_w:
+                screen.blit(label_surface,
+                            (rect.x + SPACE_SM, rect.centery - label_surface.get_height() // 2))
+    finally:
+        screen.set_clip(old_clip)
 
 
 def draw_color_swatch(screen, rect, color, selected=False, mouse_pos=None):
@@ -178,44 +261,100 @@ class Button:
         return self.rect.collidepoint(pos)
 
 
-class Slider:
-    def __init__(self, x, y, w, min_v, max_v, value):
-        self.track = pygame.Rect(x, y, w, 6)
+class DragField:
+    """Numeric input that changes by dragging horizontally (scrub input).
+
+    Mouse down on the field starts a drag from the *current* value; motion maps
+    the horizontal distance to the value range. Ctrl gives fine control, Shift
+    coarse control. ``track`` is kept as an alias of ``rect`` for legacy callers.
+    """
+
+    def __init__(self, rect, value, min_v, max_v, *, label="", fmt=None,
+                 font=None, step=None, enabled=True):
+        self.rect = pygame.Rect(rect)
+        self.value = value
         self.min_v = min_v
         self.max_v = max_v
-        self.value = value
+        self.label = label
+        self.fmt = fmt or (lambda v: str(v))
+        self.font = font
+        self.step = step
+        self.enabled = enabled
         self.dragging = False
+        self._start_x = 0
+        self._start_value = float(value)
+
+    @property
+    def track(self):
+        return self.rect
 
     def _value_to_x(self):
+        """Legacy absolute mapping helper; dragging now uses ``scrub_value``."""
         if self.max_v == self.min_v:
-            return self.track.x
+            return self.rect.x
         t = (self.value - self.min_v) / (self.max_v - self.min_v)
-        return int(self.track.x + t * self.track.w)
+        return int(self.rect.x + t * self.rect.w)
 
     def _x_to_value(self, x):
-        t = (x - self.track.x) / max(1, self.track.w)
+        """Legacy absolute mapping helper; dragging now uses ``scrub_value``."""
+        t = (x - self.rect.x) / max(1, self.rect.w)
         v = self.min_v + t * (self.max_v - self.min_v)
         return int(round(clamp(v, self.min_v, self.max_v)))
 
+    def display_text(self):
+        return self.fmt(self.value)
+
+    def begin_drag(self, pos):
+        if not self.enabled or self.rect.w <= 0:
+            return False
+        self.dragging = True
+        self._start_x = pos[0]
+        self._start_value = float(self.value)
+        return True
+
+    def move_drag(self, pos, event=None):
+        if not self.dragging:
+            return False
+        fine, coarse = drag_modifiers(event)
+        self.value = scrub_value(
+            self._start_value, self.min_v, self.max_v, self.rect.w,
+            self._start_x, pos[0], step=self.step, fine=fine, coarse=coarse,
+        )
+        return True
+
+    def end_drag(self):
+        if not self.dragging:
+            return False
+        self.dragging = False
+        return True
+
     def handle_event(self, event):
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-            hx = self._value_to_x()
-            hy = self.track.centery
-            handle_rect = pygame.Rect(hx - 12, hy - 12, 24, 24)
-            if handle_rect.collidepoint(event.pos) or self.track.inflate(0, 18).collidepoint(event.pos):
-                self.dragging = True
-                self.value = self._x_to_value(event.pos[0])
-                return True
-        elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
-            if self.dragging:
-                self.dragging = False
-                return True
+            if self.rect.collidepoint(event.pos):
+                return self.begin_drag(event.pos)
         elif event.type == pygame.MOUSEMOTION and self.dragging:
-            self.value = self._x_to_value(event.pos[0])
-            return True
+            return self.move_drag(event.pos, event)
+        elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            return self.end_drag()
         return False
 
-    def draw(self, screen):
-        hx = self._value_to_x()
-        draw_track(screen, self.track, filled_to=hx)
-        draw_slider_knob(screen, hx, self.track.centery)
+    def draw(self, screen, font=None, mouse_pos=None):
+        draw_drag_field(
+            screen, self.rect, self.value, self.min_v, self.max_v,
+            self.display_text(), font or self.font or make_fonts()[1],
+            active=self.dragging, enabled=self.enabled,
+            mouse_pos=mouse_pos, label=self.label,
+        )
+
+
+class Slider(DragField):
+    """Backward-compatible constructor for the draggable numeric field."""
+
+    def __init__(self, x, y, w, min_v, max_v, value):
+        integral = all(isinstance(v, int) for v in (min_v, max_v, value))
+        super().__init__(
+            pygame.Rect(x, y, w, DRAG_FIELD_H), value, min_v, max_v,
+            step=1 if integral else None,
+            fmt=lambda v: str(int(round(v))) if integral else str(v),
+        )
+

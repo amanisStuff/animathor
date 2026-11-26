@@ -118,6 +118,7 @@ __all__ = [
     "BORDER_WIDTH_ACTIVE",
     "SHADOW_OFFSET",
     "CONTROL_H",
+    "DRAG_FIELD_H",
     "ICON_SIZE",
     "MENU_WIDTH",
     "MENU_SEPARATOR_H",
@@ -192,6 +193,7 @@ SHADOW_OFFSET = 3
 
 # Standard control height and icon size keep rows aligned across panels/toolbars.
 CONTROL_H = 28
+DRAG_FIELD_H = 24        # draggable numeric field (scrub input)
 ICON_SIZE = 20
 MENU_WIDTH = 224          # dropdown width; item height reuses CONTROL_H
 MENU_SEPARATOR_H = SPACE_SM

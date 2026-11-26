@@ -110,6 +110,12 @@ def process_events(ctx):
                     cfg.VIEW_PAN_X = _mx - cfg.CANVAS_X - wx * new_z
                     cfg.VIEW_PAN_Y = _my - wy * new_z
 
+        if ctx.event.type == pygame.MOUSEBUTTONDOWN and ctx.event.button == 1:
+            # Double-click text entry takes priority over scrub handling. The
+            # first click is left alone so it still starts a normal drag.
+            from controllers.numeric_field_edit import handle_mousedown
+            if handle_mousedown(ctx, ctx.event) == 'continue':
+                continue
         if ctx.slider.handle_event(ctx.event):
             ctx.max_points_per_curve = ctx.slider.value
         _cut_gap_active = ((ctx.tool_mode == "draw" and ctx.draw_tool == "cutter")

@@ -27,6 +27,29 @@ for _n in dir(_dep):
 
 
 
+def scrub_value(start_value, min_v, max_v, width, start_x, current_x,
+                step=None, fine=False, coarse=False):
+    """Map a horizontal drag delta to a value (Blender/Krita style scrubbing).
+
+    The value follows the pointer *relative to where the drag started*: clicking
+    a numeric field never jumps to the clicked position. A drag across the
+    field width covers the full range; Ctrl is ten times finer and Shift five
+    times coarser. ``step`` quantises the result when the field is integral.
+    """
+    lo, hi = float(min_v), float(max_v)
+    if hi <= lo:
+        return lo
+    per_pixel = (hi - lo) / max(1.0, float(width))
+    if fine:
+        per_pixel *= 0.1
+    elif coarse:
+        per_pixel *= 5.0
+    value = float(start_value) + (float(current_x) - float(start_x)) * per_pixel
+    if step:
+        value = round(value / float(step)) * float(step)
+    return min(hi, max(lo, value))
+
+
 def nearest_endpoint(pos, strokes, radius, extra_points=None):
     if radius <= 0:
         return None

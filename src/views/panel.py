@@ -24,8 +24,8 @@ from panel_rects import visible_rects_from_state  # noqa: E402
 from views.icons import BUTTON_TIPS, draw_icon, draw_tooltip  # noqa: E402
 from views.widgets import (  # noqa: E402
     draw_button, draw_card, draw_color_swatch as draw_swatch, draw_hue_cursor,
-    draw_picker_cursor, draw_slider_knob, draw_toggle, draw_track,
-    to_screen_rgb,
+    draw_numeric_field_edit, draw_picker_cursor, draw_slider_knob,
+    draw_toggle, draw_track, to_screen_rgb,
 )
 
 from views.panel_modes import _draw_panel_draw_mode, _draw_panel_select_mode  # noqa: E402
@@ -98,6 +98,35 @@ def draw_panel(screen, fonts, mouse_pos, state):
         thumb_h = max(30, int(track.h * frac))
         thumb_y = track.y + int((track.h - thumb_h) * (clamp(_scroll, 0, max_scroll) / max_scroll))
         pygame.draw.rect(screen, DISABLED, pygame.Rect(track.x, thumb_y, track.w, thumb_h), border_radius=RADIUS_XS)
+
+    # Inline numeric editor (double-click on a draggable field). It paints
+    # inside the field's published rect, so it adds no new hit targets and
+    # cannot violate the 8px spacing/overlap contract.
+    edit = state.get("drag_field_edit")
+    if isinstance(edit, dict):
+        kind = edit.get("kind")
+        rect = None
+        if kind == "wave":
+            entry = (state.get("wave_slider_rects") or {}).get(edit.get("key"))
+            if isinstance(entry, (tuple, list)) and len(entry) == 3:
+                rect = entry[0]
+        else:
+            key = {
+                "points": "slider", "cut_gap": "cut_gap_slider",
+                "stroke_width": "width_slider", "obj_opacity": "obj_opacity_rect",
+                "ref_opacity": "ref_opacity_rect", "alpha": "alpha_rect",
+            }.get(kind)
+            if key is not None:
+                value = state.get(key)
+                rect = getattr(value, "rect", value)
+        if rect is None:
+            rect = edit.get("rect")
+        if rect is not None and rect.w > 0 and rect.h > 0:
+            draw_numeric_field_edit(
+                screen, rect, edit.get("value", 0.0), edit.get("lo", 0.0),
+                edit.get("hi", 1.0), edit.get("buffer", ""),
+                edit.get("suffix", ""), font_small, label=edit.get("label"),
+            )
 
     # Draw the (single) hovered button's name / shortcut tooltip on top.
     if _tips:
