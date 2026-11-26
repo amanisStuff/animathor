@@ -109,6 +109,10 @@ frame. Section clicks are handled first in
 `controllers/panel/dispatch.py` by `controllers/panel/sections.py`, before any
 control inside a section can consume them.
 
+To keep the Transform section compact, X/Y/W/H/R use a two-column grid
+(`X/Y`, `W/H`, `R`) with three rows instead of five. Each cell is a composite
+label + `◀` + drag field + `▶`; cells keep `MIN_ELEMENT_SPACING` between
+columns and rows, and every published `xform_*_rect` keeps its real geometry.
 ## Enforcement
 
 - `tests/test_numeric_field_edit.py` covers double-click detection, typed

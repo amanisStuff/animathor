@@ -322,16 +322,23 @@ def render_selection_a(screen, fonts, mouse_pos, state, x, y, _button, _queue_ti
             vals = {"x": bx0, "y": by0, "w": bw, "h": bh, "r": 0.0}
             focus = state.get("xform_field_focus")
             buf = str(state.get("xform_field_buffer", ""))
+            # Compact two-column grid: X/Y, W/H, R. Three rows instead of five
+            # keep every field immediately visible while honouring the 8px gap.
+            row_h = DRAG_FIELD_H
             gap = MIN_ELEMENT_SPACING
             row_pitch = row_h + MIN_ELEMENT_SPACING
-            btn_w = 22
-            label_w = 18
-            val_w = PANEL_W - 40 - label_w - btn_w * 2 - gap * 3
+            col_gap = MIN_ELEMENT_SPACING
+            cell_w = (PANEL_W - 40 - col_gap) // 2
+            btn_w = 18
+            label_w = 14
+            val_w = cell_w - label_w - btn_w * 2 - gap * 2
             defs = [("X", "x"), ("Y", "y"), ("W", "w"), ("H", "h"), ("R", "r")]
             for i, (lbl, key) in enumerate(defs):
-                ry = y + i * row_pitch
-                screen.blit(font_small.render(lbl, True, MUTED_COLOR), (x, ry + 4))
-                minus_r = pygame.Rect(x + label_w, ry, btn_w, row_h)
+                row, col = divmod(i, 2)
+                cx = x + col * (cell_w + col_gap)
+                ry = y + row * row_pitch
+                screen.blit(font_small.render(lbl, True, MUTED_COLOR), (cx, ry + 4))
+                minus_r = pygame.Rect(cx + label_w, ry, btn_w, row_h)
                 val_r = pygame.Rect(minus_r.right + gap, ry, val_w, row_h)
                 plus_r = pygame.Rect(val_r.right + gap, ry, btn_w, row_h)
                 state[f"xform_{key}m_rect"] = minus_r
@@ -351,12 +358,11 @@ def render_selection_a(screen, fonts, mouse_pos, state, x, y, _button, _queue_ti
                     disp = f"{v:.1f}" if key != "r" else f"{v:.0f}°"
                 txt = font_small.render(str(disp), True, TEXT_COLOR)
                 screen.blit(txt, (val_r.x + 6, val_r.y + 4))
-            y += len(defs) * row_pitch + MIN_ELEMENT_SPACING
+            y += 3 * row_pitch + MIN_ELEMENT_SPACING
     else:
             for _k in _xform_keys:
                 state[_k] = pygame.Rect(0, 0, 0, 0)
 
-    if submode == "transform" and sel_count >= 1:
     if arrange_open and submode == "transform" and sel_count >= 1:
             screen.blit(font_small.render("Flip", True, TEXT_COLOR), (x, y)); y += 20
             mgap = MIN_ELEMENT_SPACING
