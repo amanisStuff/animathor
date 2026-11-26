@@ -359,6 +359,10 @@ hot-loop bridge is gone.
       with `UiFrameOutput` (typed rect snapshot + dimensions); `render_ui_frame`
       now returns it instead of a bare integer. Added a typed-output test.
       Suite 323 OK, panel-click smoke green.
+- [x] **Latent bug fixed**: `align_distribute.py` typed body referenced
+      `tools.selection_submode` (ToolState has no such field) → corrected to
+      `selection.selection_submode`; runtime panel-click smoke caught it. Suite
+      323 OK, event + panel-click smokes green.
 - [x] **Latent typed-body bugs fixed**: a bare-`ctx` audit found and fixed
       10 residual `hit_rect(ctx, …)` calls in the split fill-picker typed bodies
       (now use `rects_from_state(state)`) and a missing `ctx` parameter in
