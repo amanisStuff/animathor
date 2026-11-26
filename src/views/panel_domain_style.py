@@ -1,6 +1,7 @@
 """View: panel_select parts B (SRP)."""
 """View: panel section (split for complexity)."""
 from panel_rects import publish_rect  # noqa: E402
+from views.panel_sections import draw_section_header  # noqa: E402
 import math
 import pygame
 import config as cfg
@@ -53,8 +54,12 @@ def render_path_section(screen, fonts, mouse_pos, state, x, y, _button, _queue_t
                         sel_strokes, sel_count, submode, sel_stroke):
     """Explicit-contract render for Path section (no ctx-bag/sync_in-sync_out)."""
     font, font_small, font_title = fonts
+    _path_open = False
     if submode == "nodes" and sel_count == 1 and sel_stroke is not None:
-        screen.blit(font_small.render("Path", True, TEXT_COLOR), (x, y)); y += 20
+        y, _path_open = draw_section_header(
+            screen, font_small, mouse_pos, state, x, y,
+            "selection_path", "Path", width=PANEL_W - 40)
+    if _path_open and submode == "nodes" and sel_count == 1 and sel_stroke is not None:
         pgap = MIN_ELEMENT_SPACING
         pwidth = (PANEL_W - 40 - pgap) // 2
         row_pitch = 24 + MIN_ELEMENT_SPACING

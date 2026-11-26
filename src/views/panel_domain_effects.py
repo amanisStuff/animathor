@@ -1,6 +1,7 @@
 """View: panel_select parts B (SRP)."""
 """View: panel section (split for complexity)."""
 from panel_rects import publish_rect  # noqa: E402
+from views.panel_sections import clear_section, draw_section_header  # noqa: E402
 import math
 import pygame
 import config as cfg
@@ -127,18 +128,16 @@ def _part_b2b_main(c):
             dist_all = _get_distortion_styles(comp)
             has_dist = len(dist_all) > 0
             n_dist = len(dist_all)
-            collapsed = bool(state.get("wave_list_collapsed"))
             arrow = ">" if collapsed else "v"
             header_label = f"{arrow} Curve styles"
             if has_dist:
-                header_label += f" ({n_dist})"
-            hdr_rect = pygame.Rect(x, y, PANEL_W - 40, 22)
-            publish_rect(state, "wave_list_header_rect", hdr_rect)
-            hbg = BUTTON_HOVER if hdr_rect.collidepoint(mouse_pos) else None
-            if hbg:
-                pygame.draw.rect(screen, hbg, hdr_rect, border_radius=RADIUS_MD)
-            screen.blit(font_small.render(header_label, True, TEXT_COLOR), (x + 4, y + 3))
-            y += 22 + MIN_ELEMENT_SPACING
+            # The legacy accordion header is now a real collapsible section.
+            # Its click is handled by controllers.panel.sections.
+            y, styles_open = draw_section_header(
+                screen, font_small, mouse_pos, state, x, y,
+                "curve_styles", "Curve styles", width=PANEL_W - 40,
+                count=n_dist if has_dist else None)
+            publish_rect(state, "wave_list_header_rect", pygame.Rect(0, 0, 0, 0))
 
             publish_rect(state, "wave_add_rect", pygame.Rect(0,0,0,0))
             publish_rect(state, "displacement_add_rect", pygame.Rect(0,0,0,0))
@@ -175,9 +174,8 @@ def _part_b2b_main(c):
                 publish_rect(state, "thickness_add_rect", t_rect)
                 return y0 + 24 + MIN_ELEMENT_SPACING
 
-            if collapsed:
-                # keep details hidden but allow adding styles
-                y = _draw_add_style_buttons(x, y)
+            if not styles_open:
+                clear_section(state, "curve_styles")
             elif has_dist:
                 # active (expanded) distortion style index, clamped to the stack
                 wi = int(state.get("wave_active_index", 0) or 0)

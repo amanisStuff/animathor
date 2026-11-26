@@ -1,6 +1,7 @@
 """View: panel_select split parts C/D (SRP)."""
 """View: panel section (split for complexity)."""
 from panel_rects import publish_rect  # noqa: E402
+from views.panel_sections import clear_rects, clear_section, draw_section_header, is_open  # noqa: E402
 import math
 import pygame
 import config as cfg
@@ -162,10 +163,19 @@ def render_color_section(screen, fonts, mouse_pos, state, x, y, _button, _queue_
     else:
         y += MIN_ELEMENT_SPACING
 
+    # Variable-width, cap/join/dash and marker options live behind one header.
+    _stroke_open = False
+    if shape_style_enabled and stroke is not None:
+        y, _stroke_open = draw_section_header(
+            screen, font_small, mouse_pos, state, x, y,
+            "selection_stroke", "Stroke style", width=PANEL_W - 40)
+    else:
+        clear_section(state, "selection_stroke")
+
     # Width profile / taper (variable width along path), shape-level.
     for _k in ("width_profile_prev_rect", "width_profile_next_rect"):
         state.setdefault(_k, pygame.Rect(0, 0, 0, 0))
-    if shape_style_enabled and stroke is not None and 'WIDTH_PROFILES' in globals():
+    if _stroke_open and shape_style_enabled and stroke is not None and 'WIDTH_PROFILES' in globals():
         profiles = [p for p in WIDTH_PROFILES]
         labels = {
             "uniform": "Uniform",
@@ -199,7 +209,7 @@ def render_color_section(screen, fonts, mouse_pos, state, x, y, _button, _queue_
                        "dash_prev_rect", "dash_next_rect")
     for _k in STYLE_STEP_KEYS:
         state.setdefault(_k, pygame.Rect(0, 0, 0, 0))
-    if shape_style_enabled and stroke is not None:
+    if _stroke_open and shape_style_enabled and stroke is not None:
         cap_now = stroke.get("line_cap", "round")
         join_now = stroke.get("line_join", "round")
         dash_now = stroke.get("dash") or "solid"
@@ -231,7 +241,7 @@ def render_color_section(screen, fonts, mouse_pos, state, x, y, _button, _queue_
     # Arrowheads / end markers (open paths only).
     for _k in ("marker_start_rect", "marker_end_rect"):
         state.setdefault(_k, pygame.Rect(0, 0, 0, 0))
-    if shape_style_enabled and stroke is not None:
+    if _stroke_open and shape_style_enabled and stroke is not None:
         _mk = get_markers(stroke) if 'get_markers' in globals() else {"start": "none", "end": "none"}
         screen.blit(font_small.render("Markers", True, TEXT_COLOR), (x, y)); y += 18
         _mgap = MIN_ELEMENT_SPACING
@@ -259,15 +269,15 @@ def render_color_section(screen, fonts, mouse_pos, state, x, y, _button, _queue_
                    "shadow_blur_minus_rect", "shadow_blur_plus_rect")
     for _k in APPEAR_KEYS:
         state.setdefault(_k, pygame.Rect(0, 0, 0, 0))
+    _appear_open = False
     if shape_style_enabled and stroke is not None:
+        y, _appear_open = draw_section_header(
+            screen, font_small, mouse_pos, state, x, y,
+            "selection_appearance", "Appearance", width=PANEL_W - 40)
+    else:
+        clear_section(state, "selection_appearance")
+    if _appear_open and shape_style_enabled and stroke is not None:
         _app = get_appearance(stroke)
-        screen.blit(font_small.render("Appearance", True, TEXT_COLOR), (x, y)); y += 18
-        # Object opacity slider.
-        screen.blit(font_small.render(
-            f"Opacity {int(round(_app['opacity'] * 100))}%", True, MUTED_COLOR), (x, y))
-        y += 16
-        op_h = 12
-        op_rect = pygame.Rect(x, y, PANEL_W - 40, op_h)
         # Object opacity: draggable numeric field, not a click-to-jump bar.
         op_rect = pygame.Rect(x, y, PANEL_W - 40, DRAG_FIELD_H)
         publish_rect(state, "obj_opacity_rect", op_rect)
@@ -339,7 +349,14 @@ def _part_c2(c):
     if isinstance(out, dict):
         for k, v in out.items():
             setattr(c, k, v)
-    _part_c2_mid(c)
+    # Curve mode keeps the picker folded by default so wave parameters are
+    # immediately visible; transform mode keeps it open for quick restyling.
+    _color_key = "curve_color" if c.submode == "curve" else "selection_color"
+    c.y, _color_open = draw_section_header(
+        c.screen, c.fonts[1], c.mouse_pos, c.state, c.x, c.y,
+        _color_key, "Color", width=PANEL_W - 40)
+    if _color_open:
+        _part_c2_mid(c)
     # preserve mid-computed values across frame sync
     _mid_keys = (
         'fill_pat', 'fill_grad', 'cur_color', 'display_color', 'fill_color',
@@ -355,10 +372,23 @@ def _part_c2(c):
     for k, v in _mid_vals.items():
         if v is not None:
             setattr(c, k, v)
-    from views.panel_select_parts_c2 import _part_c2_tail
-    _part_c2_tail(c)
-    _sync_in(c)
-    _sync_out(c)
+    if _color_open:
+        from views.panel_select_parts_c2 import _part_c2_tail
+        _part_c2_tail(c)
+        _sync_in(c)
+        _sync_out(c)
+    else:
+        # The tail (SV/hue picker, swatches, stats) belongs to the Color group
+        # too, so clear every rect it can publish when the group is folded.
+        clear_rects(c.state, (
+            "tab_stroke_rect", "tab_fill_rect", "nofill_rect",
+            "fill_type_prev_rect", "fill_type_next_rect",
+            "fill_stop_rects", "fill_stop_add_rect", "fill_stop_remove_rect",
+            "fill_stop_pos_rect",
+            "pattern_type_rect", "pattern_size_minus_rect", "pattern_size_plus_rect",
+            "sv_rect", "hue_rect", "alpha_rect",
+            "stroke_swatch_rects", "fill_swatch_rects",
+        ))
 
 def render_color_picker_section(screen, fonts, mouse_pos, state, x, y, _button, _queue_tip, help_lines,
                                 sel_strokes, sel_count, submode, sel_stroke,
@@ -381,8 +411,7 @@ def render_color_picker_section(screen, fonts, mouse_pos, state, x, y, _button, 
     elif submode == "curve" and component_stroke_enabled:
             screen.blit(font_small.render("Stroke applies to selected curve", True, MUTED_COLOR), (x, y)); y += 18
 
-    # --- Modern color picker ---
-    screen.blit(font.render("Color", True, TEXT_COLOR if (stroke_color_enabled or fill_enabled) else MUTED_COLOR), (x, y)); y += 22
+    # --- Modern color picker (grouped under the collapsible Color header) ---
     # target tabs
     tab_w = (PANEL_W - 40 - MIN_ELEMENT_SPACING) // 2
     tab_stroke = pygame.Rect(x, y, tab_w, 26)

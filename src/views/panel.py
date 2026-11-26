@@ -29,6 +29,7 @@ from views.widgets import (  # noqa: E402
 )
 
 from views.panel_modes import _draw_panel_draw_mode, _draw_panel_select_mode  # noqa: E402
+from views.panel_sections import draw_section_header  # noqa: E402
 
 
 def draw_panel(screen, fonts, mouse_pos, state):
@@ -41,6 +42,14 @@ def draw_panel(screen, fonts, mouse_pos, state):
     x = cfg.PANEL_X + 20
     y = top + 18 - int(state.get("panel_scroll", 0) or 0)
     tm = state.get("tool_mode", "draw")
+
+    # Section headers are rebuilt every frame. Clear the persistent cache so a
+    # header from a previous tool/submode cannot keep a stale hit rect.
+    section_rects = state.get("panel_section_rects")
+    if isinstance(section_rects, dict):
+        section_rects.clear()
+    else:
+        state["panel_section_rects"] = {}
 
     # Tooltips are queued while drawing buttons, then rendered on top at the
     # end so later controls never cover them.
@@ -78,9 +87,14 @@ def draw_panel(screen, fonts, mouse_pos, state):
     else:
         y, help_lines = _draw_panel_select_mode(screen, fonts, mouse_pos, state, x, y, _button, _queue_tip)
 
-    for line in help_lines:
-        txt = font_small.render(line, True, MUTED_COLOR)
-        screen.blit(txt, (x, y)); y += 18
+    if help_lines:
+        y, help_open = draw_section_header(
+            screen, font_small, mouse_pos, state, x, y, "help", "Help",
+            width=PANEL_W - 40)
+        if help_open:
+            for line in help_lines:
+                txt = font_small.render(line, True, MUTED_COLOR)
+                screen.blit(txt, (x, y)); y += 18
 
     # (Layers panel and export settings removed; export options live in the Export dialog.)
 

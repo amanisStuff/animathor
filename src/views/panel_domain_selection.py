@@ -1,5 +1,6 @@
 """View: panel_select split parts (SRP)."""
 from panel_rects import publish_rect  # noqa: E402
+from views.panel_sections import clear_section, draw_section_header, is_open  # noqa: E402
 
 import math
 import pygame
@@ -157,7 +158,17 @@ def render_selection_a(screen, fonts, mouse_pos, state, x, y, _button, _queue_ti
     ed_label = "Eyedropper: click a stroke..." if pick_active else "Eyedropper - pick style (I)"
     _button(ed_rect, ed_label, active=pick_active, icon="eyedropper")
     _queue_tip(ed_rect, "eyedropper")
-    y += 32
+    y += 28 + MIN_ELEMENT_SPACING
+
+    # Secondary arrangement actions are grouped behind one header. Transform
+    # values stay in their own always-open section below.
+    arrange_open = False
+    if submode == "transform" and sel_count > 0:
+        y, arrange_open = draw_section_header(
+            screen, font_small, mouse_pos, state, x, y,
+            "selection_arrange", "Arrange", width=PANEL_W - 40)
+    else:
+        clear_section(state, "selection_arrange")
     if pick_active:
             hint = font_small.render("Samples stroke/fill color, size, wave effects", True, MUTED_COLOR)
             screen.blit(hint, (x, y)); y += 18
@@ -168,7 +179,7 @@ def render_selection_a(screen, fonts, mouse_pos, state, x, y, _button, _queue_ti
     state.setdefault("elev_forward_rect", pygame.Rect(0,0,0,0))
     state.setdefault("elev_backward_rect", pygame.Rect(0,0,0,0))
     state.setdefault("elev_back_rect", pygame.Rect(0,0,0,0))
-    if submode == "transform" and sel_count > 0:
+    if arrange_open and submode == "transform" and sel_count > 0:
             screen.blit(font_small.render("Elevation", True, TEXT_COLOR), (x, y)); y += 20
             gap = MIN_ELEMENT_SPACING
             bw = (PANEL_W - 40 - gap) // 2
@@ -194,8 +205,13 @@ def render_selection_a(screen, fonts, mouse_pos, state, x, y, _button, _queue_ti
                    "text_on_path_rect", "text_off_path_rect"):
             state.setdefault(_k, pygame.Rect(0, 0, 0, 0))
     _txt_obj = sel_stroke if sel_count == 1 and isinstance(sel_stroke, dict) else None
-    if _txt_obj is not None and _txt_obj.get("is_text"):
-            screen.blit(font_small.render("Text", True, TEXT_COLOR), (x, y)); y += 20
+    _text_active = _txt_obj is not None and bool(_txt_obj.get("is_text"))
+    _text_open = False
+    if _text_active:
+            y, _text_open = draw_section_header(
+                screen, font_small, mouse_pos, state, x, y,
+                "selection_text", "Text", width=PANEL_W - 40)
+    if _text_active and _text_open:
             content = str(_txt_obj.get("text_content", ""))
             shown = content if len(content) <= 26 else content[:25] + "..."
             er = pygame.Rect(x, y, PANEL_W - 40, 24)
@@ -262,7 +278,7 @@ def render_selection_a(screen, fonts, mouse_pos, state, x, y, _button, _queue_ti
                      "bool_subtract_rect", "bool_exclude_rect")
     for _k in BOOL_KEYS:
             state.setdefault(_k, pygame.Rect(0, 0, 0, 0))
-    if submode == "transform" and sel_count >= 2:
+    if arrange_open and submode == "transform" and sel_count >= 2:
             screen.blit(font_small.render("Boolean", True, TEXT_COLOR), (x, y)); y += 20
             bgap = MIN_ELEMENT_SPACING
             bwidth = (PANEL_W - 40 - bgap) // 2
@@ -294,15 +310,18 @@ def render_selection_a(screen, fonts, mouse_pos, state, x, y, _button, _queue_ti
                        "xform_rm_rect", "xform_rp_rect")
     for _k in _xform_keys:
             state.setdefault(_k, pygame.Rect(0, 0, 0, 0))
+    _xform_open = False
     if submode == "transform" and sel_count >= 1 and state.get("selection_bbox"):
+            y, _xform_open = draw_section_header(
+                screen, font_small, mouse_pos, state, x, y,
+                "selection_transform", "Transform", width=PANEL_W - 40)
+    if _xform_open and submode == "transform" and sel_count >= 1 and state.get("selection_bbox"):
             bb = state.get("selection_bbox")
             bx0, by0, bx1, by1 = bb
             bw, bh = max(0.0, bx1 - bx0), max(0.0, by1 - by0)
             vals = {"x": bx0, "y": by0, "w": bw, "h": bh, "r": 0.0}
             focus = state.get("xform_field_focus")
             buf = str(state.get("xform_field_buffer", ""))
-            screen.blit(font_small.render("Transform", True, TEXT_COLOR), (x, y)); y += 20
-            row_h = 24
             gap = MIN_ELEMENT_SPACING
             row_pitch = row_h + MIN_ELEMENT_SPACING
             btn_w = 22
@@ -338,6 +357,7 @@ def render_selection_a(screen, fonts, mouse_pos, state, x, y, _button, _queue_ti
                 state[_k] = pygame.Rect(0, 0, 0, 0)
 
     if submode == "transform" and sel_count >= 1:
+    if arrange_open and submode == "transform" and sel_count >= 1:
             screen.blit(font_small.render("Flip", True, TEXT_COLOR), (x, y)); y += 20
             mgap = MIN_ELEMENT_SPACING
             mwidth = (PANEL_W - 40 - mgap) // 2
@@ -406,7 +426,8 @@ def render_distribute_and_path_section(screen, fonts, state, x, y, _button, _que
                                        sel_strokes, sel_count, submode, sel_stroke):
     """Explicit-contract render for distribute/path controls (no ctx-bag/sync_in-sync_out)."""
     font, font_small, font_title = fonts
-    if submode == "transform" and sel_count >= 3:
+    if (is_open(state, "selection_arrange")
+            and submode == "transform" and sel_count >= 3):
         screen.blit(font_small.render("Distribute", True, TEXT_COLOR), (x, y)); y += 20
         dgap = MIN_ELEMENT_SPACING
         dwidth = (PANEL_W - 40 - dgap) // 2

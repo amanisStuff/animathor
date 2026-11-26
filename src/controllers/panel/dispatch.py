@@ -8,6 +8,12 @@ the existing semantic entry points until their internals are rewritten).
 """
 
 
+def sections(ctx, event):
+    """Section headers take priority over the controls they contain."""
+    from controllers.panel.sections import handle_section_click
+    return handle_section_click(ctx, event)
+
+
 def tool_options(ctx, event):
     """Draw tool options / toolbar area (currently mbd_panel_a)."""
     from controllers.panel.tool_options import _handle_panel_click_a
@@ -26,8 +32,8 @@ def gradient_stops(ctx, event):
     return _handle_panel_click_c(ctx, event)
 
 
-# Ordered by UI priority: tool options, color/fill picker, gradient stops.
-DOMAIN_HANDLERS = (tool_options, fill_picker, gradient_stops)
+# Ordered by UI priority: section headers, tool options, color/fill, gradients.
+DOMAIN_HANDLERS = (sections, tool_options, fill_picker, gradient_stops)
 
 
 def handle_panel_click(ctx, event):

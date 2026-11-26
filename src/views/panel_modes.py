@@ -23,6 +23,7 @@ from views.widgets import (  # noqa: E402
 )
 
 from views.panel_select import _draw_panel_select_mode  # noqa: E402
+from views.panel_sections import draw_section_header  # noqa: E402
 
 # Cached HSV picker gradients.
 _SV_CACHE = {}
@@ -287,43 +288,31 @@ def _draw_panel_draw_mode(screen, fonts, mouse_pos, state, x, y, _button, _queue
 
     # Shape tools live in the bottom toolbar (drawn by the controller).
 
-    # Reference image
-    screen.blit(font.render("Reference image", True, TEXT_COLOR), (x, y)); y += 22
+    # Reference image (folded by default; one click to reveal).
+    y, ref_open = draw_section_header(
+        screen, font_small, mouse_pos, state, x, y,
+        "draw_reference", "Reference image", width=PANEL_W - 40)
     ref = state.get("reference_image")
-    bw3 = (PANEL_W - 40 - 16) // 3
-    load_r = pygame.Rect(x, y, bw3, 28)
-    vis_r = pygame.Rect(x + bw3 + 8, y, bw3, 28)
-    clear_r = pygame.Rect(x + (bw3 + 8) * 2, y, PANEL_W - 40 - (bw3 + 8) * 2, 28)
-    state["ref_load_rect"] = load_r
-    state["ref_vis_rect"] = vis_r
-    state["ref_clear_rect"] = clear_r
-    vis_label = "Hide" if (ref and ref.get("visible", True)) else "Show"
-    vis_icon = "ref_visible" if (ref and ref.get("visible", True)) else "ref_hidden"
-    for r, icon_name, label in ((load_r, "ref_load", "Load"), (vis_r, vis_icon, vis_label), (clear_r, "ref_clear", "Clear")):
-        _button(r, label, icon=icon_name)
-        _queue_tip(r, "ref_visible" if icon_name in ("ref_visible", "ref_hidden") else icon_name)
-    y += 34
-    if ref and ref.get("surface") is not None:
-        op = int(round(clamp(ref.get("opacity", 0.5), 0.0, 1.0) * 100))
-        screen.blit(font_small.render(f"Opacity {op}%  (Alt+drag to move)", True, MUTED_COLOR), (x, y)); y += 18
-        bar = pygame.Rect(x, y, PANEL_W - 40, 10)
-        state["ref_opacity_rect"] = bar
-        pygame.draw.rect(screen, BORDER_SUBTLE, bar, border_radius=RADIUS_SM)
-        fill_w = int(bar.w * clamp(ref.get("opacity", 0.5), 0.0, 1.0))
-        if fill_w > 0:
-            pygame.draw.rect(screen, ACCENT, (bar.x, bar.y, fill_w, bar.h), border_radius=RADIUS_SM)
-        pygame.draw.rect(screen, BUTTON_BORDER, bar, 1, border_radius=RADIUS_SM)
-        y += 18
-    else:
-        state["ref_opacity_rect"] = pygame.Rect(0, 0, 0, 0)
-        screen.blit(font_small.render("No reference image", True, MUTED_COLOR), (x, y)); y += 18
-    err = state.get("reference_error")
-    if err:
-        # Word-wrap the error so it stays inside the panel.
-        line = ""
-        for word in str(err).split():
-            trial = (line + " " + word).strip()
-            if line and font_small.size(trial)[0] > PANEL_W - 40:
+    if ref_open:
+        bw3 = (PANEL_W - 40 - 16) // 3
+        load_r = pygame.Rect(x, y, bw3, 28)
+        vis_r = pygame.Rect(x + bw3 + 8, y, bw3, 28)
+        clear_r = pygame.Rect(x + (bw3 + 8) * 2, y, PANEL_W - 40 - (bw3 + 8) * 2, 28)
+        state["ref_load_rect"] = load_r
+        state["ref_vis_rect"] = vis_r
+        state["ref_clear_rect"] = clear_r
+        vis_label = "Hide" if (ref and ref.get("visible", True)) else "Show"
+        vis_icon = "ref_visible" if (ref and ref.get("visible", True)) else "ref_hidden"
+        for r, icon_name, label in ((load_r, "ref_load", "Load"), (vis_r, vis_icon, vis_label), (clear_r, "ref_clear", "Clear")):
+            _button(r, label, icon=icon_name)
+            _queue_tip(r, "ref_visible" if icon_name in ("ref_visible", "ref_hidden") else icon_name)
+        y += 34
+        if ref and ref.get("surface") is not None:
+            opacity = clamp(ref.get("opacity", 0.5), 0.0, 1.0)
+            screen.blit(font_small.render("Alt+drag to move the image", True, MUTED_COLOR), (x, y))
+            y += 18 + MIN_ELEMENT_SPACING
+            bar = pygame.Rect(x, y, PANEL_W - 40, DRAG_FIELD_H)
+            state["ref_opacity_rect"] = bar
             draw_drag_field(
                 screen, bar, opacity, 0.0, 1.0,
                 f"{int(round(opacity * 100))}%", font_small,

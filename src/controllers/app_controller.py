@@ -370,6 +370,8 @@ def main():
             "xform_field_buffer": app_state.ui.xform_field_buffer,
             "drag_field_edit": app_state.ui.drag_field_edit,
             "drag_field_last_click": app_state.ui.drag_field_last_click,
+            "panel_sections": app_state.ui.panel_sections,
+            "panel_section_rects": app_state.ui.panel_section_rects,
             "xform_x_rect": app_state.ui.xform_x_rect_cache,
             "xform_y_rect": app_state.ui.xform_y_rect_cache,
             "xform_w_rect": app_state.ui.xform_w_rect_cache,

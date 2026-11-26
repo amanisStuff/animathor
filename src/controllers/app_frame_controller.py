@@ -201,6 +201,7 @@ def init_ui_caches(frame_locals=None):
         obj_opacity_drag=False,
         xform_field_focus=None, xform_field_buffer="",
         drag_field_edit=None, drag_field_last_click=None,
+        panel_sections={}, panel_section_rects={},
         xform_x_rect_cache=R(0,0,0,0), xform_y_rect_cache=R(0,0,0,0), xform_w_rect_cache=R(0,0,0,0), xform_h_rect_cache=R(0,0,0,0), xform_r_rect_cache=R(0,0,0,0),
         xform_xm_rect_cache=R(0,0,0,0), xform_xp_rect_cache=R(0,0,0,0), xform_ym_rect_cache=R(0,0,0,0), xform_yp_rect_cache=R(0,0,0,0),
         xform_wm_rect_cache=R(0,0,0,0), xform_wp_rect_cache=R(0,0,0,0), xform_hm_rect_cache=R(0,0,0,0), xform_hp_rect_cache=R(0,0,0,0),

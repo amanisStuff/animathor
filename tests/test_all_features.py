@@ -1057,6 +1057,9 @@ class TestWaveStackUI(unittest.TestCase):
             "wave_active_index": active,
             "wave_row_rects": [],
             "panel_scroll": scroll,
+            # Curve/wave editing stays open, but the color picker is folded by
+            # default; expand it so the scroll-reveal assertion can see swatches.
+            "panel_sections": {"curve_color": True},
         }
 
     # ---- multi-wave model ----

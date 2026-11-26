@@ -138,6 +138,9 @@ class UiCacheState:
     # Double-click numeric entry for draggable panel fields (DragField).
     drag_field_edit: Any = None
     drag_field_last_click: Any = None
+    # Collapsible properties-panel sections (key -> expanded bool).
+    panel_sections: dict = field(default_factory=dict)
+    panel_section_rects: dict = field(default_factory=dict)
     picker_h: Any = None
     picker_s: Any = None
     picker_v: Any = None

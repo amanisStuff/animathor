@@ -101,7 +101,10 @@ def _slider_rects(state):
 
 class TestShadowStepperLayout(unittest.TestCase):
     def test_shadow_blur_stepper_does_not_overlap_color_tabs(self):
-        state = _render(_base_state(obj=set_appearance(_stroke(), shadow={"blur": 8})))
+        state = _base_state(obj=set_appearance(_stroke(), shadow={"blur": 8}))
+        # Appearance is folded by default; expand it so the stepper is drawn.
+        state["panel_sections"] = {"selection_appearance": True}
+        _render(state)
 
         blur_rects = [state["shadow_blur_minus_rect"], state["shadow_blur_plus_rect"]]
         tab_rects = [state["tab_stroke_rect"], state["tab_fill_rect"]]

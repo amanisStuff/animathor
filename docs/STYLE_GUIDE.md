@@ -85,11 +85,38 @@ callers and tests keep working; `slider.track` is an alias of `slider.rect`.
 Fields are `DRAG_FIELD_H` tall and publish their real rectangle, so the 8px
 contract is measured against the field itself rather than an inflated hit box.
 
+## Collapsible panel sections
+
+The right properties panel is a vertical stack of clickable section headers,
+not one continuous wall of controls. Section state lives in
+`state["panel_sections"]` as `key -> expanded bool`; a missing key falls back to
+`views.panel_sections.DEFAULT_OPEN`, so callers that build their own state dict
+keep working. Header hit rects are published in `state["panel_section_rects"]`
+and are validated by the shared spacing contract like any other element.
+
+Defaults keep the two priority workflows immediately usable:
+
+- **Open:** `selection_transform`, `selection_text`, `selection_color`,
+  `curve_styles`.
+- **Closed:** `selection_arrange`, `selection_stroke`, `selection_appearance`,
+  `curve_color`, `draw_reference`, `help`.
+
+`draw_section_header()` returns `(next_y, expanded)` and advances `y` by the
+header height plus `MIN_ELEMENT_SPACING`. A collapsed section must not draw its
+body and must clear every rect the body can publish (use `clear_section()` /
+`clear_rects()` with the registered keys), so no stale hit area survives a
+frame. Section clicks are handled first in
+`controllers/panel/dispatch.py` by `controllers/panel/sections.py`, before any
+control inside a section can consume them.
+
 ## Enforcement
 
 - `tests/test_numeric_field_edit.py` covers double-click detection, typed
   buffers, commit/cancel, clamping, percent scaling and the caret overlay.
 - `tests/test_ui_spacing.py` unit-tests the validator and renders every panel
   state, asserting zero spacing violations.
+- `tests/test_panel_sections.py` covers section defaults, toggling, header-click
+  priority, rect clearing/restoration, reduced content height and spacing in
+  collapsed/expanded states.
 - `tests/test_panel_control_overlaps.py` guards against overlapping draws.
 - Run `python -m unittest discover -s tests -t .` before finishing UI work.

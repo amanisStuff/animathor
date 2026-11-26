@@ -16,7 +16,7 @@ class TestPanelDomainDispatch(unittest.TestCase):
     def test_default_domain_order(self):
         self.assertEqual(
             [fn.__name__ for fn in dispatch.DOMAIN_HANDLERS],
-            ["tool_options", "fill_picker", "gradient_stops"],
+            ["sections", "tool_options", "fill_picker", "gradient_stops"],
         )
 
     def test_first_handling_domain_wins(self):
