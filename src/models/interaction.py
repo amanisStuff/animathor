@@ -50,6 +50,20 @@ def scrub_value(start_value, min_v, max_v, width, start_x, current_x,
     return min(hi, max(lo, value))
 
 
+def xform_step(fine=False, coarse=False):
+    """Step size for the transform-field arrow nudge buttons/keys.
+
+    ``Ctrl``/``Cmd`` selects a fine 0.1 step for precise adjustment, ``Shift``
+    selects a coarse 10.0 step, and the default is 1.0. Fine wins when both
+    modifiers are held so the user can always get the most specific control.
+    """
+    if fine:
+        return 0.1
+    if coarse:
+        return 10.0
+    return 1.0
+
+
 def nearest_endpoint(pos, strokes, radius, extra_points=None):
     if radius <= 0:
         return None

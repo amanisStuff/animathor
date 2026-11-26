@@ -15,6 +15,11 @@ from views.widgets import (  # noqa: E402
     to_screen_rgb,
 )
 
+# Transform-field nudge arrows. font_small has real glyphs for both, so the
+# steppers read as left/right controls rather than generic minus/plus signs.
+XFORM_ARROW_LEFT = chr(0x25C0)   # ◀
+XFORM_ARROW_RIGHT = chr(0x25B6)  # ▶
+
 # Cached HSV picker gradients.
 _SV_CACHE = {}
 _SV_RAMP_CACHE = {}
@@ -344,8 +349,8 @@ def render_selection_a(screen, fonts, mouse_pos, state, x, y, _button, _queue_ti
                 state[f"xform_{key}m_rect"] = minus_r
                 state[f"xform_{key}_rect"] = val_r
                 state[f"xform_{key}p_rect"] = plus_r
-                _button(minus_r, "-", font_=font_small)
-                _button(plus_r, "+", font_=font_small)
+                _button(minus_r, XFORM_ARROW_LEFT, font_=font_small)
+                _button(plus_r, XFORM_ARROW_RIGHT, font_=font_small)
                 active = (focus == key)
                 bg = SURFACE_SUBTLE if not active else ACTIVE_BG
                 border = ACCENT if active else PANEL_BORDER

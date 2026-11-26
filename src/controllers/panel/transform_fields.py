@@ -4,6 +4,7 @@ import config as cfg
 
 from models.appearance import get_appearance, set_appearance
 from models.geometry import distribute_offsets, expand_stroke_outline
+from models.interaction import xform_step
 from models.strokes import (
     WIDTH_PROFILES,
     _component_ranges,
@@ -53,8 +54,16 @@ def transform_fields_typed(tools, selection, document, drag, ui, state, event,
                       "xform_rm_rect", "xform_rp_rect"))
     ):
         _matched = True
-        # Numeric transform: focus/seed value field, or nudge via +/-.
+        # Numeric transform: focus/seed value field, or nudge via the arrows.
+        # Ctrl/Cmd = fine 0.1, Shift = coarse 10.0, otherwise 1.0.
         fields = ("x", "y", "w", "h", "r")
+        _mods = getattr(event, "mod", None)
+        if _mods is None:
+            _mods = pygame.key.get_mods()
+        _step = xform_step(
+            fine=bool(_mods & (pygame.KMOD_CTRL | pygame.KMOD_META)),
+            coarse=bool(_mods & pygame.KMOD_SHIFT),
+        )
         handled_xform = False
         for fk in fields:
             if state.get(f"xform_{fk}_rect", pygame.Rect(0, 0, 0, 0)).collidepoint(event.pos):
@@ -71,8 +80,7 @@ def transform_fields_typed(tools, selection, document, drag, ui, state, event,
                 handled_xform = True
                 break
             if state.get(f"xform_{fk}m_rect", pygame.Rect(0, 0, 0, 0)).collidepoint(event.pos):
-                step = 10.0 if bool(pygame.key.get_mods() & pygame.KMOD_SHIFT) else 1.0
-                apply_xform_field(fk, -step, relative=True)
+                apply_xform_field(fk, -_step, relative=True)
                 ui.xform_field_focus = None
                 ui.xform_field_buffer = ""
                 state["xform_field_focus"] = None
@@ -80,8 +88,7 @@ def transform_fields_typed(tools, selection, document, drag, ui, state, event,
                 handled_xform = True
                 break
             if state.get(f"xform_{fk}p_rect", pygame.Rect(0, 0, 0, 0)).collidepoint(event.pos):
-                step = 10.0 if bool(pygame.key.get_mods() & pygame.KMOD_SHIFT) else 1.0
-                apply_xform_field(fk, step, relative=True)
+                apply_xform_field(fk, _step, relative=True)
                 ui.xform_field_focus = None
                 ui.xform_field_buffer = ""
                 state["xform_field_focus"] = None

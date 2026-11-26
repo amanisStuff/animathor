@@ -113,8 +113,16 @@ To keep the Transform section compact, X/Y/W/H/R use a two-column grid
 (`X/Y`, `W/H`, `R`) with three rows instead of five. Each cell is a composite
 label + `◀` + drag field + `▶`; cells keep `MIN_ELEMENT_SPACING` between
 columns and rows, and every published `xform_*_rect` keeps its real geometry.
+The arrows nudge the value by 1.0; hold `Ctrl`/`Cmd` for a fine 0.1 step or
+`Shift` for a coarse 10.0 step (fine wins if both are held). While a field is
+focused, `Left`/`Right` mirror the arrows and `Down`/`Up` also decrement/
+increment with the same modifiers. The step sizes come from the shared
+`xform_step()` helper in `models/interaction.py`, so mouse and keyboard agree.
+
 ## Enforcement
 
+- `tests/test_drag_fields.py` covers scrub math, modifiers, no-jump clicks and
+  published-field spacing.
 - `tests/test_numeric_field_edit.py` covers double-click detection, typed
   buffers, commit/cancel, clamping, percent scaling and the caret overlay.
 - `tests/test_ui_spacing.py` unit-tests the validator and renders every panel
@@ -122,5 +130,7 @@ columns and rows, and every published `xform_*_rect` keeps its real geometry.
 - `tests/test_panel_sections.py` covers section defaults, toggling, header-click
   priority, rect clearing/restoration, reduced content height and spacing in
   collapsed/expanded states.
+- `tests/test_transform_arrows.py` covers the arrow glyphs, mouse nudge steps and
+  the `Left`/`Right`/`Up`/`Down` keyboard aliases with fine/coarse modifiers.
 - `tests/test_panel_control_overlaps.py` guards against overlapping draws.
 - Run `python -m unittest discover -s tests -t .` before finishing UI work.

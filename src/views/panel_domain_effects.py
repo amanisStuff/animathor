@@ -128,9 +128,6 @@ def _part_b2b_main(c):
             dist_all = _get_distortion_styles(comp)
             has_dist = len(dist_all) > 0
             n_dist = len(dist_all)
-            arrow = ">" if collapsed else "v"
-            header_label = f"{arrow} Curve styles"
-            if has_dist:
             # The legacy accordion header is now a real collapsible section.
             # Its click is handled by controllers.panel.sections.
             y, styles_open = draw_section_header(
