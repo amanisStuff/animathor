@@ -47,14 +47,24 @@ BUTTON_TIPS = {
     "exclude": "Exclude (XOR)",
     "ref_load": "Load Reference Image",
     "ref_visible": "Toggle Reference Visibility",
+    "ref_hidden": "Show Reference Image",
     "ref_clear": "Clear Reference Image",
+    "open": "Open (Ctrl+O)",
+    "save": "Save (Ctrl+S)",
+    "export": "Export (Ctrl+Shift+E)",
+    "copy": "Copy / Duplicate (Ctrl+C)",
     "eyedropper": "Eyedropper - Pick Style",
     "curve_redraw": "Redraw Curve",
     "curve_cut": "Split Curve - drag across it",
     "curve_hide": "Hide Curve",
     "text": "Text - click canvas, type, Enter to place",
+    "import": "Import SVG (Ctrl+I)",
     "wave_add": "Add Wave",
     "wave_remove": "Remove Wave",
+    "wave_apply": "Bake styles into the curve",
+    "displacement_add": "Add Displacement",
+    "repeat_add": "Add Repeat",
+    "thickness_add": "Add Variable Thickness",
     "wave_toggle": "Enable / Disable Wave",
     "trace_fit": "Tracing: Fit (fewest points)",
     "trace_catmull_rom": "Tracing: Catmull-Rom",
@@ -195,7 +205,12 @@ def _draw_fallback_icon(screen, name, center, color, size=20):
             if name == "exclude":
                 pygame.draw.line(screen, c, (cx, cy - 3), (cx, cy + 3), w)
         return True
-    return False
+
+    # Last resort for an unknown name or a missing/corrupt PNG: draw a neutral
+    # glyph instead of leaving the button blank.
+    pygame.draw.circle(screen, c, (cx, cy), max(3, s // 3), w)
+    pygame.draw.circle(screen, c, (cx, cy), max(1, w // 2))
+    return True
 
 
 def draw_icon(screen, name, rect, color=None, size=20, enabled=True):
