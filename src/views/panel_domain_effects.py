@@ -85,7 +85,7 @@ def _part_b2b_main(c):
                 hint = "Hidden curve segment(s)" if len(comp_hidden) < (ranges[comp_i][1]-ranges[comp_i][0] if 0 <= comp_i < len(ranges) else 999) else "Hidden curve"
                 screen.blit(font_small.render(f"Hint: {hint} (shown dashed in edit modes)", True, TEXT_WARNING), (x, y)); y += 18
             total_w = PANEL_W - 40
-            btn_gap = 6
+            btn_gap = MIN_ELEMENT_SPACING
             btn_w = (total_w - btn_gap) // 2
             redraw_rect = pygame.Rect(x, y, btn_w, 30)
             cut_rect = pygame.Rect(x + btn_w + btn_gap, y, total_w - btn_w - btn_gap, 30)
@@ -138,7 +138,7 @@ def _part_b2b_main(c):
             if hbg:
                 pygame.draw.rect(screen, hbg, hdr_rect, border_radius=RADIUS_MD)
             screen.blit(font_small.render(header_label, True, TEXT_COLOR), (x + 4, y + 3))
-            y += 24
+            y += 22 + MIN_ELEMENT_SPACING
 
             publish_rect(state, "wave_add_rect", pygame.Rect(0,0,0,0))
             publish_rect(state, "displacement_add_rect", pygame.Rect(0,0,0,0))
@@ -160,7 +160,7 @@ def _part_b2b_main(c):
 
             def _draw_add_style_buttons(x0, y0):
                 # Add buttons: wave distortion, displacement, repeat curve, thickness
-                gap = 4
+                gap = MIN_ELEMENT_SPACING
                 bw = (PANEL_W - 40 - gap * 3) // 4
                 w_rect = pygame.Rect(x0, y0, bw, 24)
                 d_rect = pygame.Rect(x0 + bw + gap, y0, bw, 24)
@@ -173,7 +173,7 @@ def _part_b2b_main(c):
                 publish_rect(state, "displacement_add_rect", d_rect)
                 publish_rect(state, "repeat_add_rect", r_rect)
                 publish_rect(state, "thickness_add_rect", t_rect)
-                return y0 + 30
+                return y0 + 24 + MIN_ELEMENT_SPACING
 
             if collapsed:
                 # keep details hidden but allow adding styles
@@ -212,8 +212,13 @@ def _part_b2b_main(c):
                     t = font_small.render(lbl, True, TEXT_COLOR if is_active else MUTED_COLOR)
                     screen.blit(t, (row.x + 8, row.y + 5))
                     if is_active:
-                        tog_rect = pygame.Rect(row.right - 74, row.y + 3, 46, row_h - 6)
-                        rem_rect = pygame.Rect(row.right - 26, row.y + 3, 22, row_h - 6)
+                        # Toggle and remove are children of the row, but keep the
+                        # same 8px gap as independent controls for consistency.
+                        tog_w, rem_w = 46, 22
+                        rem_x = row.right - 4 - rem_w
+                        tog_x = rem_x - MIN_ELEMENT_SPACING - tog_w
+                        tog_rect = pygame.Rect(tog_x, row.y + 3, tog_w, row_h - 6)
+                        rem_rect = pygame.Rect(rem_x, row.y + 3, rem_w, row_h - 6)
                         publish_rect(state, "wave_toggle_rect", tog_rect)
                         publish_rect(state, "wave_remove_rect", rem_rect)
                         draw_toggle(screen, tog_rect, sv_on, font_small, mouse_pos=mouse_pos)
@@ -225,8 +230,8 @@ def _part_b2b_main(c):
                         stt = font_small.render("ON" if sv_on else "OFF", True, ACCENT if sv_on else MUTED_COLOR)
                         screen.blit(stt, (row.right - 8 - stt.get_width(), row.y + 5))
                     state["wave_row_rects"].append((i, row))
-                    y += row_h + 2
-                y += 4
+                    y += row_h + MIN_ELEMENT_SPACING
+                y += MIN_ELEMENT_SPACING
 
                 # ---- live preview of the active style (instant feedback) ----
                 screen.blit(font_small.render("Preview", True, TEXT_COLOR), (x, y))
@@ -248,7 +253,7 @@ def _part_b2b_main(c):
                 if not enabled:
                     hint = font_small.render("disabled - click ON to apply", True, TEXT_DISABLED)
                     screen.blit(hint, hint.get_rect(center=prev_rect.center))
-                y += 36 + 6
+                y += 36 + MIN_ELEMENT_SPACING
 
                 # ---- add more styles on top of the stack ----
                 y = _draw_add_style_buttons(x, y)
@@ -256,8 +261,7 @@ def _part_b2b_main(c):
                 _button(bake_rect, "Bake styles", icon="wave_apply")
                 _queue_tip(bake_rect, "wave_apply")
                 publish_rect(state, "wave_bake_rect", bake_rect)
-                y += 30
-                y += 2
+                y += 24 + MIN_ELEMENT_SPACING
 
                 # ---- parameters (contextual) ----
                 def _style_slider(label, key, val, lo, hi, fmt=None, enabled_sl=True):
@@ -278,7 +282,9 @@ def _part_b2b_main(c):
                     if enabled_sl:
                         hit = track.inflate(0, 16)
                         state.setdefault("wave_slider_rects", {})[key] = (hit, lo, hi)
-                    y += 8
+                    # Hit box overhangs the track by 8px; 12px after the track
+                    # leaves MIN_ELEMENT_SPACING between consecutive hit boxes.
+                    y += MIN_ELEMENT_SPACING + 4
                 c._style_slider = _style_slider
 
                 if style_type == "displacement":

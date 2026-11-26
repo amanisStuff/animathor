@@ -20,6 +20,7 @@ for _n in dir(_dep):
         continue
     globals().setdefault(_n, getattr(_dep, _n))
 
+from panel_rects import visible_rects_from_state  # noqa: E402
 from views.icons import BUTTON_TIPS, draw_icon, draw_tooltip  # noqa: E402
 from views.widgets import (  # noqa: E402
     draw_button, draw_card, draw_color_swatch as draw_swatch, draw_hue_cursor,
@@ -155,14 +156,39 @@ def draw_marker_dropdown(screen, fonts, mouse_pos, state):
             current = "none"
 
     pad = SPACE_SM
-    row_h = CONTROL_H
+    item_h = CONTROL_H - 2
+    item_pitch = item_h + MIN_ELEMENT_SPACING
     w = max(160, anchor.w)
-    h = pad * 2 + 22 + len(MARKER_TYPES) * row_h
-    x = anchor.x
-    y = anchor.bottom + 4
-    if y + h > cfg.HEIGHT - 8:
-        y = anchor.y - h - 4
-    x = max(4, min(x, cfg.WIDTH - w - 4))
+    h = pad * 2 + 22 + len(MARKER_TYPES) * item_pitch - MIN_ELEMENT_SPACING
+    occupied = {
+        key: rect for key, rect in visible_rects_from_state(state).items()
+        if not key.startswith("marker_dropdown")
+    }
+
+    def _clear(candidate):
+        top = getattr(cfg, "TOP_BAR_H", 0)
+        if (candidate.x < 4 or candidate.right > cfg.WIDTH - 4
+                or candidate.y < top + 4 or candidate.bottom > cfg.HEIGHT - 4):
+            return False
+        for rect in occupied.values():
+            if candidate.colliderect(rect):
+                return False
+            h_gap = max(0, rect.left - candidate.right, candidate.left - rect.right)
+            v_gap = max(0, rect.top - candidate.bottom, candidate.top - rect.bottom)
+            if max(h_gap, v_gap) < MIN_ELEMENT_SPACING:
+                return False
+        return True
+
+    candidates = (
+        (anchor.x, anchor.bottom + MIN_ELEMENT_SPACING),
+        (anchor.x, anchor.y - h - MIN_ELEMENT_SPACING),
+        (anchor.x - w - MIN_ELEMENT_SPACING, anchor.y),
+        (anchor.x - w - MIN_ELEMENT_SPACING, anchor.y - h - MIN_ELEMENT_SPACING),
+    )
+    x, y = next(
+        ((cx, cy) for cx, cy in candidates if _clear(pygame.Rect(cx, cy, w, h))),
+        (anchor.x, min(anchor.bottom + MIN_ELEMENT_SPACING, cfg.HEIGHT - h - 4)),
+    )
     card = pygame.Rect(x, y, w, h)
     state["marker_dropdown_rect"] = card
     draw_card(screen, card, radius=RADIUS_LG)
@@ -172,11 +198,11 @@ def draw_marker_dropdown(screen, fonts, mouse_pos, state):
     item_rects = {}
     iy = y + pad + 22
     for mt in MARKER_TYPES:
-        r = pygame.Rect(x + pad, iy, w - pad * 2, row_h - 2)
+        r = pygame.Rect(x + pad, iy, w - pad * 2, item_h)
         item_rects[str(mt)] = r
         label = str(mt).replace("_", " ").title()
         draw_button(screen, r, label, font_small, mouse_pos=mouse_pos,
                     active=(str(mt) == current), radius=RADIUS_SM)
-        iy += row_h
+        iy += item_pitch
     state["marker_dropdown_item_rects"] = item_rects
 

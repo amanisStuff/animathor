@@ -113,6 +113,7 @@ __all__ = [
     "SPACE_MD",
     "SPACE_LG",
     "SPACE_XL",
+    "MIN_ELEMENT_SPACING",
     "BORDER_WIDTH",
     "BORDER_WIDTH_ACTIVE",
     "SHADOW_OFFSET",
@@ -176,12 +177,14 @@ RADIUS_MD = 6     # buttons, rows, toggles
 RADIUS_LG = 8     # tool buttons, cards
 RADIUS_XL = 12    # popovers
 
-# Spacing: 4px baseline grid.
+# Spacing: 4px baseline grid. Do not use XS/SM for gaps between separate
+# elements; the UI spacing contract is MIN_ELEMENT_SPACING (see STYLE_GUIDE.md).
 SPACE_XS = 4
 SPACE_SM = 6
 SPACE_MD = 10
 SPACE_LG = 14
 SPACE_XL = 20
+MIN_ELEMENT_SPACING = 8
 
 BORDER_WIDTH = 1
 BORDER_WIDTH_ACTIVE = 2

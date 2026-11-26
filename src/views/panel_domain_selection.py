@@ -138,10 +138,10 @@ def render_selection_a(screen, fonts, mouse_pos, state, x, y, _button, _queue_ti
     screen.blit(font_small.render("Mode", True, MUTED_COLOR), (x, y + 5))
     btn_w = 28
     vx = x + 44
-    vw = PANEL_W - 40 - 44 - btn_w * 2 - 8
+    vw = PANEL_W - 40 - 44 - btn_w * 2 - MIN_ELEMENT_SPACING * 2
     pr = pygame.Rect(vx, y, btn_w, 28)
-    vr = pygame.Rect(vx + btn_w + 4, y, vw, 28)
-    nr = pygame.Rect(vr.right + 4, y, btn_w, 28)
+    vr = pygame.Rect(vx + btn_w + MIN_ELEMENT_SPACING, y, vw, 28)
+    nr = pygame.Rect(vr.right + MIN_ELEMENT_SPACING, y, btn_w, 28)
     publish_rect(state, "nodes_mode_prev_rect", pr)
     publish_rect(state, "nodes_mode_next_rect", nr)
     publish_rect(state, "nodes_toggle_rect", pygame.Rect(0, 0, 0, 0))
@@ -149,7 +149,7 @@ def render_selection_a(screen, fonts, mouse_pos, state, x, y, _button, _queue_ti
     _button(vr, mode_labels.get(submode, "Transform"))
     _button(nr, ">", font_=font_small)
     _queue_tip(vr, None, "Selection mode (N to cycle)")
-    y += 34
+    y += 28 + MIN_ELEMENT_SPACING
     # Eyedropper (pick style) - tool within selection panel
     pick_active = bool(state.get("eyedropper_pick"))
     ed_rect = pygame.Rect(x, y, PANEL_W - 40, 28)
@@ -170,17 +170,18 @@ def render_selection_a(screen, fonts, mouse_pos, state, x, y, _button, _queue_ti
     state.setdefault("elev_back_rect", pygame.Rect(0,0,0,0))
     if submode == "transform" and sel_count > 0:
             screen.blit(font_small.render("Elevation", True, TEXT_COLOR), (x, y)); y += 20
-            gap = 6
+            gap = MIN_ELEMENT_SPACING
             bw = (PANEL_W - 40 - gap) // 2
+            row_pitch = 24 + MIN_ELEMENT_SPACING
             labels = [("To Front", "elev_front_rect", "elev_front"), ("Forward", "elev_forward_rect", "elev_forward"),
                       ("Backward", "elev_backward_rect", "elev_backward"), ("To Back", "elev_back_rect", "elev_back")]
             for i, (label, key, icon_name) in enumerate(labels):
                 row, col = divmod(i, 2)
-                r = pygame.Rect(x + col * (bw + gap), y + row * 28, bw, 24)
+                r = pygame.Rect(x + col * (bw + gap), y + row * row_pitch, bw, 24)
                 state[key] = r
                 _button(r, label, icon=icon_name)
                 _queue_tip(r, icon_name)
-            y += 2 * 28 + 8
+            y += 2 * row_pitch + MIN_ELEMENT_SPACING
     else:
             publish_rect(state, "elev_front_rect", pygame.Rect(0,0,0,0))
             publish_rect(state, "elev_forward_rect", pygame.Rect(0,0,0,0))
@@ -201,13 +202,13 @@ def render_selection_a(screen, fonts, mouse_pos, state, x, y, _button, _queue_ti
             publish_rect(state, "text_edit_rect", er)
             _button(er, f"Edit: \"{shown}\"")
             _queue_tip(er, None, "Re-edit text content")
-            y += 28
+            y += 24 + MIN_ELEMENT_SPACING
             fr = pygame.Rect(x, y, PANEL_W - 40, 24)
             publish_rect(state, "text_font_rect", fr)
             _button(fr, f"Font: {_txt_obj.get('font_family', 'Sans')}")
             _queue_tip(fr, None, "Cycle font family")
-            y += 28
-            fgap = 6
+            y += 24 + MIN_ELEMENT_SPACING
+            fgap = MIN_ELEMENT_SPACING
             fhalf = (PANEL_W - 40 - fgap) // 2
             smr = pygame.Rect(x, y, fhalf, 24)
             spr = pygame.Rect(x + fhalf + fgap, y, fhalf, 24)
@@ -217,7 +218,7 @@ def render_selection_a(screen, fonts, mouse_pos, state, x, y, _button, _queue_ti
             _button(spr, "A+", font_=font_small)
             _queue_tip(smr, None, "Decrease font size")
             _queue_tip(spr, None, "Increase font size")
-            y += 28
+            y += 24 + MIN_ELEMENT_SPACING
             sz = font_small.render(f"Size: {int(round(float(_txt_obj.get('font_size', 36))))}",
                                    True, MUTED_COLOR)
             screen.blit(sz, (x, y)); y += 18
@@ -228,7 +229,7 @@ def render_selection_a(screen, fonts, mouse_pos, state, x, y, _button, _queue_ti
                 publish_rect(state, "text_off_path_rect", opr)
                 _button(opr, "Remove from Path")
                 _queue_tip(opr, None, "Reflow text back to a straight baseline")
-                y += 28
+                y += 24 + MIN_ELEMENT_SPACING
             else:
                 publish_rect(state, "text_off_path_rect", pygame.Rect(0, 0, 0, 0))
             # Put on Path shown when 2 selected (text + path) - handled via state hint or selection info
@@ -247,7 +248,7 @@ def render_selection_a(screen, fonts, mouse_pos, state, x, y, _button, _queue_ti
                 publish_rect(state, "text_on_path_rect", ppr)
                 _button(ppr, "Put on Path")
                 _queue_tip(ppr, None, "Flow this text along the other selected path")
-                y += 28
+                y += 24 + MIN_ELEMENT_SPACING
             else:
                 publish_rect(state, "text_on_path_rect", pygame.Rect(0, 0, 0, 0))
     else:
@@ -263,19 +264,20 @@ def render_selection_a(screen, fonts, mouse_pos, state, x, y, _button, _queue_ti
             state.setdefault(_k, pygame.Rect(0, 0, 0, 0))
     if submode == "transform" and sel_count >= 2:
             screen.blit(font_small.render("Boolean", True, TEXT_COLOR), (x, y)); y += 20
-            bgap = 6
+            bgap = MIN_ELEMENT_SPACING
             bwidth = (PANEL_W - 40 - bgap) // 2
+            row_pitch = 24 + MIN_ELEMENT_SPACING
             for bi, (blabel, bkey, bicon) in enumerate([
                     ("Union", "bool_union_rect", "union"),
                     ("Intersect", "bool_intersect_rect", "intersect"),
                     ("Subtract", "bool_subtract_rect", "subtract"),
                     ("Exclude", "bool_exclude_rect", "exclude")]):
                 br = pygame.Rect(x + (bi % 2) * (bwidth + bgap),
-                                 y + (bi // 2) * 28, bwidth, 24)
+                                 y + (bi // 2) * row_pitch, bwidth, 24)
                 state[bkey] = br
                 _button(br, blabel, icon=bicon)
                 _queue_tip(br, bicon)
-            y += 28 * 2 + 8
+            y += 2 * row_pitch + MIN_ELEMENT_SPACING
     else:
             for _k in BOOL_KEYS:
                 state[_k] = pygame.Rect(0, 0, 0, 0)
@@ -301,13 +303,14 @@ def render_selection_a(screen, fonts, mouse_pos, state, x, y, _button, _queue_ti
             buf = str(state.get("xform_field_buffer", ""))
             screen.blit(font_small.render("Transform", True, TEXT_COLOR), (x, y)); y += 20
             row_h = 24
-            gap = 4
+            gap = MIN_ELEMENT_SPACING
+            row_pitch = row_h + MIN_ELEMENT_SPACING
             btn_w = 22
             label_w = 18
             val_w = PANEL_W - 40 - label_w - btn_w * 2 - gap * 3
             defs = [("X", "x"), ("Y", "y"), ("W", "w"), ("H", "h"), ("R", "r")]
             for i, (lbl, key) in enumerate(defs):
-                ry = y + i * (row_h + 4)
+                ry = y + i * row_pitch
                 screen.blit(font_small.render(lbl, True, MUTED_COLOR), (x, ry + 4))
                 minus_r = pygame.Rect(x + label_w, ry, btn_w, row_h)
                 val_r = pygame.Rect(minus_r.right + gap, ry, val_w, row_h)
@@ -329,14 +332,14 @@ def render_selection_a(screen, fonts, mouse_pos, state, x, y, _button, _queue_ti
                     disp = f"{v:.1f}" if key != "r" else f"{v:.0f}°"
                 txt = font_small.render(str(disp), True, TEXT_COLOR)
                 screen.blit(txt, (val_r.x + 6, val_r.y + 4))
-            y += len(defs) * (row_h + 4) + 4
+            y += len(defs) * row_pitch + MIN_ELEMENT_SPACING
     else:
             for _k in _xform_keys:
                 state[_k] = pygame.Rect(0, 0, 0, 0)
 
     if submode == "transform" and sel_count >= 1:
             screen.blit(font_small.render("Flip", True, TEXT_COLOR), (x, y)); y += 20
-            mgap = 6
+            mgap = MIN_ELEMENT_SPACING
             mwidth = (PANEL_W - 40 - mgap) // 2
             for mi, (mlabel, mkey, icon_name) in enumerate([
                     ("Horizontal", "mirror_h_rect", "flip_h"),
@@ -345,10 +348,10 @@ def render_selection_a(screen, fonts, mouse_pos, state, x, y, _button, _queue_ti
                 state[mkey] = mr
                 _button(mr, mlabel, icon=icon_name)
                 _queue_tip(mr, icon_name)
-            y += 24 + 8
+            y += 24 + MIN_ELEMENT_SPACING
 
             screen.blit(font_small.render("Align", True, TEXT_COLOR), (x, y)); y += 20
-            agap = 6
+            agap = MIN_ELEMENT_SPACING
             aw = (PANEL_W - 40 - 2 * agap) // 3
             align_defs = [
                 ("Left", "align_left_rect", "align_left"),
@@ -358,13 +361,14 @@ def render_selection_a(screen, fonts, mouse_pos, state, x, y, _button, _queue_ti
                 ("Middle", "align_vmiddle_rect", "align_vmiddle"),
                 ("Bottom", "align_bottom_rect", "align_bottom"),
             ]
+            row_pitch = 22 + MIN_ELEMENT_SPACING
             for ai, (_alabel, akey, icon_name) in enumerate(align_defs):
                 row, col = divmod(ai, 3)
-                ar = pygame.Rect(x + col * (aw + agap), y + row * 26, aw, 22)
+                ar = pygame.Rect(x + col * (aw + agap), y + row * row_pitch, aw, 22)
                 state[akey] = ar
                 _button(ar, "", icon=icon_name)
                 _queue_tip(ar, icon_name)
-            y += 2 * 26 + 8
+            y += 2 * row_pitch + MIN_ELEMENT_SPACING
     else:
             publish_rect(state, "mirror_h_rect", pygame.Rect(0, 0, 0, 0))
             publish_rect(state, "mirror_v_rect", pygame.Rect(0, 0, 0, 0))
@@ -404,7 +408,7 @@ def render_distribute_and_path_section(screen, fonts, state, x, y, _button, _que
     font, font_small, font_title = fonts
     if submode == "transform" and sel_count >= 3:
         screen.blit(font_small.render("Distribute", True, TEXT_COLOR), (x, y)); y += 20
-        dgap = 6
+        dgap = MIN_ELEMENT_SPACING
         dwidth = (PANEL_W - 40 - dgap) // 2
         for di, (dlabel, dkey) in enumerate([
                 ("Horizontal", "distribute_h_rect"),
@@ -413,7 +417,7 @@ def render_distribute_and_path_section(screen, fonts, state, x, y, _button, _que
             state[dkey] = dr
             _button(dr, dlabel)
             _queue_tip(dr, None, f"{dlabel} spacing")
-        y += 32
+        y += 24 + MIN_ELEMENT_SPACING
     else:
         for _k in DIST_KEYS:
             state[_k] = pygame.Rect(0, 0, 0, 0)

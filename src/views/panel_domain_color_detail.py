@@ -104,31 +104,32 @@ def render_color_tail_section(
         screen.blit(font_small.render("Fill type", True, MUTED_COLOR), (x, y + 4))
         btn_w = 28
         vx = x + 62
-        vw = PANEL_W - 40 - 62 - btn_w * 2 - 8
+        vw = PANEL_W - 40 - 62 - btn_w * 2 - MIN_ELEMENT_SPACING * 2
         pr = pygame.Rect(vx, y, btn_w, 24)
-        vr = pygame.Rect(vx + btn_w + 4, y, vw, 24)
-        nr = pygame.Rect(vr.right + 4, y, btn_w, 24)
+        vr = pygame.Rect(vx + btn_w + MIN_ELEMENT_SPACING, y, vw, 24)
+        nr = pygame.Rect(vr.right + MIN_ELEMENT_SPACING, y, btn_w, 24)
         publish_rect(state, "fill_type_prev_rect", pr)
         publish_rect(state, "fill_type_next_rect", nr)
         _button(pr, "<", font_=font_small)
         _button(vr, fill_labels.get(fill_mode, str(fill_mode).title()))
         _button(nr, ">", font_=font_small)
-        y += 30
+        y += 24 + MIN_ELEMENT_SPACING
         # pattern controls: cycle motif and adjust tile size
         for _pk in ("pattern_type_rect", "pattern_size_minus_rect", "pattern_size_plus_rect"):
             state.setdefault(_pk, pygame.Rect(0, 0, 0, 0))
         if fill_pat is not None:
             _avail = PANEL_W - 40
-            _mrow = pygame.Rect(x, y, _avail - 60, 24)
+            _step_group_w = 26 * 2 + MIN_ELEMENT_SPACING
+            _mrow = pygame.Rect(x, y, _avail - _step_group_w - MIN_ELEMENT_SPACING, 24)
             publish_rect(state, "pattern_type_rect", _mrow)
             _button(_mrow, f"Motif: {str(fill_pat.get('type', 'stripes')).title()}")
-            _smr = pygame.Rect(x + _avail - 56, y, 26, 24)
-            _spr = pygame.Rect(x + _avail - 28, y, 26, 24)
+            _smr = pygame.Rect(x + _avail - _step_group_w, y, 26, 24)
+            _spr = pygame.Rect(_smr.right + MIN_ELEMENT_SPACING, y, 26, 24)
             publish_rect(state, "pattern_size_minus_rect", _smr)
             publish_rect(state, "pattern_size_plus_rect", _spr)
             _button(_smr, "-", font_=font_small)
             _button(_spr, "+", font_=font_small)
-            y += 28
+            y += 24 + MIN_ELEMENT_SPACING
             _sz = font_small.render(f"Tile: {int(round(float(fill_pat.get('size', 14))))} px", True, MUTED_COLOR)
             screen.blit(_sz, (x, y)); y += 18
         else:
@@ -161,34 +162,17 @@ def render_color_tail_section(
 
             avail_w = PANEL_W - 40
             btn_w = 22
-            gap = 6
+            gap = MIN_ELEMENT_SPACING
+            sw = 22
             sw_area_w = max(60, avail_w - 2 * (btn_w + gap))
-            # Choose swatch size/gap so all stops remain visible and individually clickable.
-            sw_gap = 6
-            if nstops > 1:
-                sw = int((sw_area_w - (nstops - 1) * sw_gap) / nstops)
-            else:
-                sw = 26
-            if sw < 18:
-                sw_gap = 4
-                sw = int((sw_area_w - (nstops - 1) * sw_gap) / max(1, nstops))
-            if sw < 14:
-                sw_gap = 2
-                sw = int((sw_area_w - (nstops - 1) * sw_gap) / max(1, nstops))
-            sw = max(12, min(26, sw))
-            total_sw_w = nstops * sw + max(0, nstops - 1) * sw_gap
-            start_x = x
-            if total_sw_w > sw_area_w and nstops > 1:
-                # Compress spacing as a last resort to avoid overlapping hit targets.
-                sw_gap = max(1, int((sw_area_w - nstops * sw) / (nstops - 1)))
-                total_sw_w = nstops * sw + max(0, nstops - 1) * sw_gap
-            if total_sw_w < sw_area_w:
-                start_x = x  # left-align; keeps layout stable
+            # Wrap the swatches instead of compressing their gaps: every stop
+            # keeps an individually clickable target and the mandated 8px space.
+            per_row = max(1, (sw_area_w + gap) // (sw + gap))
+            stop_rows = max(1, (nstops + per_row - 1) // per_row)
             for i in range(nstops):
-                r = pygame.Rect(start_x + i * (sw + sw_gap), y, sw, sw)
-                # Keep within swatch area without stacking on top of another stop.
-                if r.right > x + sw_area_w:
-                    r.x = x + sw_area_w - sw
+                row, col = divmod(i, per_row)
+                r = pygame.Rect(x + col * (sw + gap),
+                                y + row * (sw + gap), sw, sw)
                 state["fill_stop_rects"][str(i)] = r
                 st = stops[i]
                 if isinstance(st, dict):
@@ -201,12 +185,12 @@ def render_color_tail_section(
                 draw_swatch(screen, r, cstop, i == fill_grad_stop, mouse_pos)
             bx = x + sw_area_w + gap
             add_r = pygame.Rect(bx, y, btn_w, sw)
-            rem_r = pygame.Rect(bx + btn_w + 4, y, btn_w, sw)
+            rem_r = pygame.Rect(bx + btn_w + gap, y, btn_w, sw)
             publish_rect(state, "fill_stop_add_rect", add_r)
             publish_rect(state, "fill_stop_remove_rect", rem_r)
             for r, label, enabled_btn in ((add_r, "+", True), (rem_r, "-", nstops > 2)):
                 _button(r, label, enabled=enabled_btn)
-            y += sw + 6
+            y += stop_rows * sw + (stop_rows - 1) * gap + gap
 
             # selected stop position (distance)
             sel_st = stops[fill_grad_stop] if 0 <= fill_grad_stop < nstops else stops[0]
@@ -354,14 +338,14 @@ def render_color_tail_section(
     publish_rect(state, "stroke_swatch_rects", [pygame.Rect(0, 0, 0, 0) for _ in presets])
     publish_rect(state, "fill_swatch_rects", [pygame.Rect(0, 0, 0, 0) for _ in presets])
     for i, col in enumerate(presets):
-        r = pygame.Rect(x + i * (sw + 6), y, sw, sw)
+        r = pygame.Rect(x + i * (sw + MIN_ELEMENT_SPACING), y, sw, sw)
         if color_target == "stroke":
             state["stroke_swatch_rects"][i] = r
         else:
             state["fill_swatch_rects"][i] = r
         sel_match = (cur_color == col) if cur_color is not None else False
         draw_swatch(screen, r, col, sel_match, mouse_pos)
-    y += sw + 10
+    y += sw + MIN_ELEMENT_SPACING
 
     # Disable non-applicable style controls
     if not fill_enabled:

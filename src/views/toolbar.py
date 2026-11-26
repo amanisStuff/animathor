@@ -89,7 +89,7 @@ def draw_bottom_shape_toolbar(screen, fonts, mouse_pos, state):
 
     rects = {}
     tip = None
-    pad, gap = SPACE_MD + SPACE_XS, SPACE_SM
+    pad, gap = SPACE_MD + SPACE_XS, MIN_ELEMENT_SPACING
 
     if tool_mode == "selection":
         if submode == "transform":
@@ -190,8 +190,8 @@ def draw_shape_context_menu(screen, fonts, mouse_pos, state):
     tool_name, tool_icon = _TOOL_META.get(key, ("Options", "options"))
     rows = _tool_option_rows(state, key)
 
-    pad, w, row_h, gap = SPACE_MD, 240, CONTROL_H, SPACE_XS
-    sw, sgap = 26, SPACE_SM
+    pad, w, row_h, gap = SPACE_MD, 240, CONTROL_H, MIN_ELEMENT_SPACING
+    sw, sgap = 26, MIN_ELEMENT_SPACING
     sw_per_row = max(1, (w - pad * 2 + sgap) // (sw + sgap))
     body = 0
     for row in rows:
@@ -262,7 +262,7 @@ def draw_shape_context_menu(screen, fonts, mouse_pos, state):
             cy += nrows * sw + (nrows - 1) * sgap + gap
         elif kind == "stepper":
             rr = pygame.Rect(x + pad, cy, w - pad * 2, row_h)
-            minus = pygame.Rect(rr.right - 62, rr.y + 2, 28, 24)
+            minus = pygame.Rect(rr.right - 66, rr.y + 2, 28, 24)
             plus = pygame.Rect(rr.right - 30, rr.y + 2, 28, 24)
             rects[row["minus"]] = minus
             rects[row["plus"]] = plus

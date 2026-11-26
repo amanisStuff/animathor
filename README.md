@@ -72,5 +72,5 @@ The **points per curve** setting limits how many simplified points from each str
   - `views/` — `canvas.py`, `panel.py`, `toolbar.py`, `widgets.py`, `dialogs.py` (rendering/UI)
   - `controllers/` — `app_controller.py`, `coordinates.py` (event loop & app state)
 - `tests/` — unit and end-to-end tests
-- `docs/` — `ARCHITECTURE.md` (MVC structure overview)
+- `docs/` — `ARCHITECTURE.md` (MVC structure overview), `STYLE_GUIDE.md` (UI spacing and layout rules)
 - `requirements.txt` — Python dependencies

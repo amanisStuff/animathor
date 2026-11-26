@@ -140,7 +140,7 @@ def draw_menu_bar(screen, font, mouse_pos, menu_open, state=None):
         label_rects[key] = rect
         draw_button(screen, rect, label, font, mouse_pos=mouse_pos,
                     active=(menu_open == key), radius=RADIUS_SM)
-        x = rect.right + SPACE_XS
+        x = rect.right + MIN_ELEMENT_SPACING
 
     item_rects = {}
     menu_tip = None
@@ -224,7 +224,7 @@ def draw_export_dialog(screen, font, small_font, mouse_pos, state):
         dpi = min(EXPORT_DPIS, key=lambda d: abs(d - dpi))
 
     width = min(cfg.WIDTH - SPACE_LG * 2, 420)
-    row_h = CONTROL_H + SPACE_XS
+    row_h = CONTROL_H + MIN_ELEMENT_SPACING
     height = CONTROL_H + SPACE_MD + row_h * 3 + SPACE_LG + CONTROL_H + SPACE_MD
     card = pygame.Rect((cfg.WIDTH - width) // 2, (cfg.HEIGHT - height) // 2, width, height)
     draw_card(screen, card, radius=RADIUS_XL)
@@ -244,11 +244,11 @@ def draw_export_dialog(screen, font, small_font, mouse_pos, state):
         nonlocal y
         screen.blit(small_font.render(label, True, TEXT_SECONDARY), (x, y + 6))
         btn_w = 34
-        value_w = inner_w - 110 - btn_w * 2 - SPACE_XS * 2
+        value_w = inner_w - 110 - btn_w * 2 - MIN_ELEMENT_SPACING * 2
         vx = x + 110
         prev_r = pygame.Rect(vx, y, btn_w, CONTROL_H)
-        val_r = pygame.Rect(vx + btn_w + SPACE_XS, y, value_w, CONTROL_H)
-        next_r = pygame.Rect(val_r.right + SPACE_XS, y, btn_w, CONTROL_H)
+        val_r = pygame.Rect(vx + btn_w + MIN_ELEMENT_SPACING, y, value_w, CONTROL_H)
+        next_r = pygame.Rect(val_r.right + MIN_ELEMENT_SPACING, y, btn_w, CONTROL_H)
         rects[prev_key] = prev_r
         rects[next_key] = next_r
         draw_button(screen, prev_r, "<", small_font, mouse_pos=mouse_pos, radius=RADIUS_SM)
@@ -260,10 +260,10 @@ def draw_export_dialog(screen, font, small_font, mouse_pos, state):
     _stepper("Scale", f"{int(scale)}x" if float(scale).is_integer() else f"{scale:g}x", "scale_prev", "scale_next")
     _stepper("DPI", f"{dpi}", "dpi_prev", "dpi_next")
 
-    y += SPACE_SM
-    btn_w = (inner_w - SPACE_SM) // 2
+    y += MIN_ELEMENT_SPACING
+    btn_w = (inner_w - MIN_ELEMENT_SPACING) // 2
     cancel_r = pygame.Rect(x, y, btn_w, CONTROL_H)
-    export_r = pygame.Rect(x + btn_w + SPACE_SM, y, btn_w, CONTROL_H)
+    export_r = pygame.Rect(x + btn_w + MIN_ELEMENT_SPACING, y, btn_w, CONTROL_H)
     rects["cancel"] = cancel_r
     rects["export"] = export_r
     draw_button(screen, cancel_r, "Cancel", small_font, mouse_pos=mouse_pos, radius=RADIUS_MD)

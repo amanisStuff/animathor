@@ -167,17 +167,17 @@ def _draw_panel_draw_mode(screen, fonts, mouse_pos, state, x, y, _button, _queue
             y += 24
             btn_w = 28
             vx = x
-            vw = PANEL_W - 40 - btn_w * 2 - 8
+            vw = PANEL_W - 40 - btn_w * 2 - MIN_ELEMENT_SPACING * 2
             pr = pygame.Rect(vx, y, btn_w, 28)
-            vr = pygame.Rect(vx + btn_w + 4, y, vw, 28)
-            nr = pygame.Rect(vr.right + 4, y, btn_w, 28)
+            vr = pygame.Rect(vx + btn_w + MIN_ELEMENT_SPACING, y, vw, 28)
+            nr = pygame.Rect(vr.right + MIN_ELEMENT_SPACING, y, btn_w, 28)
             state["trace_algo_prev_rect"] = pr
             state["trace_algo_next_rect"] = nr
             state["trace_algo_rects"] = {}
             _button(pr, "<", font_=font_small)
             _button(vr, algo_labels.get(algo, str(algo)))
             _button(nr, ">", font_=font_small)
-            y += 34
+            y += 28 + MIN_ELEMENT_SPACING
     elif draw_tool == "eraser":
         screen.blit(font_small.render("Click a curve or edge to erase it.", True, MUTED_COLOR), (x, y)); y += 22
     elif draw_tool == "cutter":
@@ -248,7 +248,7 @@ def _draw_panel_draw_mode(screen, fonts, mouse_pos, state, x, y, _button, _queue
         y += hue_h + 10
 
         # Preset swatches
-        sw, sgap = 26, 6
+        sw, sgap = 26, MIN_ELEMENT_SPACING
         per_row = max(1, (PANEL_W - 40 + sgap) // (sw + sgap))
         cur = tuple(round(c, 3) for c in col)
         srects = []
@@ -259,7 +259,7 @@ def _draw_panel_draw_mode(screen, fonts, mouse_pos, state, x, y, _button, _queue
             draw_swatch(screen, rr, pcol, cur == tuple(round(c, 3) for c in pcol), mouse_pos)
         state["bucket_swatch_rects"] = srects
         rows_used = (len(BUCKET_SWATCHES) + per_row - 1) // per_row
-        y += rows_used * (sw + sgap) + 2
+        y += rows_used * sw + (rows_used - 1) * sgap + MIN_ELEMENT_SPACING
 
     if draw_tool != "bucket":
         # Hide the fill picker hit-areas when another tool is active.

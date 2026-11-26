@@ -55,8 +55,9 @@ def render_path_section(screen, fonts, mouse_pos, state, x, y, _button, _queue_t
     font, font_small, font_title = fonts
     if submode == "nodes" and sel_count == 1 and sel_stroke is not None:
         screen.blit(font_small.render("Path", True, TEXT_COLOR), (x, y)); y += 20
-        pgap = 6
+        pgap = MIN_ELEMENT_SPACING
         pwidth = (PANEL_W - 40 - pgap) // 2
+        row_pitch = 24 + MIN_ELEMENT_SPACING
         for pi, (plabel, pkey) in enumerate([
                 ("Close / Open", "path_close_rect"),
                 ("Reverse", "path_reverse_rect"),
@@ -65,16 +66,16 @@ def render_path_section(screen, fonts, mouse_pos, state, x, y, _button, _queue_t
                 ("Smooth", "path_smooth_rect"),
                 ("Corner", "path_corner_rect")]):
             pr = pygame.Rect(x + (pi % 2) * (pwidth + pgap),
-                             y + (pi // 2) * 28, pwidth, 24)
+                             y + (pi // 2) * row_pitch, pwidth, 24)
             state[pkey] = pr
             _button(pr, plabel)
             _queue_tip(pr, None, plabel)
-        y += 28 * 3
+        y += 3 * row_pitch
         expand_r = pygame.Rect(x, y, PANEL_W - 40, 24)
         publish_rect(state, "path_expand_rect", expand_r)
         _button(expand_r, "Expand Stroke")
         _queue_tip(expand_r, None, "Expand stroke into a filled outline")
-        y += 28 + 8
+        y += 24 + MIN_ELEMENT_SPACING
     else:
         for _k in PATH_KEYS:
             state[_k] = pygame.Rect(0, 0, 0, 0)
