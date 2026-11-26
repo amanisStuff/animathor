@@ -347,7 +347,7 @@ def render_selection_a(screen, fonts, mouse_pos, state, x, y, _button, _queue_ti
                 _button(minus_r, "-", font_=font_small)
                 _button(plus_r, "+", font_=font_small)
                 active = (focus == key)
-                bg = SURFACE_SUBTLE if not active else BUTTON_ACTIVE_BG
+                bg = SURFACE_SUBTLE if not active else ACTIVE_BG
                 border = ACCENT if active else PANEL_BORDER
                 pygame.draw.rect(screen, bg, val_r, border_radius=RADIUS_SM)
                 pygame.draw.rect(screen, border, val_r, width=BORDER_WIDTH_ACTIVE if active else BORDER_WIDTH, border_radius=RADIUS_SM)
